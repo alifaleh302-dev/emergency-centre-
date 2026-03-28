@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تسجيل الدخول - نظام الطوارئ</title>
+    <link rel="stylesheet" href="bootstrap@5.3.2/css/bootstrap.rtl.min.css">
+    <link rel="stylesheet" href="bootstrap-icons@1.11.1/bootstrap-icons.css">
+    <style>
+        @font-face {
+            font-family: 'Cairo';
+            src: url('fonts/static/Cairo-SemiBold.ttf') format('woff2');
+        }
+        * { font-family: 'Cairo', sans-serif; }
+        body {
+            background: linear-gradient(135deg, #f0f4f8 0%, #d9e2ec 100%);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-card {
+            background: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+            overflow: hidden;
+            width: 100%;
+            max-width: 400px;
+        }
+        .login-header {
+            background: linear-gradient(135deg, #4160e0 0%, #2b4196 100%);
+            padding: 30px 20px;
+            text-align: center;
+            color: white;
+        }
+        .login-icon {
+            font-size: 3rem;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="login-card">
+        <div class="login-header">
+            <i class="bi bi-hospital login-icon"></i>
+            <h4 class="fw-bold mb-0">مركز الطوارئ الطبي</h4>
+            <p class="small text-white-50 mb-0">تسجيل الدخول للموظفين</p>
+        </div>
+        <div class="p-4">
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div id="loginAlert" class="alert alert-danger d-none small fw-bold text-center" role="alert"></div>
+                
+                <div class="mb-3">
+                    <label class="form-label small fw-bold text-muted">اسم المستخدم</label>
+                    <div class="input-group">
+                        <span class="input-group-text bg-light border-end-0"><i class="bi bi-person text-primary"></i></span>
+                        <input type="text" id="username" class="form-control border-start-0 shadow-none bg-light" required placeholder="أدخل اسم المستخدم">
+                    </div>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="form-label small fw-bold text-muted">كلمة المرور</label>
+                    <div class="input-group">
+                        <span class="input-group-text bg-light border-end-0"><i class="bi bi-lock text-primary"></i></span>
+                        <input type="password" id="password" class="form-control border-start-0 shadow-none bg-light" required placeholder="أدخل كلمة المرور">
+                    </div>
+                </div>
+                
+                <button type="submit" id="loginBtn" class="btn btn-primary w-100 py-2 fw-bold shadow-sm">
+                    <i class="bi bi-box-arrow-in-right ms-2"></i> دخول
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script src="main_core.js"></script>
+    <script>
+        async function handleLogin(event) {
+            event.preventDefault();
+            const btn = document.getElementById('loginBtn');
+            const alertBox = document.getElementById('loginAlert');
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            btn.disabled = true;
+
+            btn.innerHTML = `<span class="spinner-border spinner-border-sm ms-2"></span> جاري التحقق...`;
+            alertBox.classList.add('d-none');
+              
+            // إرسال الطلب للسيرفر (عبر دالة النواة)
+            const response = await Core.apiCall('auth/login', 'POST', { username, password });
+
+            if (response && response.success) {
+              // حفظ التوكن ومسار السكريبت في المتصفح
+                localStorage.setItem('jwt_token', response.token);
+                localStorage.setItem('script_url', response.script_url);
+                
+                // التوجيه للصفحة الرئيسية
+                window.location.href = 'index.html';
+            } else {
+              
+                alertBox.textContent = response ? response.message : "بيانات الدخول غير صحيحة";
+                alertBox.classList.remove('d-none');
+                btn.disabled = false;
+                btn.innerHTML = `<i class="bi bi-box-arrow-in-right ms-2"></i> دخول`;
+            }
+        }
+    </script>
+</body>
+</html>

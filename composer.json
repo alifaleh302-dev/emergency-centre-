@@ -1,0 +1,8 @@
+{
+    "name": "emergency-center/app",
+    "description": "نظام إدارة مركز الطوارئ",
+    "require": {
+        "php": "^8.0",
+        "ext-pgsql": "*"
+    }
+}
