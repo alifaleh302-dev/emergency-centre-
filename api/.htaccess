@@ -1,0 +1,9 @@
+RewriteEngine On
+# السماح للترويسات بالمرور
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]
+
+# إذا لم يكن الطلب ملفاً أو مجلداً حقيقياً، وجهه إلى index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L]
