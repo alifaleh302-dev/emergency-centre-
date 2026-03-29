@@ -1,5 +1,5 @@
 <?php
-// إظهار الأخطاء للتأكد من سير العملية بشكل صحيح
+// إظهار الأخطاء
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
@@ -9,20 +9,20 @@ try {
     $database = new Database();
     $db = $database->getConnection();
 
-    // نص استعلام SQL الخاص بـ PostgreSQL
-    $sql = "
+    // استخدمنا علامة الاقتباس المفردة هنا لمنع PHP من تفسير علامات $ كمتغيرات
+    $sql = '
     -- 1. تعريف الأنواع المخصصة
     DO $$ BEGIN
-        CREATE TYPE gender_type AS ENUM ('Male', 'Female');
-    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-    DO $$ BEGIN
-        CREATE TYPE appointment_status_type AS ENUM ('Scheduled', 'Attended', 'Missed');
-    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-    DO $$ BEGIN
-        CREATE TYPE visit_status_type AS ENUM ('Active', 'Completed', 'Cancelled');
-    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = \'gender_type\') THEN
+            CREATE TYPE gender_type AS ENUM (\'Male\', \'Female\');
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = \'appointment_status_type\') THEN
+            CREATE TYPE appointment_status_type AS ENUM (\'Scheduled\', \'Attended\', \'Missed\');
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = \'visit_status_type\') THEN
+            CREATE TYPE visit_status_type AS ENUM (\'Active\', \'Completed\', \'Cancelled\');
+        END IF;
+    END $$;
 
     -- 2. جدول الأدوار
     CREATE TABLE IF NOT EXISTS Roles (
@@ -68,20 +68,20 @@ try {
       notes VARCHAR(300),
       diagnosis VARCHAR(150),
       type_case VARCHAR(60),
-      status visit_status_type DEFAULT 'Active',
+      status visit_status_type DEFAULT \'Active\',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- 7. منطق منع فتح زيارة جديدة (Function + Trigger)
+    -- 7. منطق منع فتح زيارة جديدة (استخدام $BODY$ لتفادي التعارض)
     CREATE OR REPLACE FUNCTION check_active_visit() 
-    RETURNS TRIGGER AS $func$
+    RETURNS TRIGGER AS $BODY$
     BEGIN
-        IF EXISTS (SELECT 1 FROM Visits WHERE patient_id = NEW.patient_id AND status = 'Active') THEN
-            RAISE EXCEPTION 'لا يمكن فتح زيارة جديدة لهذا المريض لأن لديه زيارة سابقة لا تزال نشطة.';
+        IF EXISTS (SELECT 1 FROM Visits WHERE patient_id = NEW.patient_id AND status = \'Active\') THEN
+            RAISE EXCEPTION \'لا يمكن فتح زيارة جديدة لهذا المريض لأن لديه زيارة سابقة لا تزال نشطة.\';
         END IF;
         RETURN NEW;
     END;
-    $func$ LANGUAGE plpgsql;
+    $BODY$ LANGUAGE plpgsql;
 
     DROP TRIGGER IF EXISTS trg_check_active_visit ON Visits;
     CREATE TRIGGER trg_check_active_visit
@@ -131,26 +131,14 @@ try {
       service_id INT REFERENCES Services_Master(service_id),
       service_price_at_time DECIMAL(10,2)
     );
+    ';
 
-    CREATE TABLE IF NOT EXISTS Appointments (
-      appointment_id SERIAL PRIMARY KEY,
-      patient_id INT REFERENCES Patients(patient_id),
-      doctor_id INT REFERENCES Users(user_id),
-      appointment_date TIMESTAMP NOT NULL,
-      reason TEXT,
-      status appointment_status_type DEFAULT 'Scheduled',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    ";
-
-    // تنفيذ الاستعلام
     $db->exec($sql);
-
-    echo "<h2 style='color: green;'>✅ تم إنشاء بنية قاعدة البيانات بنجاح!</h2>";
-    echo "<p>يمكنك الآن البدء باستخدام النظام وحذف هذا الملف للأمان.</p>";
+    echo "<h2 style='color: green;'>✅ تم إنشاء الجداول والقيود بنجاح!</h2>";
 
 } catch (PDOException $e) {
     echo "<h2 style='color: red;'>❌ فشل إنشاء قاعدة البيانات:</h2>";
     echo "<pre>" . $e->getMessage() . "</pre>";
 }
 ?>
+    
