@@ -2,26 +2,45 @@
 // config/database.php
 
 class Database {
-    // نصيحة: عند الرفع على Render، يفضل وضع هذه القيم في متغيرات البيئة (Environment Variables)
-    private $host ="postgresql://emergencycenterdb_user:rbRGd6GUfvDvhEccTrgJzgSOIGwOj5T3@dpg-d742ar5m5p6s73f0spv0-a/emergencycenterdb";// "postgresql://emergencycenterdb_user:rbRGd6GUfvDvhEccTrgJzgSOIGwOj5T3@dpg-d742ar5m5p6s73f0spv0-a.ohio-postgres.render.com/emergencycenterdb"; // ستجده في إعدادات قاعدة البيانات بـ Render
-    private $db_name = "emergencycenterdb";          // اسم القاعدة (غالباً ما يكون بحروف صغيرة في Postgres)
-    private $username = "emergencycenterdb_user";                   // اسم المستخدم من Render
-    private $password = "rbRGd6GUfvDvhEccTrgJzgSOIGwOj5T3";              // كلمة المرور من Render
-    private $port = "5432";                          // المنفذ الافتراضي لـ PostgreSQL
+    private $host;
+    private $db_name;
+    private $username;
+    private $password;
+    private $port = "5432";
     public $conn;
 
     public function getConnection() {
         $this->conn = null;
+
+        // جلب الرابط من متغيرات البيئة في Render
+        $db_url = getenv('DATABASE_URL');
+
+        if ($db_url) {
+            // إذا كان الرابط موجوداً (عند الرفع على Render) نقوم بتفكيكه تلقائياً
+            $purl = parse_url($db_url);
+            $this->host = $purl["host"];
+            $this->port = $purl["port"] ?? "5432";
+            $this->username = $purl["user"];
+            $this->password = $purl["pass"];
+            $this->db_name = ltrim($purl["path"], "/");
+        } else {
+            // القيم الاحتياطية (للتجربة المحلية فقط) - استبدلها ببياناتك إذا كنت تجرب محلياً
+            $this->host = "dpg-d742ar5m5p6s73f0spv0-a.ohio-postgres.render.com"; 
+            $this->db_name = "emergencycenterdb";
+            $this->username = "emergencycenterdb_user";
+            $this->password = "rbRGd6GUfvDvhEccTrgJzgSOIGwOj5T3";
+        }
+
         try {
-            // تغيير التعريف إلى pgsql وإضافة المنفذ
+            // صياغة الـ DSN الصحيحة لـ PostgreSQL
             $dsn = "pgsql:host=" . $this->host . ";port=" . $this->port . ";dbname=" . $this->db_name;
             
             $this->conn = new PDO($dsn, $this->username, $this->password);
             
-            // تفعيل وضع الأخطاء (ضروري جداً لالتقاط أخطاء الـ Triggers التي وضعناها)
+            // تفعيل وضع الأخطاء
             $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             
-            // تأكيد التعامل مع النصوص بترميز UTF8
+            // تأكيد الترميز
             $this->conn->exec("SET client_encoding TO 'UTF8'");
 
         } catch(PDOException $exception) {
@@ -36,3 +55,5 @@ class Database {
     }
 }
 ?>
+
+                
