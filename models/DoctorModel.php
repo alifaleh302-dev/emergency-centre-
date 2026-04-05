@@ -6,7 +6,7 @@ class DoctorModel
     private PDO $conn;
     private string $driver;
 
-    public function __construct(PDO $db, string $driver = 'mysql')
+    public function __construct(PDO $db, string $driver = 'pgsql')
     {
         $this->conn = $db;
         $this->driver = $driver;
@@ -38,16 +38,14 @@ class DoctorModel
     {
         $sql = "INSERT INTO Patients (full_name, gender, birth_date, place1, place2)
                 VALUES (:name, :gender, :birth_date, :place1, :place2)";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->execute([
+
+        return $this->insertAndGetId($sql, [
             ':name' => $name,
             ':gender' => $gender,
             ':birth_date' => $birthDate,
             ':place1' => $place1,
             ':place2' => $place2,
-        ]);
-
-        return (int) $this->conn->lastInsertId();
+        ], 'patient_id');
     }
 
     public function patientExists(int $patientId): bool
@@ -77,17 +75,15 @@ class DoctorModel
     {
         $sql = "INSERT INTO Visits (patient_id, doctor_id, case_type_id, type_case, diagnosis, notes, status)
                 VALUES (:patient_id, :doctor_id, :case_type_id, :type_case, :diagnosis, :notes, 'Active')";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->execute([
+
+        return $this->insertAndGetId($sql, [
             ':patient_id' => $patientId,
             ':doctor_id' => $doctorId,
             ':case_type_id' => $caseTypeId,
             ':type_case' => $typeCaseName,
             ':diagnosis' => $diagnosis,
             ':notes' => $notes,
-        ]);
-
-        return (int) $this->conn->lastInsertId();
+        ], 'visit_id');
     }
 
     public function getWaitingList(int $doctorId): array
@@ -108,10 +104,8 @@ class DoctorModel
     {
         $sql = "INSERT INTO Invoices (serial_number, visit_id, total, exemption_value, net_amount)
                 VALUES (0, :visit_id, 0, 0, 0)";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->execute([':visit_id' => $visitId]);
 
-        return (int) $this->conn->lastInsertId();
+        return $this->insertAndGetId($sql, [':visit_id' => $visitId], 'invoice_id');
     }
 
     public function addInvoiceDetail(int $invoiceId, int $serviceId, float $price): bool
@@ -214,7 +208,7 @@ class DoctorModel
     public function getPatientMedicalFile(int $patientId): array
     {
         $aggregate = $this->driver === 'pgsql'
-            ? "STRING_AGG(sm.service_name, '، ')"
+            ? "STRING_AGG(sm.service_name, '، ' ORDER BY sm.service_name)"
             : "GROUP_CONCAT(sm.service_name SEPARATOR '، ')";
 
         $sql = "SELECT {$this->formatDate('v.created_at')} AS date_visit,
@@ -230,6 +224,19 @@ class DoctorModel
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([':patient_id' => $patientId]);
         return $stmt->fetchAll();
+    }
+
+    private function insertAndGetId(string $sql, array $params, string $returningColumn): int
+    {
+        if ($this->driver === 'pgsql') {
+            $stmt = $this->conn->prepare($sql . ' RETURNING ' . $returningColumn);
+            $stmt->execute($params);
+            return (int) $stmt->fetchColumn();
+        }
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute($params);
+        return (int) $this->conn->lastInsertId();
     }
 
     private function caseInsensitiveLike(string $column, string $parameter): string

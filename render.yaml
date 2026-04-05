@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: emergency-centre
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: production-ready
+    healthCheckPath: /healthz.php
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: 'false'
+      - key: APP_TIMEZONE
+        value: UTC
+      - key: DB_CONNECTION
+        value: pgsql
+      - key: DATABASE_URL
+        fromDatabase:
+          name: emergency-centre-db
+          property: connectionString
+      - key: DB_NAME
+        fromDatabase:
+          name: emergency-centre-db
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: emergency-centre-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: emergency-centre-db
+          property: password
+      - key: WEBSOCKET_PATH
+        value: ws
+      - key: WEBSOCKET_INTERNAL_PORT
+        value: '8081'
+      - key: JWT_SECRET
+        generateValue: true
+
+databases:
+  - name: emergency-centre-db
+    plan: free
+    region: oregon
+    databaseName: emergency_centre
+    user: emergency_user

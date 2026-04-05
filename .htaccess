@@ -1,0 +1,9 @@
+Options -Indexes
+DirectoryIndex login.html index.html index.php
+
+RewriteEngine On
+
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
+
+RewriteRule ^$ login.html [L,R=302]

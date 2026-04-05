@@ -1,80 +1,101 @@
-# نظام مركز الطوارئ
+# نظام مركز الطوارئ - جاهز للنشر على Render
 
-مشروع PHP بنمط MVC لإدارة دورة عمل مركز الطوارئ، مع واجهات للطبيب والمحاسبة وطبقة API موحدة.
+تجهيز Production لهذا المشروع تم تحديثه بحيث يعمل على **Render.com** مع **PostgreSQL** وطبقة **WebSocket** عبر نفس الدومين باستخدام Apache reverse proxy.
 
-## ماذا تم إصلاحه في هذه النسخة؟
-- إعادة تنظيم التحميل التلقائي والـ bootstrap لتثبيت المسارات ومنع مشاكل `require_once`.
-- تحسين طبقة الـ API Router داخل `api/index.php` وتقليل التكرار.
-- دعم تشغيل المشروع على **MySQL افتراضياً** مع **الاحتفاظ بالتوافق مع PostgreSQL** عبر متغيرات البيئة.
-- تأمين المصادقة عبر JWT بشكل أفضل مع دعم ترحيل كلمات المرور القديمة إلى BCRYPT عند تسجيل الدخول.
-- تشديد التحقق من المدخلات في الـ Controllers ومنع تمرير قيم مالية غير صحيحة أثناء السداد.
-- إصلاح منطق السندات بحيث يدعم الأنواع `A / B / C` بشكل صحيح.
-- تفعيل Apache Rewrite بشكل فعلي داخل Docker عبر `AllowOverride All`.
+## أهم التعديلات
+- تحويل طبقة الاتصال لتعمل افتراضياً مع **PostgreSQL** باستخدام **PDO pgsql**.
+- دعم متغيرات البيئة المطلوبة: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` بالإضافة إلى `DATABASE_URL`.
+- تحميل ملف `.env` محلياً بدون الاعتماد على قيم صلبة داخل الكود.
+- تعديل عمليات الإدراج في `DoctorModel` لتستخدم `RETURNING` في PostgreSQL بدلاً من الاعتماد على سلوك MySQL.
+- إضافة `Dockerfile` جاهز لـ Render مع الامتدادات: `pdo_pgsql`, `pgsql`, `sockets`.
+- إضافة `render.yaml` لإنشاء **Web Service** و **PostgreSQL database** تلقائياً.
+- إضافة WebSocket bridge على المسار `/ws` عبر Apache بحيث يتصل المتصفح على نفس الدومين باستخدام `wss://` في الإنتاج و`ws://` محلياً.
+- إنشاء ملف `.htaccess` في الجذر وتحسين إعدادات Apache والتوجيه.
+- إضافة ملف `database/schema.pgsql.sql` لتهيئة PostgreSQL بصيغة متوافقة مع Render.
 
 ## متطلبات التشغيل
-- PHP 8.1 أو أحدث
-- Apache أو Docker
-- MySQL 8+ (الافتراضي) أو PostgreSQL إذا رغبت في التوافق القديم
-- امتدادات PHP:
-  - `pdo`
-  - `pdo_mysql`
-  - `pdo_pgsql`
+- PHP 8.2+
+- PostgreSQL 14+
+- Apache
+- Docker (اختياري ولكن موصى به)
 
-## إعداد البيئة
+## ملف البيئة `.env`
 انسخ ملف المثال:
 
 ```bash
 cp .env.example .env
 ```
 
-ثم اضبط القيم المناسبة في بيئة التشغيل أو في إعدادات الخادم:
+ثم عدّل القيم:
 
 ```env
 APP_ENV=local
 APP_DEBUG=false
 APP_TIMEZONE=UTC
+APP_URL=http://localhost:8080
 
-DB_CONNECTION=mysql
+DB_CONNECTION=pgsql
 DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_DATABASE=emergency_center
-DB_USERNAME=root
-DB_PASSWORD=
+DB_PORT=5432
+DB_NAME=emergency_centre
+DB_USER=postgres
+DB_PASSWORD=postgres
 
 JWT_SECRET=change-this-secret-before-production
+WEBSOCKET_PATH=ws
+WEBSOCKET_INTERNAL_PORT=8081
 ```
 
-> إذا كنت تستخدم رابط موحد لقاعدة البيانات يمكنك الاعتماد على `DATABASE_URL` بدلاً من القيم المنفصلة.
+> في Render يفضل الاعتماد على `DATABASE_URL` لأن المنصة توفره تلقائياً من قاعدة البيانات المُدارة.
 
-## التشغيل عبر Docker
+## تشغيل محلي عبر Docker
 ```bash
-docker build -t emergency-center .
-docker run --rm -p 8080:80 \
-  -e DB_CONNECTION=mysql \
+docker build -t emergency-centre .
+docker run --rm -p 8080:10000 \
+  -e PORT=10000 \
+  -e DB_CONNECTION=pgsql \
   -e DB_HOST=host.docker.internal \
-  -e DB_PORT=3306 \
-  -e DB_DATABASE=emergency_center \
-  -e DB_USERNAME=root \
-  -e DB_PASSWORD=your_password \
+  -e DB_PORT=5432 \
+  -e DB_NAME=emergency_centre \
+  -e DB_USER=postgres \
+  -e DB_PASSWORD=postgres \
   -e JWT_SECRET=change-this-secret-before-production \
-  emergency-center
+  emergency-centre
 ```
 
-ثم افتح:
+بعد التشغيل:
 - الواجهة: `http://localhost:8080/login.html`
 - الـ API: `http://localhost:8080/api/...`
+- WebSocket: `ws://localhost:8080/ws`
 
-## التشغيل المحلي عبر Apache / XAMPP / Laragon
-1. انسخ المشروع داخل مجلد الويب.
-2. فعّل `mod_rewrite` في Apache.
-3. تأكد أن `AllowOverride All` مفعلة للمجلد.
-4. اضبط متغيرات البيئة الخاصة بقاعدة البيانات.
-5. افتح `login.html` من المتصفح.
+## النشر على Render
+### 1) ربط المستودع
+اربط المستودع مع Render واختر ملف `render.yaml` من الجذر.
 
-## ملاحظات قاعدة البيانات
-هذا المستودع أصبح يعمل افتراضياً مع **MySQL**، لكن ما زال يحتفظ بطبقة توافق مع **PostgreSQL** من خلال `DB_CONNECTION=pgsql` أو `DATABASE_URL` بصيغة PostgreSQL.
+### 2) إنشاء قاعدة البيانات
+الـ Blueprint سينشئ قاعدة PostgreSQL باسم:
+- `emergency-centre-db`
 
-### الجداول المتوقعة
+### 3) تهيئة الجداول
+بعد إنشاء قاعدة البيانات شغّل محتوى الملف التالي داخل PostgreSQL:
+
+```text
+database/schema.pgsql.sql
+```
+
+### 4) WebSockets على Render
+الربط تم تصميمه ليعمل من خلال نفس الدومين:
+- الواجهة تتصل بـ `wss://<your-render-domain>/ws` في الإنتاج
+- وتتصل بـ `ws://localhost/...` محلياً
+- Apache يقوم بتمرير `/ws` إلى خادم WebSocket الداخلي داخل نفس الحاوية
+
+## ملاحظات مهمة
+- الملف `websocket-server.php` يربط السيرفر على `0.0.0.0` ويقرأ المنفذ من متغير البيئة `PORT`.
+- داخل الحاوية يتم تشغيله على منفذ داخلي مستقل عبر `WEBSOCKET_INTERNAL_PORT` ثم يمر من Apache إلى `/ws`.
+- جميع `require/include` الحساسة للمسار تعتمد على `__DIR__` أو `BASE_PATH`.
+- تم التخلص من أي اعتماد إنتاجي على MySQL كخيار افتراضي.
+
+## الجداول المتوقعة
 - `Users`
 - `Roles`
 - `Patients`
@@ -85,38 +106,10 @@ docker run --rm -p 8080:80 \
 - `Services_Master`
 - `Emergency_Case_Types`
 - `Service_Categories`
+- `Medical_Results`
 
-## نقاط الأمان بعد الإصلاح
-- التحقق من المدخلات في معظم نقاط الـ API.
-- منع تمرير مبالغ دفع/إعفاء غير متطابقة مع إجمالي الفاتورة.
-- تحسين التحقق من JWT واستخدام مقارنة توقيعات آمنة.
-- دعم جلسات PHP بإعدادات أكثر أماناً (`HttpOnly`, `SameSite`, `Strict Mode`).
-- إعادة تشفير كلمات المرور القديمة غير المشفرة عند أول تسجيل دخول ناجح.
-
-## ملاحظات مهمة قبل النشر
-- غيّر قيمة `JWT_SECRET` في بيئة الإنتاج.
-- لا تضع بيانات قاعدة البيانات أو الأسرار داخل الملفات البرمجية.
-- تأكد من تفعيل HTTPS في الإنتاج.
-
-## مسارات API الرئيسية
-### المصادقة
-- `POST /api/auth/login`
-- `GET /api/auth/me`
-
-### الطبيب
-- `POST /api/doctor/search_patient`
-- `POST /api/doctor/new_patient`
-- `POST /api/doctor/existing_patient_visit`
-- `GET /api/doctor/waiting_list`
-- `POST /api/doctor/send_orders`
-- `POST /api/doctor/final_diagnosis`
-- `GET /api/doctor/sent_orders`
-- `GET /api/doctor/services_list`
-- `GET /api/doctor/medical_archive`
-
-### المحاسبة
-- `GET /api/accounting/pending`
-- `GET /api/accounting/next_serials`
-- `POST /api/accounting/pay_invoice`
-- `GET /api/accounting/daily_treasury`
-- `POST /api/accounting/revenues_drilldown`
+## ملاحظات أمان
+- غيّر قيمة `JWT_SECRET` في الإنتاج.
+- لا تقم برفع `.env` إلى المستودع.
+- فعّل HTTPS فقط في بيئة الإنتاج.
+- لأن Render يوجه WebSocket عبر TLS، يجب استخدام `wss://` خارج localhost.

@@ -16,6 +16,50 @@ style.innerHTML = `
 document.head.appendChild(style);
 
 const Core = {
+    getApiBase: function() {
+        const configuredBase = window.APP_CONFIG && window.APP_CONFIG.apiBase
+            ? String(window.APP_CONFIG.apiBase).replace(/\/+$/, '')
+            : '';
+
+        if (configuredBase) {
+            return configuredBase;
+        }
+
+        return 'api';
+    },
+
+    buildApiUrl: function(path) {
+        const normalizedPath = String(path || '').replace(/^\/+/, '');
+        return this.getApiBase() + '/' + normalizedPath;
+    },
+
+    getWebSocketUrl: function(path = 'ws') {
+        const normalizedPath = String(path || 'ws').replace(/^\/+/, '');
+        const isLocalhost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+        const protocol = isLocalhost ? 'ws:' : 'wss:';
+        const configuredBase = window.APP_CONFIG && window.APP_CONFIG.websocketBase
+            ? String(window.APP_CONFIG.websocketBase).replace(/\/+$/, '')
+            : '';
+
+        if (configuredBase) {
+            const baseWithoutProtocol = configuredBase.replace(/^wss?:\/\//, '');
+            return `${protocol}//${baseWithoutProtocol}/${normalizedPath}`;
+        }
+
+        return `${protocol}//${window.location.host}/${normalizedPath}`;
+    },
+
+    connectWebSocket: function(path = 'ws', handlers = {}) {
+        const socket = new WebSocket(this.getWebSocketUrl(path));
+
+        if (typeof handlers.open === 'function') socket.addEventListener('open', handlers.open);
+        if (typeof handlers.message === 'function') socket.addEventListener('message', handlers.message);
+        if (typeof handlers.error === 'function') socket.addEventListener('error', handlers.error);
+        if (typeof handlers.close === 'function') socket.addEventListener('close', handlers.close);
+
+        return socket;
+    },
+
     // --- 1. إدارة الهوية (Profile) ---
     renderProfile: function(user) {
         const desktopContainer = document.getElementById('desktop-profile-container');
@@ -33,7 +77,7 @@ const Core = {
             ${avatarHTML}
             <div class="nav-profile-info">
                 <div class="nav-profile-name">${user.name}</div>
-                <div class="nav-profile-role">${user.job}</div> 
+                <div class="nav-profile-role">${user.job}</div>
             </div>
         `;
 
@@ -55,10 +99,10 @@ const Core = {
             const activeClass = link.active ? 'active' : '';
             linksHTML += `
                 <li>
-                    <a href="${link.url || 'javascript:void(0)'}" 
-                       class="${activeClass}" 
+                    <a href="${link.url || 'javascript:void(0)'}"
+                       class="${activeClass}"
                        onclick="${link.action || ''}">
-                        <i class="bi ${link.icon}"></i> 
+                        <i class="bi ${link.icon}"></i>
                         ${link.title}
                     </a>
                 </li>
@@ -80,7 +124,7 @@ const Core = {
 
         const mainContent = document.getElementById('mainContent');
         mainContent.style.opacity = '0';
-        
+
         setTimeout(() => {
             if (typeof renderCallback === 'function') {
                 renderCallback();
@@ -103,7 +147,7 @@ const Core = {
     // --- 3. بناء واجهة الرأس وزر الأدوات الديناميكي (Tools Menu) ---
     renderHeaderWithTools: function(title, subtitle, toolsActions = []) {
         let toolsHTML = '';
-        
+
         if (toolsActions && toolsActions.length > 0) {
             const listItems = toolsActions.map(item => `
                 <li><a class="dropdown-item fw-bold small text-dark d-flex align-items-center gap-2 py-2" href="javascript:void(0)" onclick="${item.action}">
@@ -180,9 +224,9 @@ const Core = {
             if (data && (method === 'POST' || method === 'PUT')) {
                 options.body = JSON.stringify(data);
             }
-          
-            const response = await fetch('api/' + path, options); 
-           
+
+            const response = await fetch(this.buildApiUrl(path), options);
+
             if (response.status === 401) {
                 Core.showAlert("انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً.", "warning");
                 localStorage.removeItem('jwt_token');
@@ -200,7 +244,7 @@ const Core = {
 
             try {
                 // نحاول تحويل النص إلى JSON
-                return JSON.parse(rawText); 
+                return JSON.parse(rawText);
             } catch (parseError) {
                 // إذا فشل التحويل، نطبع النص الذي أرسله السيرفر لنعرف المشكلة!
                 console.error("[API JSON Parse Error! السيرفر أرجع التالي]:", rawText);
