@@ -1,15 +1,14 @@
-# استخدام نسخة PHP مع Apache
 FROM php:8.2-apache
 
-# تثبيت الإضافات اللازمة للاتصال بقاعدة بيانات PostgreSQL
-RUN apt-get update && apt-get install -y libpq-dev \
-    && docker-php-ext-install pgsql pdo_pgsql
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq-dev default-mysql-client \
+    && docker-php-ext-install pdo pdo_mysql pgsql pdo_pgsql \
+    && a2enmod rewrite \
+    && sed -ri 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# نسخ ملفات مشروعك إلى مجلد السيرفر
+WORKDIR /var/www/html
 COPY . /var/www/html/
 
-# تفعيل مود Rewrite لـ Apache (مهم للمسارات)
-RUN a2enmod rewrite
-
-# تحديد المنفذ الذي سيعمل عليه السيرفر
 EXPOSE 80

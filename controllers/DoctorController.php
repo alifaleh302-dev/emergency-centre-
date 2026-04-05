@@ -1,227 +1,289 @@
 <?php
-// controllers/DoctorController.php
-require_once '../config/database.php';
-require_once '../models/DoctorModel.php';
+declare(strict_types=1);
 
-class DoctorController {
-    private $model;
-    private $doctor_id;
+class DoctorController extends BaseController
+{
+    private PDO $conn;
+    private DoctorModel $model;
+    private int $doctor_id;
 
-    public function __construct($doctor_id) {
-        $db = (new Database())->getConnection();
-        $this->model = new DoctorModel($db);
-        $this->doctor_id = $doctor_id; // يتم تمريره من الـ AuthMiddleware
+    public function __construct(int $doctor_id)
+    {
+        $database = new Database();
+        $this->conn = $database->getConnection();
+        $this->model = new DoctorModel($this->conn, $database->getDriver());
+        $this->doctor_id = $doctor_id;
     }
 
-    // 1. مسار إضافة مريض جديد
-    public function newPatient($data) {
+    public function newPatient($data): void
+    {
         try {
-            // حساب تاريخ الميلاد تقريبياً من العمر
-            $birth_date = date('Y-m-d', strtotime('-' . intval($data->age) . ' years'));
-            $gender = isset($data->gender) ? ($data->gender == 'ذكر' ? 'Male' : 'Female') : 'Male';
+            $this->requireFields($data, ['name', 'age', 'type_case']);
 
-            // إدخال المريض
-            $patient_id = $this->model->createPatient($data->name, $gender, $birth_date, $data->place1, $data->place2);
-            
-            // جلب معرّف نوع الحالة
-            $case_type_id = $this->model->getCaseTypeId($data->type_case);
-            if (!$case_type_id) {
-                // افتراضي في حال لم يتطابق الاسم
-                $case_type_id = 1; 
+            $name = $this->sanitizeText($this->getField($data, 'name'), 'name', 150);
+            $age = $this->sanitizeInteger($this->getField($data, 'age'), 'age', 0);
+            if ($age > 120) {
+                throw new InvalidArgumentException('العمر المدخل غير منطقي.');
             }
 
-            // فتح الزيارة
-            // داخل DoctorController.php في دالة newPatient
-     try {
-    // ... الكود السابق ...
-          $this->model->createVisit($patient_id, $this->doctor_id, $case_type_id, $data->diagnosis, $data->note, $data->type_case);
-          echo json_encode(["success" => true, "message" => "تم تسجيل المريض وفتح الزيارة بنجاح"]);
-       } catch (Exception $e) {
-    // التقاط خطأ الـ Trigger الخاص بالزيارة النشطة أو تكرار المريض
-    $errorMsg = $e->getMessage();
-    if (strpos($errorMsg, 'زيارة سابقة لا تزال نشطة') !== false) {
-        $errorMsg = "لا يمكن فتح زيارة جديدة؛ المريض لديه زيارة نشطة حالياً.";
-    } elseif (strpos($errorMsg, 'unique_patient_identity') !== false) {
-        $errorMsg = "هذا المريض مسجل مسبقاً بنفس الاسم والعنوان.";
-    }
-    echo json_encode(["success" => false, "message" => $errorMsg]);
-}
+            $typeCase = $this->sanitizeText($this->getField($data, 'type_case'), 'type_case', 100);
+            $gender = $this->normalizeGender($this->getField($data, 'gender', 'ذكر'));
+            $place1 = $this->sanitizeText($this->getField($data, 'place1', ''), 'place1', 150, true);
+            $place2 = $this->sanitizeText($this->getField($data, 'place2', ''), 'place2', 150, true);
+            $diagnosis = $this->sanitizeText($this->getField($data, 'diagnosis', ''), 'diagnosis', 255, true);
+            $note = $this->sanitizeText($this->getField($data, 'note', ''), 'note', 500, true);
+            $birthDate = date('Y-m-d', strtotime('-' . $age . ' years'));
+            $caseTypeId = $this->model->getCaseTypeId($typeCase) ?? 1;
 
-            echo json_encode(["success" => true, "message" => "تم إضافة المريض وفتح الزيارة بنجاح"]);
-       
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+            $this->conn->beginTransaction();
+            $patientId = $this->model->createPatient($name, $gender, $birthDate, $place1, $place2);
+            $this->model->createVisit($patientId, $this->doctor_id, $caseTypeId, $diagnosis, $note, $typeCase);
+            $this->conn->commit();
+
+            $this->success(null, 'تم تسجيل المريض وفتح الزيارة بنجاح');
+        } catch (InvalidArgumentException $exception) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            $this->error($this->mapDoctorError($exception), 400);
         }
     }
 
-    // 2. مسار فتح زيارة لمريض سابق
-    public function existingPatientVisit($data) {
+    public function existingPatientVisit($data): void
+    {
         try {
-            $case_type_id = $this->model->getCaseTypeId($data->type_case) ?? 1;
-            
-            // تأكد من أن الـ id_pat يتم إرساله من الواجهة كأرقام، أو قم باستخراجه إذا كان يحوي حروفاً (مثل PAT-1)
-            $patient_id = preg_replace('/[^0-9]/', '', $data->id_pat); 
+            $this->requireFields($data, ['id_pat', 'type_case']);
 
-            $this->model->createVisit($patient_id, $this->doctor_id, $case_type_id, $data->diagnosis, $data->note, $data->type_case);
-            echo json_encode(["success" => true, "message" => "تم فتح الزيارة بنجاح"]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+            $patientId = $this->extractId($this->getField($data, 'id_pat'), 'id_pat');
+            if (!$this->model->patientExists($patientId)) {
+                throw new InvalidArgumentException('المريض المطلوب غير موجود.');
+            }
+
+            $typeCase = $this->sanitizeText($this->getField($data, 'type_case'), 'type_case', 100);
+            $diagnosis = $this->sanitizeText($this->getField($data, 'diagnosis', ''), 'diagnosis', 255, true);
+            $note = $this->sanitizeText($this->getField($data, 'note', ''), 'note', 500, true);
+            $caseTypeId = $this->model->getCaseTypeId($typeCase) ?? 1;
+
+            $this->model->createVisit($patientId, $this->doctor_id, $caseTypeId, $diagnosis, $note, $typeCase);
+            $this->success(null, 'تم فتح الزيارة بنجاح');
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            $this->error($this->mapDoctorError($exception), 400);
         }
     }
 
-    // 3. مسار جلب قائمة الانتظار
-    public function getWaitingList() {
+    public function getWaitingList(): void
+    {
         try {
             $list = $this->model->getWaitingList($this->doctor_id);
-            
-            // تعديل بسيط لمعرف الزيارة ليتوافق مع الواجهة
             foreach ($list as &$item) {
                 $item['visit'] = 'VIS-' . $item['visit'];
             }
-            echo json_encode(["success" => true, "data" => $list]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+
+            $this->success($list);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب قائمة الانتظار حالياً.', 500);
         }
     }
 
-
-    // 5. مسار التشخيص النهائي وإغلاق الزيارة
-    public function finalDiagnosis($data) {
+    public function finalDiagnosis($data): void
+    {
         try {
-            $visit_id = preg_replace('/[^0-9]/', '', $data->id_vis);
-            $this->model->updateFinalDiagnosis($visit_id, $data->diagnosis);
-            
-            echo json_encode(["success" => true, "message" => "تم حفظ التشخيص وإغلاق الزيارة"]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+            $this->requireFields($data, ['id_vis', 'diagnosis']);
+
+            $visitId = $this->extractId($this->getField($data, 'id_vis'), 'id_vis');
+            if (!$this->model->visitExists($visitId)) {
+                throw new InvalidArgumentException('الزيارة المطلوبة غير موجودة.');
+            }
+
+            $diagnosis = $this->sanitizeText($this->getField($data, 'diagnosis'), 'diagnosis', 255);
+            $this->model->updateFinalDiagnosis($visitId, $diagnosis);
+
+            $this->success(null, 'تم حفظ التشخيص وإغلاق الزيارة');
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            $this->error('تعذر حفظ التشخيص النهائي حالياً.', 500);
         }
     }
-        // مسار البحث الذكي
-    public function searchPatient($data) {
+
+    public function searchPatient($data): void
+    {
         try {
-            $query = isset($data->query) ? $data->query : '';
-            if (strlen($query) < 2) {
-                echo json_encode(["success" => true, "data" => []]);
+            $query = $this->sanitizeText($this->getField($data, 'query', ''), 'query', 100, true);
+            if (mb_strlen($query) < 2) {
+                $this->success([]);
                 return;
             }
-            
+
             $results = $this->model->searchPatient($query);
-            echo json_encode(["success" => true, "data" => $results]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+            $this->success($results);
+        } catch (Throwable $exception) {
+            $this->error('تعذر تنفيذ البحث حالياً.', 500);
         }
     }
 
-// مسار جلب الطلبات المرسلة وتفاصيلها
-    public function getSentOrders() {
+    public function getSentOrders(): void
+    {
         try {
             $visits = $this->model->getSentOrders($this->doctor_id);
             $result = [];
-            
-            foreach ($visits as $v) {
-                // جلب التفاصيل لكل زيارة
-                $details = $this->model->getOrderDetails($v['visit_id']);
-                
+
+            foreach ($visits as $visit) {
                 $result[] = [
-                    "visit" => 'VIS-' . $v['visit_id'], // <- إضافة البادئة هنا ضروري جداً
-                    "name" => $v['name'],
-                    "type_case" => $v['type_case'],
-                    "order_count" => $v['order_count'],
-                    "details" => $details
+                    'visit' => 'VIS-' . $visit['visit_id'],
+                    'name' => $visit['name'],
+                    'type_case' => $visit['type_case'],
+                    'order_count' => $visit['order_count'],
+                    'details' => $this->model->getOrderDetails((int) $visit['visit_id']),
                 ];
             }
-            
-            echo json_encode(["success" => true, "data" => $result]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+
+            $this->success($result);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب الطلبات المرسلة حالياً.', 500);
         }
     }
-    // 1. إضافة دالة جلب وترتيب الخدمات
-    public function getServicesList() {
+
+    public function getServicesList(): void
+    {
         try {
             $services = $this->model->getAvailableServices();
-            
-            // تهيئة المصفوفات لتطابق هيكلة الواجهة الأمامية
             $grouped = ['lab' => [], 'ray' => [], 'sur' => []];
-            
-            foreach ($services as $s) {
-                $item = ['id' => $s['service_id'], 'name' => $s['service_name']];
-                $dept = mb_strtolower($s['department']);
-                
-                // تصنيف الخدمات بناءً على القسم
-                if (strpos($dept, 'laboratory') !== false || strpos($dept, 'مختبر') !== false) {
+
+            foreach ($services as $service) {
+                $item = [
+                    'id' => $service['service_id'],
+                    'name' => $service['service_name'],
+                ];
+
+                $department = mb_strtolower((string) $service['department']);
+                if (str_contains($department, 'laboratory') || str_contains($department, 'مختبر')) {
                     $grouped['lab'][] = $item;
-                } elseif (strpos($dept, 'radiology') !== false || strpos($dept, 'أشعة') !== false) {
+                } elseif (str_contains($department, 'radiology') || str_contains($department, 'أشعة')) {
                     $grouped['ray'][] = $item;
-                } elseif (strpos($dept, 'nursing') !== false || strpos($dept, 'تمريض') !== false) {
+                } elseif (str_contains($department, 'nursing') || str_contains($department, 'تمريض')) {
                     $grouped['sur'][] = $item;
                 }
             }
-            
-            echo json_encode(["success" => true, "data" => $grouped]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+
+            $this->success($grouped);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب قائمة الخدمات حالياً.', 500);
         }
     }
 
-    // 2. تحديث دالة إرسال الطلبات (تستقبل IDs بدلاً من أسماء)
-    public function sendOrders($data) {
+    public function sendOrders($data): void
+    {
         try {
-            $visit_id = preg_replace('/[^0-9]/', '', $data->id_vis);
-            $total_invoice_price = 0;
+            $this->requireFields($data, ['id_vis', 'order']);
 
-            $invoice_id = $this->model->createPendingInvoice($visit_id);
+            $visitId = $this->extractId($this->getField($data, 'id_vis'), 'id_vis');
+            if (!$this->model->visitExists($visitId)) {
+                throw new InvalidArgumentException('الزيارة المطلوبة غير موجودة.');
+            }
 
-            $all_orders_ids = array_merge($data->order->lab ?? [], $data->order->ray ?? [], $data->order->sur ?? []);
+            $orderPayload = $this->getField($data, 'order');
+            $labOrders = (is_object($orderPayload) && isset($orderPayload->lab) && is_array($orderPayload->lab)) ? $orderPayload->lab : [];
+            $rayOrders = (is_object($orderPayload) && isset($orderPayload->ray) && is_array($orderPayload->ray)) ? $orderPayload->ray : [];
+            $surOrders = (is_object($orderPayload) && isset($orderPayload->sur) && is_array($orderPayload->sur)) ? $orderPayload->sur : [];
 
-            foreach ($all_orders_ids as $service_id) {
-                // نستخدم الدالة المحدثة التي تبحث بالـ ID
-                $service = $this->model->getServiceDetailsById($service_id);
-                if ($service) {
-                    $price = $service['total_price'];
-                    $this->model->addInvoiceDetail($invoice_id, $service['service_id'], $price);
-                    $total_invoice_price += $price;
+            $allOrderIds = array_values(array_unique(array_map(
+                'intval',
+                array_filter(array_merge($labOrders, $rayOrders, $surOrders), static fn ($value) => is_numeric($value) && (int) $value > 0)
+            )));
+
+            if (empty($allOrderIds)) {
+                throw new InvalidArgumentException('يجب اختيار خدمة واحدة على الأقل قبل إرسال الطلبات.');
+            }
+
+            $this->conn->beginTransaction();
+            $invoiceId = $this->model->createPendingInvoice($visitId);
+            $totalInvoicePrice = 0.0;
+
+            foreach ($allOrderIds as $serviceId) {
+                $service = $this->model->getServiceDetailsById($serviceId);
+                if (!$service) {
+                    throw new InvalidArgumentException('تم إرسال خدمة غير موجودة في قائمة الخدمات.');
                 }
+
+                $price = round((float) $service['total_price'], 2);
+                $this->model->addInvoiceDetail($invoiceId, (int) $service['service_id'], $price);
+                $totalInvoicePrice += $price;
             }
 
-            if ($total_invoice_price > 0) {
-                $this->model->updateInvoiceTotal($invoice_id, $total_invoice_price);
+            if ($totalInvoicePrice <= 0) {
+                throw new InvalidArgumentException('تعذر تكوين فاتورة صحيحة للطلبات المرسلة.');
             }
 
-            echo json_encode(["success" => true, "message" => "تم إرسال الطلبات وحفظها بنجاح"]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+            $this->model->updateInvoiceTotal($invoiceId, $totalInvoicePrice);
+            $this->conn->commit();
+
+            $this->success(null, 'تم إرسال الطلبات وحفظها بنجاح');
+        } catch (InvalidArgumentException $exception) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            $this->error('تعذر إرسال الطلبات حالياً.', 500);
         }
     }
-    
-    // مسار السجل الطبي (الأرشيف)
-    public function getMedicalArchive() {
+
+    public function getMedicalArchive(): void
+    {
         try {
             $patients = $this->model->getMedicalArchive();
             $result = [];
-            
-            foreach ($patients as $p) {
-                // جلب الملف الطبي المفصل لكل مريض
-                $medical_file = $this->model->getPatientMedicalFile($p['patient_id']);
-                
-                // معالجة القيم الفارغة (إذا كانت الزيارة بدون فحوصات/إجراءات)
-                foreach($medical_file as &$file) {
-                    $file['procedures'] = $file['procedures'] ?? 'لا يوجد إجراءات';
+
+            foreach ($patients as $patient) {
+                $medicalFile = $this->model->getPatientMedicalFile((int) $patient['patient_id']);
+                foreach ($medicalFile as &$file) {
+                    $file['procedures'] = $file['procedures'] ?: 'لا يوجد إجراءات';
                 }
-                
+
                 $result[] = [
-                    "id_pat" => $p['patient_id'],
-                    "name" => $p['name'],
-                    "visit_num" => $p['visit_num'],
-                    "last_visit_date" => $p['last_visit_date'],
-                    "medical_file" => $medical_file
+                    'id_pat' => $patient['patient_id'],
+                    'name' => $patient['name'],
+                    'visit_num' => $patient['visit_num'],
+                    'last_visit_date' => $patient['last_visit_date'],
+                    'medical_file' => $medicalFile,
                 ];
             }
-            
-            echo json_encode(["success" => true, "data" => $result]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+
+            $this->success($result);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب السجل الطبي حالياً.', 500);
         }
     }
+
+    private function normalizeGender($value): string
+    {
+        $normalized = trim((string) $value);
+        return $normalized === 'ذكر' ? 'Male' : 'Female';
+    }
+
+    private function mapDoctorError(Throwable $exception): string
+    {
+        $message = $exception->getMessage();
+
+        if (str_contains($message, 'زيارة سابقة لا تزال نشطة')) {
+            return 'لا يمكن فتح زيارة جديدة؛ المريض لديه زيارة نشطة حالياً.';
+        }
+
+        if (str_contains($message, 'unique_patient_identity')) {
+            return 'هذا المريض مسجل مسبقاً بنفس الاسم والعنوان.';
+        }
+
+        return 'حدث خطأ أثناء معالجة طلب الطبيب.';
+    }
 }
-?>

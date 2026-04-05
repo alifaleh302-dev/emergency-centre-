@@ -1,59 +1,100 @@
 <?php
-// config/database.php
+declare(strict_types=1);
 
-class Database {
-    private $host;
-    private $db_name;
-    private $username;
-    private $password;
-    private $port = "5432";
-    public $conn;
+class Database
+{
+    private string $driver = 'mysql';
+    private ?PDO $conn = null;
 
-    public function getConnection() {
-        $this->conn = null;
-
-        // جلب الرابط من متغيرات البيئة في Render
-        $db_url = getenv('DATABASE_URL');
-
-        if ($db_url) {
-            // إذا كان الرابط موجوداً (عند الرفع على Render) نقوم بتفكيكه تلقائياً
-            $purl = parse_url($db_url);
-            $this->host = $purl["host"];
-            $this->port = $purl["port"] ?? "5432";
-            $this->username = $purl["user"];
-            $this->password = $purl["pass"];
-            $this->db_name = ltrim($purl["path"], "/");
-        } else {
-            // القيم الاحتياطية (للتجربة المحلية فقط) - استبدلها ببياناتك إذا كنت تجرب محلياً
-            $this->host = "dpg-d742ar5m5p6s73f0spv0-a.ohio-postgres.render.com"; 
-            $this->db_name = "emergencycenterdb";
-            $this->username = "emergencycenterdb_user";
-            $this->password = "rbRGd6GUfvDvhEccTrgJzgSOIGwOj5T3";
+    public function getConnection(): PDO
+    {
+        if ($this->conn instanceof PDO) {
+            return $this->conn;
         }
+
+        $config = $this->resolveConfig();
+        $this->driver = $config['driver'];
 
         try {
-            // صياغة الـ DSN الصحيحة لـ PostgreSQL
-            $dsn = "pgsql:host=" . $this->host . ";port=" . $this->port . ";dbname=" . $this->db_name;
-            
-            $this->conn = new PDO($dsn, $this->username, $this->password);
-            
-            // تفعيل وضع الأخطاء
-            $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-            
-            // تأكيد الترميز
-            $this->conn->exec("SET client_encoding TO 'UTF8'");
+            $options = [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false,
+            ];
 
-        } catch(PDOException $exception) {
-            header('Content-Type: application/json');
-            echo json_encode([
-                "success" => false, 
-                "message" => "خطأ في الاتصال بقاعدة البيانات: " . $exception->getMessage()
-            ]);
-            exit;
+            if ($this->driver === 'pgsql') {
+                $dsn = sprintf(
+                    'pgsql:host=%s;port=%s;dbname=%s',
+                    $config['host'],
+                    $config['port'],
+                    $config['database']
+                );
+            } else {
+                $dsn = sprintf(
+                    'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
+                    $config['host'],
+                    $config['port'],
+                    $config['database']
+                );
+            }
+
+            $this->conn = new PDO($dsn, $config['username'], $config['password'], $options);
+
+            if ($this->driver === 'pgsql') {
+                $this->conn->exec("SET client_encoding TO 'UTF8'");
+            } else {
+                $this->conn->exec("SET NAMES utf8mb4");
+            }
+
+            return $this->conn;
+        } catch (PDOException $exception) {
+            throw new RuntimeException('فشل الاتصال بقاعدة البيانات. تحقق من متغيرات البيئة وإعدادات الخادم.');
         }
-        return $this->conn;
+    }
+
+    public function getDriver(): string
+    {
+        return $this->driver;
+    }
+
+    private function resolveConfig(): array
+    {
+        $databaseUrl = getenv('DATABASE_URL');
+        if ($databaseUrl) {
+            $parsed = parse_url($databaseUrl);
+            if ($parsed === false || empty($parsed['host']) || empty($parsed['path'])) {
+                throw new RuntimeException('صيغة DATABASE_URL غير صحيحة.');
+            }
+
+            return [
+                'driver' => $this->normalizeDriver($parsed['scheme'] ?? 'mysql'),
+                'host' => $parsed['host'],
+                'port' => (string) ($parsed['port'] ?? (($this->normalizeDriver($parsed['scheme'] ?? 'mysql') === 'pgsql') ? 5432 : 3306)),
+                'database' => ltrim($parsed['path'], '/'),
+                'username' => $parsed['user'] ?? '',
+                'password' => $parsed['pass'] ?? '',
+            ];
+        }
+
+        $driver = $this->normalizeDriver(getenv('DB_CONNECTION') ?: 'mysql');
+
+        return [
+            'driver' => $driver,
+            'host' => getenv('DB_HOST') ?: '127.0.0.1',
+            'port' => getenv('DB_PORT') ?: ($driver === 'pgsql' ? '5432' : '3306'),
+            'database' => getenv('DB_DATABASE') ?: 'emergency_center',
+            'username' => getenv('DB_USERNAME') ?: 'root',
+            'password' => getenv('DB_PASSWORD') ?: '',
+        ];
+    }
+
+    private function normalizeDriver(string $driver): string
+    {
+        $driver = strtolower(trim($driver));
+
+        return match ($driver) {
+            'pgsql', 'postgres', 'postgresql' => 'pgsql',
+            default => 'mysql',
+        };
     }
 }
-?>
-
-                

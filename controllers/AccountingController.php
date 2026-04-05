@@ -1,184 +1,224 @@
 <?php
-// controllers/AccountingController.php
-require_once '../config/database.php';
-require_once '../models/AccountingModel.php';
+declare(strict_types=1);
 
-class AccountingController {
-    private $model;
-    private $cashier_id;
+class AccountingController extends BaseController
+{
+    private PDO $conn;
+    private AccountingModel $model;
+    private int $cashier_id;
 
-    public function __construct($cashier_id) {
-        $db = (new Database())->getConnection();
-        $this->model = new AccountingModel($db);
+    public function __construct(int $cashier_id)
+    {
+        $database = new Database();
+        $this->conn = $database->getConnection();
+        $this->model = new AccountingModel($this->conn, $database->getDriver());
         $this->cashier_id = $cashier_id;
     }
 
-    // مسار جلب الفواتير المستحقة
-    public function getPendingInvoices() {
+    public function getPendingInvoices(): void
+    {
         try {
             $invoices = $this->model->getPendingInvoices();
             $result = [];
-            
-            foreach ($invoices as $inv) {
-                // جلب التفاصيل لكل فاتورة
-                $details = $this->model->getInvoiceDetails($inv['invoice_id']);
-                
+
+            foreach ($invoices as $invoice) {
                 $result[] = [
-                    "Invoice_id" => 'INV-' . $inv['invoice_id'],
-                    "name" => $inv['name'],
-                    "sum" => $inv['sum'],
-                    "time" => $inv['time'],
-                    "order" => $details // مصفوفة الخدمات وأسعارها
+                    'Invoice_id' => 'INV-' . $invoice['invoice_id'],
+                    'name' => $invoice['name'],
+                    'sum' => $invoice['sum'],
+                    'time' => $invoice['time'],
+                    'order' => $this->model->getInvoiceDetails((int) $invoice['invoice_id']),
                 ];
             }
-            
-            echo json_encode(["success" => true, "data" => $result]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+
+            $this->success($result);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب الفواتير المستحقة حالياً.', 500);
         }
     }
-    
-    // مسار جلب الأرقام التسلسلية المتوقعة
-    public function getNextSerials() {
+
+    public function getNextSerials(): void
+    {
         try {
             $serials = $this->model->getNextSerials();
             $data = [];
-            foreach($serials as $s) {
-                $data[$s['doc_name']] = $s['next_serial'];
+            foreach ($serials as $serial) {
+                $data[$serial['doc_name']] = $serial['next_serial'];
             }
-            // سيرجع مثلاً: {"A": 102, "B": 201}
-            echo json_encode(["success" => true, "data" => $data]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+
+            $this->success($data);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب الأرقام التسلسلية حالياً.', 500);
         }
     }
 
-    // مسار تنفيذ تسديد الفاتورة
-    public function payInvoice($data) {
+    public function payInvoice($data): void
+    {
         try {
-            $invoice_id = preg_replace('/[^0-9]/', '', $data->Invoice_id);
-            
-            $serial = $this->model->processPayment(
-                $invoice_id, 
-                $data->net_amount, 
-                $data->exemption_value, 
-                $data->doc_type, 
+            $this->requireFields($data, ['Invoice_id', 'net_amount', 'exemption_value', 'doc_type']);
+
+            $invoiceId = $this->extractId($this->getField($data, 'Invoice_id'), 'Invoice_id');
+            $netAmount = $this->sanitizeAmount($this->getField($data, 'net_amount'), 'net_amount');
+            $exemptionValue = $this->sanitizeAmount($this->getField($data, 'exemption_value'), 'exemption_value');
+            $docType = $this->ensureAllowedValue($this->getField($data, 'doc_type'), ['A', 'B', 'C'], 'doc_type');
+
+            $pendingInvoice = $this->model->getPendingInvoiceById($invoiceId);
+            if (!$pendingInvoice) {
+                throw new InvalidArgumentException('الفاتورة المطلوبة غير موجودة أو تم تحصيلها مسبقاً.');
+            }
+
+            $total = round((float) $pendingInvoice['total'], 2);
+            $this->validatePaymentBreakdown($docType, $total, $netAmount, $exemptionValue);
+
+            $serialNumber = $this->model->processPayment(
+                $invoiceId,
+                $netAmount,
+                $exemptionValue,
+                $docType,
                 $this->cashier_id
             );
-            
-            echo json_encode(["success" => true, "message" => "تم السداد بنجاح", "serial_number" => $serial]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+
+            $this->respond([
+                'success' => true,
+                'message' => 'تم السداد بنجاح',
+                'serial_number' => $serialNumber,
+            ]);
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            $this->error('تعذر تنفيذ عملية السداد حالياً.', 500);
         }
     }
-    
-    // مسار جلب الخزينة اليومية والإحصائيات
-    public function getDailyTreasury() {
+
+    public function getDailyTreasury(): void
+    {
         try {
             $receipts = $this->model->getDailyReceipts();
-            
-            // تهيئة مصفوفة الإحصائيات
             $stats = [
-                "total_full_exemption" => 0, "count_full_exemption" => 0,
-                "total_partial_exemption" => 0, "count_partial_exemption" => 0,
-                "total_cash" => 0, "count_cash" => 0,
-                "total_payments" => 0
+                'total_full_exemption' => 0.0,
+                'count_full_exemption' => 0,
+                'total_partial_exemption' => 0.0,
+                'count_partial_exemption' => 0,
+                'total_cash' => 0.0,
+                'count_cash' => 0,
+                'total_payments' => 0.0,
             ];
-            
-            $formatted_receipts = [];
-            
-            foreach ($receipts as $r) {
-                $type_name = "";
-                
-                if ($r['doc_name'] === 'A') {
-                    // كاش (سند قبض)
-                    $type_name = "كاش";
-                    $stats['total_cash'] += $r['net_amount'];
+
+            $formattedReceipts = [];
+            foreach ($receipts as $receipt) {
+                $typeName = '';
+
+                if ($receipt['doc_name'] === 'A') {
+                    $typeName = 'كاش';
+                    $stats['total_cash'] += (float) $receipt['net_amount'];
                     $stats['count_cash']++;
-                    $stats['total_payments'] += $r['net_amount'];
+                    $stats['total_payments'] += (float) $receipt['net_amount'];
+                } elseif ($receipt['doc_name'] === 'C' || (float) $receipt['net_amount'] === 0.0) {
+                    $typeName = 'إعفاء كلي';
+                    $stats['total_full_exemption'] += (float) $receipt['exemption_value'];
+                    $stats['count_full_exemption']++;
                 } else {
-                    // إعفاء (B أو C)
-                    if ($r['net_amount'] == 0) {
-                        // إعفاء كلي (دفع صفر)
-                        $type_name = "إعفاء كلي";
-                        $stats['total_full_exemption'] += $r['exemption_value'];
-                        $stats['count_full_exemption']++;
-                    } else {
-                        // إعفاء جزئي (دفع جزء وخصم جزء)
-                        $type_name = "إعفاء جزئي";
-                        $stats['total_partial_exemption'] += $r['exemption_value'];
-                        $stats['count_partial_exemption']++;
-                        $stats['total_payments'] += $r['net_amount']; // نضيف الجزء المدفوع للخزينة
-                    }
+                    $typeName = 'إعفاء جزئي';
+                    $stats['total_partial_exemption'] += (float) $receipt['exemption_value'];
+                    $stats['count_partial_exemption']++;
+                    $stats['total_payments'] += (float) $receipt['net_amount'];
                 }
-                
-                $formatted_receipts[] = [
-                    "Invoice_id" => $r['invoice_id'],
-                    "name" => $r['name'],
-                    "amount" => $r['net_amount'],
-                    "time" => $r['time'],
-                    "cashier" => $r['cashier'],
-                    "type" => $type_name
+
+                $formattedReceipts[] = [
+                    'Invoice_id' => $receipt['invoice_id'],
+                    'name' => $receipt['name'],
+                    'amount' => $receipt['net_amount'],
+                    'time' => $receipt['time'],
+                    'cashier' => $receipt['cashier'],
+                    'type' => $typeName,
                 ];
             }
-            
-            echo json_encode(["success" => true, "data" => [
-                "receipts" => $formatted_receipts,
-                "stats" => $stats
-            ]]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+
+            $this->success([
+                'receipts' => $formattedReceipts,
+                'stats' => $stats,
+            ]);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب بيانات الخزينة اليومية حالياً.', 500);
         }
     }
-        // مسار الإيرادات المتدرجة والبحث المالي
-        // مسار الإيرادات المتدرجة والبحث المالي (محدث مع التفاصيل)
-    public function getRevenuesDrilldown($data) {
-        try {
-            $level = isset($data->level) ? $data->level : 'years';
-            $filterValue = isset($data->filterValue) ? $data->filterValue : null;
-            $searchQuery = isset($data->query) ? trim($data->query) : null;
-            
-            $result = [];
 
-            // إذا كان هناك نص بحث، نتجاهل التدرج وننفذ بحثاً عميقاً
-            if (!empty($searchQuery)) {
+    public function getRevenuesDrilldown($data): void
+    {
+        try {
+            $level = $this->sanitizeText($this->getField($data, 'level', 'years'), 'level', 20, true) ?: 'years';
+            $filterValue = $this->sanitizeText($this->getField($data, 'filterValue', ''), 'filterValue', 20, true);
+            $searchQuery = $this->sanitizeText($this->getField($data, 'query', ''), 'query', 100, true);
+
+            if ($searchQuery !== '') {
                 $invoices = $this->model->searchOrGetDailyDetails(null, $searchQuery);
-                // --- التعديل: جلب الخدمات لكل فاتورة ---
-                foreach ($invoices as &$inv) {
-                    $inv['services'] = $this->model->getInvoiceDetails($inv['invoice_id']);
+                foreach ($invoices as &$invoice) {
+                    $invoice['services'] = $this->model->getInvoiceDetails((int) $invoice['invoice_id']);
                 }
-                echo json_encode(["success" => true, "level" => "search", "data" => $invoices]);
+
+                $this->respond([
+                    'success' => true,
+                    'level' => 'search',
+                    'data' => $invoices,
+                ]);
                 return;
             }
 
-            // بناءً على المستوى المطلوب (التدرج)
-            switch ($level) {
-                case 'years':
-                    $result = $this->model->getRevenuesByYears();
-                    break;
-                case 'months':
-                    $result = $this->model->getRevenuesByMonths($filterValue);
-                    break;
-                case 'days':
-                    $parts = explode('-', $filterValue);
-                    $result = $this->model->getRevenuesByDays($parts[0], $parts[1]);
-                    break;
-                case 'details':
-                    $invoices = $this->model->searchOrGetDailyDetails($filterValue, null);
-                    // --- التعديل: جلب الخدمات لكل فاتورة ---
-                    foreach ($invoices as &$inv) {
-                        $inv['services'] = $this->model->getInvoiceDetails($inv['invoice_id']);
-                    }
-                    $result = $invoices;
-                    break;
-            }
+            $result = match ($level) {
+                'years' => $this->model->getRevenuesByYears(),
+                'months' => $this->model->getRevenuesByMonths($filterValue),
+                'days' => $this->resolveDailyRevenueData($filterValue),
+                'details' => $this->attachInvoiceServices($this->model->searchOrGetDailyDetails($filterValue, null)),
+                default => throw new InvalidArgumentException('مستوى التدرج المطلوب غير مدعوم.'),
+            };
 
-            echo json_encode(["success" => true, "level" => $level, "data" => $result]);
-        } catch (Exception $e) {
-            echo json_encode(["success" => false, "message" => "حدث خطأ: " . $e->getMessage()]);
+            $this->respond([
+                'success' => true,
+                'level' => $level,
+                'data' => $result,
+            ]);
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب التقرير المالي المطلوب حالياً.', 500);
         }
     }
 
+    private function validatePaymentBreakdown(string $docType, float $total, float $netAmount, float $exemptionValue): void
+    {
+        if (round($netAmount + $exemptionValue, 2) !== $total) {
+            throw new InvalidArgumentException('مجموع المدفوع والإعفاء يجب أن يساوي إجمالي الفاتورة.');
+        }
 
+        if ($docType === 'A' && ($exemptionValue !== 0.0 || $netAmount !== $total)) {
+            throw new InvalidArgumentException('سند الكاش يجب أن يحتوي على دفع كامل بدون إعفاء.');
+        }
+
+        if ($docType === 'B' && ($netAmount <= 0.0 || $exemptionValue <= 0.0)) {
+            throw new InvalidArgumentException('الإعفاء الجزئي يتطلب مبلغاً مدفوعاً ومبلغ إعفاء أكبر من صفر.');
+        }
+
+        if ($docType === 'C' && ($netAmount !== 0.0 || $exemptionValue !== $total)) {
+            throw new InvalidArgumentException('الإعفاء الكلي يجب أن يغطي كامل إجمالي الفاتورة.');
+        }
+    }
+
+    private function resolveDailyRevenueData(string $filterValue): array
+    {
+        if (!preg_match('/^\d{4}-\d{2}$/', $filterValue)) {
+            throw new InvalidArgumentException('صيغة filterValue لمستوى الأيام يجب أن تكون YYYY-MM.');
+        }
+
+        [$year, $month] = explode('-', $filterValue);
+        return $this->model->getRevenuesByDays($year, $month);
+    }
+
+    private function attachInvoiceServices(array $invoices): array
+    {
+        foreach ($invoices as &$invoice) {
+            $invoice['services'] = $this->model->getInvoiceDetails((int) $invoice['invoice_id']);
+        }
+
+        return $invoices;
+    }
 }
-?>
