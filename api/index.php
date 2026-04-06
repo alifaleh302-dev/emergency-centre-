@@ -1,4 +1,9 @@
 <?php
+ini_set('display_errors', 1);
+ini_set('log_errors', 1);
+ini_set('error_log', '/dev/stderr'); // هذا السطر يرسل الأخطاء مباشرة إلى شاشة سجلات Render
+// ... باقي الكود الخاص بك
+
 declare(strict_types=1);
 
 require_once __DIR__ . '/../config/bootstrap.php';
