@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once 'BaseController.php'; // تأكد من صحة المسار
 
 class AccountingController extends BaseController
 {
