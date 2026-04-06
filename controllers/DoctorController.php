@@ -101,6 +101,9 @@ class DoctorController extends BaseController
             if (!$this->model->visitExists($visitId)) {
                 throw new InvalidArgumentException('الزيارة المطلوبة غير موجودة.');
             }
+            if (!$this->model->visitBelongsToDoctor($visitId, $this->doctor_id)) {
+                throw new InvalidArgumentException('لا يمكنك تعديل زيارة لا تتبع حساب الطبيب الحالي.');
+            }
 
             $diagnosis = $this->sanitizeText($this->getField($data, 'diagnosis'), 'diagnosis', 255);
             $this->model->updateFinalDiagnosis($visitId, $diagnosis);
@@ -187,6 +190,9 @@ class DoctorController extends BaseController
             $visitId = $this->extractId($this->getField($data, 'id_vis'), 'id_vis');
             if (!$this->model->visitExists($visitId)) {
                 throw new InvalidArgumentException('الزيارة المطلوبة غير موجودة.');
+            }
+            if (!$this->model->visitBelongsToDoctor($visitId, $this->doctor_id)) {
+                throw new InvalidArgumentException('لا يمكنك إرسال طلبات لزيارة لا تتبع حساب الطبيب الحالي.');
             }
 
             $orderPayload = $this->getField($data, 'order');

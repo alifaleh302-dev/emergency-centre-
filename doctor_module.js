@@ -717,7 +717,7 @@ const Doctor = {
 initDoctorModule();
 // --- دالة التهيئة التي تعمل فوراً عند الحقن الديناميكي ---
 async function initDoctorModule() {
-    const response = await Core.apiCall('auth/me', 'POST', { role: 'doctor' });
+    const response = await Core.apiCall('auth/me', 'GET');
     if(response && response.success) {
         DoctorData.currentUser = response.data;
         Core.renderProfile(DoctorData.currentUser);

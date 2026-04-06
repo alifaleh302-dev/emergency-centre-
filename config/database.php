@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 class Database
 {
-    private string $driver = 'mysql';
+    private string $driver = 'pgsql';
     private ?PDO $conn = null;
 
     public function getConnection(): PDO
@@ -66,24 +66,26 @@ class Database
                 throw new RuntimeException('صيغة DATABASE_URL غير صحيحة.');
             }
 
+            $driver = $this->normalizeDriver($parsed['scheme'] ?? 'pgsql');
+
             return [
-                'driver' => $this->normalizeDriver($parsed['scheme'] ?? 'mysql'),
+                'driver' => $driver,
                 'host' => $parsed['host'],
-                'port' => (string) ($parsed['port'] ?? (($this->normalizeDriver($parsed['scheme'] ?? 'mysql') === 'pgsql') ? 5432 : 3306)),
+                'port' => (string) ($parsed['port'] ?? ($driver === 'pgsql' ? 5432 : 3306)),
                 'database' => ltrim($parsed['path'], '/'),
                 'username' => $parsed['user'] ?? '',
                 'password' => $parsed['pass'] ?? '',
             ];
         }
 
-        $driver = $this->normalizeDriver(getenv('DB_CONNECTION') ?: 'mysql');
+        $driver = $this->normalizeDriver(getenv('DB_CONNECTION') ?: 'pgsql');
 
         return [
             'driver' => $driver,
             'host' => getenv('DB_HOST') ?: '127.0.0.1',
             'port' => getenv('DB_PORT') ?: ($driver === 'pgsql' ? '5432' : '3306'),
-            'database' => getenv('DB_DATABASE') ?: 'emergency_center',
-            'username' => getenv('DB_USERNAME') ?: 'root',
+            'database' => getenv('DB_NAME') ?: (getenv('DB_DATABASE') ?: ($driver === 'pgsql' ? 'emergency_centre' : 'emergency_center')),
+            'username' => getenv('DB_USER') ?: (getenv('DB_USERNAME') ?: ($driver === 'pgsql' ? 'postgres' : 'root')),
             'password' => getenv('DB_PASSWORD') ?: '',
         ];
     }
@@ -94,7 +96,8 @@ class Database
 
         return match ($driver) {
             'pgsql', 'postgres', 'postgresql' => 'pgsql',
-            default => 'mysql',
+            'mysql' => 'mysql',
+            default => 'pgsql',
         };
     }
 }

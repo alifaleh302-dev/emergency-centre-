@@ -224,7 +224,7 @@ const Accountant = {
             btnConfirm.disabled = false;
             feedback.setAttribute('data-doctype', 'C');
             feedback.setAttribute('data-exemption', total);
-            serialDisplay.innerText = serials['B']; // تسلسل الإعفاء الموحد مع الجزئي
+            serialDisplay.innerText = serials['C']; // تسلسل الإعفاء الكلي
             serialDisplay.className = "fw-bold fs-5 text-danger";
         }
     },
@@ -258,29 +258,6 @@ const Accountant = {
         }
     },
   
-    processPayment: async function(invoice_id) {
-        const paidAmount = parseFloat(document.getElementById('paidAmountInput').value) || 0;
-        const feedback = document.getElementById('paymentLogicFeedback');
-        const docType = feedback.getAttribute('data-doctype');
-        const exemptionValue = parseFloat(feedback.getAttribute('data-exemption'));
-
-        const payload = {
-            Invoice_id: invoice_id,
-            net_amount: paidAmount,
-            doc_type: docType,
-            exemption_value: exemptionValue
-        };
-
-        console.log("إرسال بيانات السداد (JSON):", JSON.stringify(payload, null, 2));
-        await Core.apiCall('accounting/pay_invoice', 'POST', payload);
-
-        // إزالة الفاتورة من القائمة محلياً
-        AccountantData.pending_invoices = AccountantData.pending_invoices.filter(i => i.Invoice_id !== invoice_id);
-
-        bootstrap.Modal.getInstance(document.getElementById('paymentModal')).hide();
-        Core.showAlert('تم تسديد الفاتورة بنجاح', 'success');
-        this.loadPendingInvoices();
-    },
 
     // ==========================================
     // 2. الخزينة اليومية (Daily Treasury)
@@ -686,7 +663,7 @@ loading()
 // --- التهيئة عند تحميل الموديول ---
  async function loading(){
     // محاكاة تسجيل الدخول للمحاسب
-    const response = await Core.apiCall('auth/me', 'POST', { role: 'cashier' });
+    const response = await Core.apiCall('auth/me', 'GET');
     if(response && response.success) {
         AccountantData.currentUser = response.data;
         Core.renderProfile(AccountantData.currentUser);

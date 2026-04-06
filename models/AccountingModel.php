@@ -6,7 +6,7 @@ class AccountingModel
     private PDO $conn;
     private string $driver;
 
-    public function __construct(PDO $db, string $driver = 'mysql')
+    public function __construct(PDO $db, string $driver = 'pgsql')
     {
         $this->conn = $db;
         $this->driver = $driver;
@@ -78,7 +78,7 @@ class AccountingModel
                                     doc_type_id = :doc_type_id,
                                     serial_number = :serial_number,
                                     accountant_id = :accountant_id,
-                                    created_at = NOW()
+                                    paid_at = NOW()
                                  WHERE invoice_id = :invoice_id";
             $updateInvoiceStmt = $this->conn->prepare($updateInvoiceSql);
             $updateInvoiceStmt->execute([
@@ -102,8 +102,9 @@ class AccountingModel
 
     public function getDailyReceipts(): array
     {
+        $timestamp = $this->paymentTimestamp('i');
         $sql = "SELECT i.invoice_id, p.full_name AS name, i.net_amount, i.exemption_value,
-                       {$this->formatTime('i.created_at')} AS time,
+                       {$this->formatTime($timestamp)} AS time,
                        dt.doc_name, u.full_name AS cashier
                 FROM Invoices i
                 JOIN Visits v ON i.visit_id = v.visit_id
@@ -111,22 +112,23 @@ class AccountingModel
                 JOIN Document_Types dt ON i.doc_type_id = dt.doc_type_id
                 JOIN Users u ON i.accountant_id = u.user_id
                 WHERE i.accountant_id IS NOT NULL
-                  AND i.created_at >= {$this->twentyFourHoursAgo()}
-                ORDER BY i.created_at DESC";
+                  AND {$timestamp} >= {$this->twentyFourHoursAgo()}
+                ORDER BY {$timestamp} DESC";
         $stmt = $this->conn->query($sql);
         return $stmt->fetchAll();
     }
 
     public function getRevenuesByYears(): array
     {
-        $sql = "SELECT {$this->yearExpression('created_at')} AS year_val,
+        $timestamp = $this->paymentTimestamp();
+        $sql = "SELECT {$this->yearExpression($timestamp)} AS year_val,
                        SUM(net_amount) AS total_paid,
                        SUM(exemption_value) AS total_exempt,
                        SUM(CASE WHEN doc_type_id = 1 THEN 1 ELSE 0 END) AS count_cash,
                        SUM(CASE WHEN doc_type_id = 2 THEN 1 ELSE 0 END) AS count_partial,
                        SUM(CASE WHEN doc_type_id = 3 THEN 1 ELSE 0 END) AS count_full
                 FROM Invoices
-                WHERE doc_type_id IS NOT NULL
+                WHERE doc_type_id IS NOT NULL AND {$timestamp} IS NOT NULL
                 GROUP BY year_val
                 ORDER BY year_val DESC";
         $stmt = $this->conn->query($sql);
@@ -135,14 +137,15 @@ class AccountingModel
 
     public function getRevenuesByMonths(string $year): array
     {
-        $sql = "SELECT {$this->monthExpression('created_at')} AS month_val,
+        $timestamp = $this->paymentTimestamp();
+        $sql = "SELECT {$this->monthExpression($timestamp)} AS month_val,
                        SUM(net_amount) AS total_paid,
                        SUM(exemption_value) AS total_exempt,
                        SUM(CASE WHEN doc_type_id = 1 THEN 1 ELSE 0 END) AS count_cash,
                        SUM(CASE WHEN doc_type_id = 2 THEN 1 ELSE 0 END) AS count_partial,
                        SUM(CASE WHEN doc_type_id = 3 THEN 1 ELSE 0 END) AS count_full
                 FROM Invoices
-                WHERE doc_type_id IS NOT NULL AND {$this->yearExpression('created_at')} = :year
+                WHERE doc_type_id IS NOT NULL AND {$this->yearExpression($timestamp)} = :year
                 GROUP BY month_val
                 ORDER BY month_val DESC";
         $stmt = $this->conn->prepare($sql);
@@ -152,14 +155,15 @@ class AccountingModel
 
     public function getRevenuesByDays(string $year, string $month): array
     {
-        $sql = "SELECT {$this->dayExpression('created_at')} AS day_val,
+        $timestamp = $this->paymentTimestamp();
+        $sql = "SELECT {$this->dayExpression($timestamp)} AS day_val,
                        SUM(net_amount) AS total_paid,
                        SUM(exemption_value) AS total_exempt,
                        SUM(CASE WHEN doc_type_id = 1 THEN 1 ELSE 0 END) AS count_cash,
                        SUM(CASE WHEN doc_type_id = 2 THEN 1 ELSE 0 END) AS count_partial,
                        SUM(CASE WHEN doc_type_id = 3 THEN 1 ELSE 0 END) AS count_full
                 FROM Invoices
-                WHERE doc_type_id IS NOT NULL AND {$this->yearMonthExpression('created_at')} = :year_month
+                WHERE doc_type_id IS NOT NULL AND {$this->yearMonthExpression($timestamp)} = :year_month
                 GROUP BY day_val
                 ORDER BY day_val DESC";
         $stmt = $this->conn->prepare($sql);
@@ -169,8 +173,9 @@ class AccountingModel
 
     public function searchOrGetDailyDetails(?string $date = null, ?string $query = null): array
     {
+        $timestamp = $this->paymentTimestamp('i');
         $sql = "SELECT i.invoice_id, p.full_name AS name, i.net_amount, i.exemption_value,
-                       {$this->formatDateTime('i.created_at')} AS time,
+                       {$this->formatDateTime($timestamp)} AS time,
                        dt.doc_name, i.serial_number, u.full_name AS cashier
                 FROM Invoices i
                 JOIN Visits v ON i.visit_id = v.visit_id
@@ -181,7 +186,7 @@ class AccountingModel
         $params = [];
 
         if ($date !== null && $date !== '') {
-            $sql .= ' AND DATE(i.created_at) = :date';
+            $sql .= ' AND DATE(' . $timestamp . ') = :date';
             $params[':date'] = $date;
         }
 
@@ -192,7 +197,7 @@ class AccountingModel
             $params[':query'] = '%' . $query . '%';
         }
 
-        $sql .= ' ORDER BY i.created_at DESC';
+        $sql .= ' ORDER BY ' . $timestamp . ' DESC';
 
         if ($query !== null && $query !== '') {
             $sql .= ' LIMIT 100';
@@ -201,6 +206,12 @@ class AccountingModel
         $stmt = $this->conn->prepare($sql);
         $stmt->execute($params);
         return $stmt->fetchAll();
+    }
+
+    private function paymentTimestamp(string $alias = ''): string
+    {
+        $prefix = $alias !== '' ? $alias . '.' : '';
+        return 'COALESCE(' . $prefix . 'paid_at, ' . $prefix . 'created_at)';
     }
 
     private function formatTime(string $column): string

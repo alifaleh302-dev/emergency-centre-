@@ -186,11 +186,13 @@ class AccountingController extends BaseController
 
     private function validatePaymentBreakdown(string $docType, float $total, float $netAmount, float $exemptionValue): void
     {
-        if (round($netAmount + $exemptionValue, 2) !== $total) {
+        $epsilon = 0.01;
+
+        if (abs(round($netAmount + $exemptionValue, 2) - $total) > $epsilon) {
             throw new InvalidArgumentException('مجموع المدفوع والإعفاء يجب أن يساوي إجمالي الفاتورة.');
         }
 
-        if ($docType === 'A' && ($exemptionValue !== 0.0 || $netAmount !== $total)) {
+        if ($docType === 'A' && (abs($exemptionValue) > $epsilon || abs($netAmount - $total) > $epsilon)) {
             throw new InvalidArgumentException('سند الكاش يجب أن يحتوي على دفع كامل بدون إعفاء.');
         }
 
@@ -198,7 +200,7 @@ class AccountingController extends BaseController
             throw new InvalidArgumentException('الإعفاء الجزئي يتطلب مبلغاً مدفوعاً ومبلغ إعفاء أكبر من صفر.');
         }
 
-        if ($docType === 'C' && ($netAmount !== 0.0 || $exemptionValue !== $total)) {
+        if ($docType === 'C' && (abs($netAmount) > $epsilon || abs($exemptionValue - $total) > $epsilon)) {
             throw new InvalidArgumentException('الإعفاء الكلي يجب أن يغطي كامل إجمالي الفاتورة.');
         }
     }
