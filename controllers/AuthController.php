@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once  'BaseController.php'; // تأكد من صحة المسار
+require_once __DIR__ . '/BaseController.php';
 
 class AuthController extends BaseController
 {

@@ -1,8 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once 'BaseController.php'; // تأكد من صحة المسار
-require_once '../config/database.php'; // تأكد من صحة المسار
-require_once '../models/AccountingModel.php'; // تأكد من صحة المسار
+require_once __DIR__ . '/BaseController.php';
 
 
 class AccountingController extends BaseController
@@ -65,13 +63,7 @@ class AccountingController extends BaseController
             $netAmount = $this->sanitizeAmount($this->getField($data, 'net_amount'), 'net_amount');
             $exemptionValue = $this->sanitizeAmount($this->getField($data, 'exemption_value'), 'exemption_value');
             $docType = $this->ensureAllowedValue($this->getField($data, 'doc_type'), ['A', 'B', 'C'], 'doc_type');
-            if($docType=='A'){
-              $docType==0;
-            }
-            else if($docType=='B'||$docType=='C'){
-              $docType==1;
-            }
-            
+
             $pendingInvoice = $this->model->getPendingInvoiceById($invoiceId);
             if (!$pendingInvoice) {
                 throw new InvalidArgumentException('الفاتورة المطلوبة غير موجودة أو تم تحصيلها مسبقاً.');
@@ -234,4 +226,3 @@ class AccountingController extends BaseController
         return $invoices;
     }
 }
-$d=new AccountingController(1);

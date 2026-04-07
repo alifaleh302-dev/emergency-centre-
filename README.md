@@ -131,6 +131,19 @@ docker run --rm -p 8080:80 \
 ALTER TABLE Invoices ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 ```
 
+### جدول `Medical_Results` (مطلوب)
+يُستخدم لتتبع حالة نتائج الفحوصات والخدمات المرسلة:
+
+```sql
+CREATE TABLE IF NOT EXISTS Medical_Results (
+    result_id   SERIAL PRIMARY KEY,
+    visit_id    INTEGER REFERENCES Visits(visit_id),
+    service_id  INTEGER REFERENCES Services_Master(service_id),
+    result_text TEXT,
+    created_at  TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+```
+
 ### الجداول المتوقعة
 - `Users`
 - `Roles`
@@ -142,6 +155,7 @@ ALTER TABLE Invoices ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 - `Services_Master`
 - `Emergency_Case_Types`
 - `Service_Categories`
+- `Medical_Results`
 
 ---
 
