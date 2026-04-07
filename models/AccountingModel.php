@@ -64,7 +64,15 @@ class AccountingModel
                 throw new InvalidArgumentException('نوع السند المطلوب غير موجود في قاعدة البيانات.');
             }
 
-            $newSerial = (int) $documentType['current_serial'] + 1;
+            $docTypeId = (int) $documentType['doc_type_id'];
+
+            // الحصول على أعلى رقم تسلسلي فعلي من الفواتير لتجنب التصادم مع UNIQUE constraint
+            $maxStmt = $this->conn->prepare('SELECT COALESCE(MAX(serial_number), 0) FROM Invoices WHERE doc_type_id = :doc_type_id');
+            $maxStmt->execute([':doc_type_id' => $docTypeId]);
+            $actualMax = (int) $maxStmt->fetchColumn();
+
+            $baseSerial = max((int) $documentType['current_serial'], $actualMax);
+            $newSerial = $baseSerial + 1;
 
             $updateSerialStmt = $this->conn->prepare('UPDATE Document_Types SET current_serial = :current_serial WHERE doc_type_id = :doc_type_id');
             $updateSerialStmt->execute([

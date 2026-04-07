@@ -201,10 +201,14 @@ const Core = {
             const response = await fetch(this.buildApiUrl(path), options);
 
             if (response.status === 401) {
-                Core.showAlert("انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً.", "warning");
-                localStorage.removeItem('jwt_token');
-                window.location.href = 'login.html';
-                return null;
+                // إذا كنا في صفحة تسجيل الدخول، نُرجع الرد كما هو بدون إعادة توجيه
+                const isLoginPage = window.location.pathname.includes('login');
+                if (!isLoginPage) {
+                    Core.showAlert("انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً.", "warning");
+                    localStorage.removeItem('jwt_token');
+                    window.location.href = 'login.html';
+                    return null;
+                }
             }
 
             // --- التعديل الذكي لاكتشاف أخطاء الـ PHP ---

@@ -87,11 +87,10 @@ class AccountingController extends BaseController
             ]);
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage(), 422);
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
         } catch (Throwable $exception) {
-            $debugMode = filter_var(getenv('APP_DEBUG') ?: 'false', FILTER_VALIDATE_BOOLEAN);
-            $msg = 'تعذر تنفيذ عملية السداد حالياً.';
-            $extra = $debugMode ? ['debug' => $exception->getMessage()] : [];
-            $this->error($msg, 500, $extra);
+            $this->error('تعذر تنفيذ عملية السداد حالياً.', 500);
         }
     }
 
