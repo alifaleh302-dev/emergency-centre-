@@ -1,13 +1,11 @@
 <?php
 declare(strict_types=1);
-ini_set('display_errors', 1);
-ini_set('log_errors', 1);
-ini_set('error_log', '/dev/stderr'); // هذا السطر يرسل الأخطاء مباشرة إلى شاشة سجلات Render
-// ... باقي الكود الخاص بك
-
-
 
 require_once __DIR__ . '/../config/bootstrap.php';
+
+// توجيه الأخطاء إلى سجلات Render بدلاً من عرضها للمستخدم
+ini_set('log_errors', '1');
+ini_set('error_log', '/dev/stderr');
 
 header('Access-Control-Allow-Origin: ' . (getenv('APP_CORS_ORIGIN') ?: '*'));
 header('Content-Type: application/json; charset=UTF-8');

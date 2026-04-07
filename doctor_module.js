@@ -248,25 +248,26 @@ const Doctor = {
 
     saveNewPatient: async function() {
         const payload = {
-            event: "new_patient_visit", // مستعد لـ WebSockets
-            data: {
-                name: document.getElementById('np_name').value,
-                age: document.getElementById('np_age').value,
-                place1: document.getElementById('np_place1').value,
-                place2: document.getElementById('np_place2').value,
-                type_case: document.getElementById('np_type_case').value,
-                diagnosis: document.getElementById('np_diagnosis').value,
-                note: document.getElementById('np_note').value,
-                id_user: DoctorData.currentUser.id_user
-            }
+            name: document.getElementById('np_name').value,
+            age: document.getElementById('np_age').value,
+            gender: document.getElementById('np_gender').value,
+            place1: document.getElementById('np_place1').value,
+            place2: document.getElementById('np_place2').value,
+            type_case: document.getElementById('np_type_case').value,
+            diagnosis: document.getElementById('np_diagnosis').value,
+            note: document.getElementById('np_note').value
         };
 
-        await Core.apiCall('doctor/new_patient', 'POST', payload.data);
-        bootstrap.Modal.getInstance(document.getElementById('newPatientModal')).hide();
-        Core.showAlert('تم تسجيل المريض وفتح الزيارة بنجاح', 'success');
-        
-        document.getElementById('patientSearchInput').value = '';
-        document.getElementById('searchResultArea').innerHTML = '';
+        const response = await Core.apiCall('doctor/new_patient', 'POST', payload);
+
+        if (response && response.success) {
+            bootstrap.Modal.getInstance(document.getElementById('newPatientModal')).hide();
+            Core.showAlert('تم تسجيل المريض وفتح الزيارة بنجاح', 'success');
+            document.getElementById('patientSearchInput').value = '';
+            document.getElementById('searchResultArea').innerHTML = '';
+        } else {
+            Core.showAlert(response ? response.message : 'حدث خطأ أثناء تسجيل المريض', 'error');
+        }
     },
 
     openVisitModal: function(id_pat, name) {
@@ -303,13 +304,17 @@ const Doctor = {
             id_pat: id_pat,
             type_case: document.getElementById('v_type_case').value,
             diagnosis: document.getElementById('v_diagnosis').value,
-            note: document.getElementById('v_note').value,
-            id_user: DoctorData.currentUser.id_user
+            note: document.getElementById('v_note').value
         };
 
-        await Core.apiCall('doctor/existing_patient_visit', 'POST', payload);
-        bootstrap.Modal.getInstance(document.getElementById('openVisitModal')).hide();
-        Core.showAlert('تم فتح الزيارة بنجاح', 'success');
+        const response = await Core.apiCall('doctor/existing_patient_visit', 'POST', payload);
+
+        if (response && response.success) {
+            bootstrap.Modal.getInstance(document.getElementById('openVisitModal')).hide();
+            Core.showAlert('تم فتح الزيارة بنجاح', 'success');
+        } else {
+            Core.showAlert(response ? response.message : 'حدث خطأ أثناء فتح الزيارة', 'error');
+        }
     },
 
 // --- 2. واجهة: قائمة الانتظار (Waiting List) ---
@@ -364,7 +369,7 @@ const Doctor = {
                     <div class="d-flex gap-2">
                         <button class="btn btn-outline-primary btn-sm fw-bold shadow-sm" onclick="Doctor.openOrdersModal('${item.visit}', '${item.name}')">الطلبات</button>
                         <button class="btn btn-success btn-sm fw-bold shadow-sm" onclick="Doctor.openFinalDiagnosisModal('${item.visit}', '${item.name}', '${item.diagnosis}')">التشخيص النهائي</button>
-                        <button class="btn btn-dark btn-sm shadow-sm" onclick="Doctor.viewFullFile('${item.name}')" title="الملف الكامل"><i class="bi bi-folder2-open"></i></button>
+                        <button class="btn btn-dark btn-sm shadow-sm" onclick="Doctor.viewFullFile('${item.patient_id}')" title="الملف الكامل"><i class="bi bi-folder2-open"></i></button>
                     </div>`;
             });
         } else {
@@ -457,23 +462,26 @@ const Doctor = {
         new bootstrap.Modal(document.getElementById('ordersModal')).show();
     },
     sendOrders: async function(id_vis) {
-        const payload = { 
-            event: "new_medical_orders", // جاهز لـ WebSockets
-            data: { id_vis: id_vis, order: { lab: [], sur: [], ray: [] } }
-        };
+        const payload = { id_vis: id_vis, order: { lab: [], sur: [], ray: [] } };
         
         document.querySelectorAll('#ordersModal input[type="checkbox"]:checked').forEach(chk => {
             const cat = chk.getAttribute('data-cat');
-            payload.data.order[cat].push(chk.value);
+            payload.order[cat].push(parseInt(chk.value));
         });
 
-        if (payload.data.order.lab.length === 0 && payload.data.order.sur.length === 0 && payload.data.order.ray.length === 0) {
+        if (payload.order.lab.length === 0 && payload.order.sur.length === 0 && payload.order.ray.length === 0) {
             return Core.showAlert('يرجى اختيار طلب واحد على الأقل', 'warning');
         }
 
-        await Core.apiCall('doctor/send_orders', 'POST', payload.data);
-        bootstrap.Modal.getInstance(document.getElementById('ordersModal')).hide();
-        Core.showAlert('تم إرسال الطلبات للأقسام بنجاح', 'success');
+        const response = await Core.apiCall('doctor/send_orders', 'POST', payload);
+
+        if (response && response.success) {
+            bootstrap.Modal.getInstance(document.getElementById('ordersModal')).hide();
+            Core.showAlert('تم إرسال الطلبات للأقسام بنجاح', 'success');
+            this.loadWaitingList();
+        } else {
+            Core.showAlert(response ? response.message : 'حدث خطأ أثناء إرسال الطلبات', 'error');
+        }
     },
 
     openFinalDiagnosisModal: function(id_vis, name, initialDiag) {

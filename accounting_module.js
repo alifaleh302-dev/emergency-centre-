@@ -64,9 +64,6 @@ const Accountant = {
     // ==========================================
     // 1. الفواتير المستحقة (Pending Invoices)
     // ==========================================
-    // ==========================================
-    // 1. الفواتير المستحقة (Pending Invoices)
-    // ==========================================
     viewPendingInvoices: function() {
         Core.navigateTo('viewPendingInvoices', () => {
             const mainContent = document.getElementById('mainContent');

@@ -99,7 +99,7 @@ class DoctorModel
 
     public function getWaitingList(int $doctorId): array
     {
-        $sql = "SELECT v.visit_id AS visit, p.full_name AS name, v.type_case,
+        $sql = "SELECT v.visit_id AS visit, p.patient_id, p.full_name AS name, v.type_case,
                        {$this->formatTime('v.created_at')} AS time,
                        v.diagnosis
                 FROM Visits v
