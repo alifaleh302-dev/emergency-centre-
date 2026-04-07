@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-
+require_once  'BaseController.php';
 class DoctorController extends BaseController
 {
     private PDO $conn;
