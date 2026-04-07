@@ -1,7 +1,9 @@
 <?php
 declare(strict_types=1);
 require_once 'BaseController.php'; // تأكد من صحة المسار
-require_once '../database.php'; // تأكد من صحة المسار
+require_once '../config/database.php'; // تأكد من صحة المسار
+require_once '../models/AccountingModel.php'; // تأكد من صحة المسار
+
 
 class AccountingController extends BaseController
 {
@@ -226,3 +228,4 @@ class AccountingController extends BaseController
         return $invoices;
     }
 }
+$d=new AccountingController(1);
