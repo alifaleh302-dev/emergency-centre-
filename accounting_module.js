@@ -672,8 +672,14 @@ loading()
         { title: "الإيرادات", icon: "bi-graph-up-arrow", url: "javascript:void(0)", action: "Accountant.viewRevenues('years')" }
     ];
     Core.renderSidebar(accountingLinks);
-    Core.initNotifications();
-    
+    await Core.initRealtime(AccountantData.currentUser);
+    Core.onRealtime('notification:new', (notification) => {
+        if (!notification || notification.event_type !== 'new_invoice') return;
+        if (document.getElementById('pendingInvoicesContainer')) {
+            Accountant.loadPendingInvoices();
+        }
+    });
+
     // تشغيل الواجهة الافتراضية
     Accountant.viewPendingInvoices();
 }

@@ -3,14 +3,13 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../config/bootstrap.php';
 
-// توجيه الأخطاء إلى سجلات Render بدلاً من عرضها للمستخدم
 ini_set('log_errors', '1');
 ini_set('error_log', '/dev/stderr');
 
 header('Access-Control-Allow-Origin: ' . (getenv('APP_CORS_ORIGIN') ?: '*'));
 header('Content-Type: application/json; charset=UTF-8');
 header('Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
     http_response_code(200);
@@ -21,15 +20,18 @@ $rawBody = file_get_contents('php://input');
 $data = null;
 
 if ($rawBody !== false && trim($rawBody) !== '') {
-    try {
-        $data = json_decode($rawBody, false, 512, JSON_THROW_ON_ERROR);
-    } catch (JsonException $exception) {
-        http_response_code(400);
-        echo json_encode([
-            'success' => false,
-            'message' => 'تم إرسال JSON غير صالح.',
-        ], JSON_UNESCAPED_UNICODE);
-        exit;
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+    if (str_contains($contentType, 'application/json')) {
+        try {
+            $data = json_decode($rawBody, false, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            http_response_code(400);
+            echo json_encode([
+                'success' => false,
+                'message' => 'تم إرسال JSON غير صالح.',
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
     }
 }
 
@@ -96,7 +98,6 @@ $routes = [
     'accounting/daily_treasury' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('getDailyTreasury', false)],
     'accounting/revenues_drilldown' => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('getRevenuesDrilldown')],
 
-    // إشعارات
     'notifications/unread' => ['methods' => ['GET'], 'handler' => function (): void {
         $userData = AuthMiddleware::checkAccess();
         $db = new Database();
@@ -111,6 +112,40 @@ $routes = [
         $model = new NotificationModel($db->getConnection());
         $model->markAllRead($userData['job']);
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    }],
+
+    'realtime/config' => ['methods' => ['GET'], 'handler' => function (): void {
+        $userData = AuthMiddleware::checkAccess();
+        $service = new PusherService();
+        echo json_encode([
+            'success' => true,
+            'data' => $service->getClientConfigForUser($userData),
+        ], JSON_UNESCAPED_UNICODE);
+    }],
+    'realtime/pusher/auth' => ['methods' => ['POST'], 'handler' => function (): void {
+        $userData = AuthMiddleware::checkAccess();
+        $socketId = trim((string) ($_POST['socket_id'] ?? ''));
+        $channelName = trim((string) ($_POST['channel_name'] ?? ''));
+
+        if ($socketId === '' || $channelName === '') {
+            http_response_code(422);
+            echo json_encode([
+                'success' => false,
+                'message' => 'بيانات المصادقة اللحظية غير مكتملة.',
+            ], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+
+        try {
+            $service = new PusherService();
+            echo json_encode($service->authorizePrivateChannel($socketId, $channelName, $userData), JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $exception) {
+            http_response_code(403);
+            echo json_encode([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], JSON_UNESCAPED_UNICODE);
+        }
     }],
 ];
 

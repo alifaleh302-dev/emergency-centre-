@@ -206,3 +206,15 @@ CREATE TABLE IF NOT EXISTS Medical_Results (
 | `POST` | `/api/accounting/pay_invoice` |
 | `GET`  | `/api/accounting/daily_treasury` |
 | `POST` | `/api/accounting/revenues_drilldown` |
+
+## Real-time updates عبر Pusher
+
+يمكن تفعيل التحديثات اللحظية بين واجهة الطبيب وواجهة المحاسب عبر ضبط متغيرات البيئة التالية ثم إعادة النشر:
+
+- `REALTIME_DRIVER=pusher`
+- `PUSHER_APP_ID`
+- `PUSHER_APP_KEY`
+- `PUSHER_APP_SECRET`
+- `PUSHER_APP_CLUSTER`
+
+بعد تفعيل المفاتيح، أي طلب جديد يرسله الطبيب سيتم بثه فوراً لقناة المحاسب الخاصة مع إظهار Toast وتحديث جدول الفواتير المستحقة بدون تحديث الصفحة. وإذا لم تكن المفاتيح مضبوطة فسيستمر النظام في استخدام آلية الـ polling الحالية كبديل احتياطي.

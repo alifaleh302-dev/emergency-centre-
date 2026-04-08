@@ -1,10 +1,8 @@
 /**
  * main_core.js
- * النواة المركزية لنظام إدارة مركز الطوارئ - النسخة التجريبية (MVP)
- * مخصص لإدارة: الهوية، التنقل الداخلي، بناء الجداول المتجاوبة، وزر الأدوات، والاتصال المركزي بالخادم (API).
+ * النواة المركزية لنظام إدارة مركز الطوارئ.
  */
 
-// حقن ستايل بسيط لزر الأدوات ليعمل بالـ Hover على شاشات الكمبيوتر
 const style = document.createElement('style');
 style.innerHTML = `
     @media (min-width: 992px) {
@@ -16,7 +14,6 @@ style.innerHTML = `
 document.head.appendChild(style);
 
 const Core = {
-    // --- 0. الوضع الليلي ---
     toggleTheme: function() {
         const current = document.documentElement.getAttribute('data-theme') || 'light';
         const next = current === 'dark' ? 'light' : 'dark';
@@ -30,12 +27,7 @@ const Core = {
         const configuredBase = window.APP_CONFIG && window.APP_CONFIG.apiBase
             ? String(window.APP_CONFIG.apiBase).replace(/\/+$/, '')
             : '';
-
-        if (configuredBase) {
-            return configuredBase;
-        }
-
-        return 'api';
+        return configuredBase || 'api';
     },
 
     buildApiUrl: function(path) {
@@ -43,36 +35,56 @@ const Core = {
         return this.getApiBase() + '/' + normalizedPath;
     },
 
-    // --- 1. إدارة الهوية (Profile) ---
+    loadExternalScript: function(src, marker = '') {
+        return new Promise((resolve, reject) => {
+            const existing = document.querySelector(`script[data-marker="${marker}"]`) || document.querySelector(`script[src="${src}"]`);
+            if (existing) {
+                if (existing.getAttribute('data-loaded') === 'true') {
+                    resolve();
+                    return;
+                }
+                existing.addEventListener('load', () => resolve(), { once: true });
+                existing.addEventListener('error', () => reject(new Error('failed to load script')), { once: true });
+                return;
+            }
+
+            const script = document.createElement('script');
+            script.src = src;
+            script.async = true;
+            script.setAttribute('data-marker', marker || src);
+            script.onload = () => {
+                script.setAttribute('data-loaded', 'true');
+                resolve();
+            };
+            script.onerror = () => reject(new Error('failed to load script'));
+            document.head.appendChild(script);
+        });
+    },
+
     renderProfile: function(user) {
         const desktopContainer = document.getElementById('desktop-profile-container');
         const mobileContainer = document.getElementById('mobile-profile-container');
-
         if (!desktopContainer || !mobileContainer) return;
 
-        // توليد أحرف أولية من الاسم
-        const nameParts = user.name.split(' ');
-        const initials = nameParts[0].charAt(0) + (nameParts[1] ? ' ' + nameParts[1].charAt(0) : '');
+        const nameParts = (user.name || '').split(' ');
+        const initials = (nameParts[0] ? nameParts[0].charAt(0) : '') + (nameParts[1] ? ' ' + nameParts[1].charAt(0) : '');
         const avatarHTML = `<div class="local-avatar text-uppercase shadow-sm">${initials}</div>`;
-
-        // استخدام user.job بناءً على هيكل الـ JSON المعتمد
         const profileHTML = `
             ${avatarHTML}
             <div class="nav-profile-info">
-                <div class="nav-profile-name">${user.name}</div>
-                <div class="nav-profile-role">${user.job}</div>
+                <div class="nav-profile-name">${user.name || ''}</div>
+                <div class="nav-profile-role">${user.job || ''}</div>
             </div>
         `;
 
         desktopContainer.innerHTML = profileHTML;
         mobileContainer.innerHTML = `
             ${avatarHTML.replace('local-avatar', 'local-avatar mb-2 mx-auto')}
-            <h5 class="text-white mt-2 mb-2 fw-bold">${user.name}</h5>
-            <span class="sidebar-user-role">${user.job}</span>
+            <h5 class="text-white mt-2 mb-2 fw-bold">${user.name || ''}</h5>
+            <span class="sidebar-user-role">${user.job || ''}</span>
         `;
     },
 
-    // --- 2. إدارة التنقل والروابط (Navigation) ---
     renderSidebar: function(links) {
         const sidebarNav = document.getElementById('sidebar-nav-list');
         if (!sidebarNav) return;
@@ -106,6 +118,7 @@ const Core = {
         this.closeSidebarOnMobile();
 
         const mainContent = document.getElementById('mainContent');
+        if (!mainContent) return;
         mainContent.style.opacity = '0';
 
         setTimeout(() => {
@@ -127,7 +140,6 @@ const Core = {
         }
     },
 
-    // --- 3. بناء واجهة الرأس وزر الأدوات الديناميكي (Tools Menu) ---
     renderHeaderWithTools: function(title, subtitle, toolsActions = []) {
         let toolsHTML = '';
 
@@ -163,15 +175,13 @@ const Core = {
         `;
     },
 
-    // --- 4. دالة بناء الجداول المتجاوبة (Responsive Table Builder) ---
     renderTable: function(containerId, headers, rows, actionBuilder) {
         const container = document.getElementById(containerId);
         if (!container) return;
 
-        // استخدام table-responsive و text-nowrap لضمان التجاوب مع الهواتف
-        let tableHTML = `
+        const tableHTML = `
             <div class="table-responsive">
-                <table class="custom-table text-end mb-0 text-nowrap" >
+                <table class="custom-table text-end mb-0 text-nowrap">
                     <thead class="bg-light">
                         <tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
                     </thead>
@@ -190,20 +200,19 @@ const Core = {
     },
 
     formatCell: function(content, index) {
-        // تنسيق تلقائي لأول عمود (مثل رقم الملف/السند)
         if (index === 0 && String(content).startsWith('#')) {
             return `<span class="text-muted fw-bold">${content}</span>`;
         }
         return content;
     },
 
-       apiCall: async function(path, method = 'GET', data = null) {
+    apiCall: async function(path, method = 'GET', data = null) {
         try {
             const token = localStorage.getItem('jwt_token');
             const headers = { 'Content-Type': 'application/json' };
             if (token) headers['Authorization'] = 'Bearer ' + token;
 
-            const options = { method: method, headers: headers };
+            const options = { method, headers };
             if (data && (method === 'POST' || method === 'PUT')) {
                 options.body = JSON.stringify(data);
             }
@@ -211,10 +220,10 @@ const Core = {
             const response = await fetch(this.buildApiUrl(path), options);
 
             if (response.status === 401) {
-                // إذا كنا في صفحة تسجيل الدخول، نُرجع الرد كما هو بدون إعادة توجيه
                 const isLoginPage = window.location.pathname.includes('login');
-                if (!isLoginPage) {
-                    Core.showAlert("انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً.", "warning");
+                const isLoginRequest = String(path || '').replace(/^\/+/, '') === 'auth/login';
+                if (!isLoginPage && !isLoginRequest) {
+                    Core.showAlert('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً.', 'warning');
                     localStorage.removeItem('jwt_token');
                     window.location.href = 'login.html';
                     return null;
@@ -222,48 +231,42 @@ const Core = {
             }
 
             const rawText = await response.text();
-
-            // محاولة تحويل الرد إلى JSON دائماً (حتى لو كان خطأ)
             let jsonData = null;
             try {
                 jsonData = JSON.parse(rawText);
             } catch (parseError) {
                 if (!response.ok) {
-                    console.error("[API Error Raw]:", rawText);
-                    Core.showAlert("حدث خطأ في السيرفر", "error");
+                    console.error('[API Error Raw]:', rawText);
+                    Core.showAlert('حدث خطأ في السيرفر', 'error');
                     return null;
                 }
-                console.error("[API JSON Parse Error]:", rawText);
-                Core.showAlert("السيرفر أرجع بيانات غير صالحة", "error");
+                console.error('[API JSON Parse Error]:', rawText);
+                Core.showAlert('السيرفر أرجع بيانات غير صالحة', 'error');
                 return null;
             }
 
-            // إذا كان الرد خطأ HTTP لكن JSON صالح، نُرجعه للمستدعي لعرض رسالة الخطأ الحقيقية
             if (!response.ok) {
-                console.warn("[API Error]:", response.status, jsonData);
-                return jsonData; // {success: false, message: "..."
+                console.warn('[API Error]:', response.status, jsonData);
+                return jsonData;
             }
 
             return jsonData;
-
-        } catch(e) {
-            Core.showAlert("فشل الاتصال بالخادم، تحقق من اتصالك.", "error");
-            console.error("API Call Exception:", e);
+        } catch (e) {
+            Core.showAlert('فشل الاتصال بالخادم، تحقق من اتصالك.', 'error');
+            console.error('API Call Exception:', e);
             return null;
         }
     },
 
-    // --- 6. الإشعارات (Alerts) ---
     showAlert: function(message, type = 'success') {
         const types = {
-            'success': { class: 'bg-success', icon: 'bi-check-circle-fill' },
-            'error':   { class: 'bg-danger',  icon: 'bi-x-circle-fill' },
-            'warning': { class: 'bg-warning text-dark', icon: 'bi-exclamation-triangle-fill' },
-            'info':    { class: 'bg-info',    icon: 'bi-info-circle-fill' }
+            success: { class: 'bg-success', icon: 'bi-check-circle-fill' },
+            error: { class: 'bg-danger', icon: 'bi-x-circle-fill' },
+            warning: { class: 'bg-warning text-dark', icon: 'bi-exclamation-triangle-fill' },
+            info: { class: 'bg-info', icon: 'bi-info-circle-fill' }
         };
 
-        const config = types[type] || types['info'];
-
+        const config = types[type] || types.info;
         let toastContainer = document.getElementById('toast-container');
         if (!toastContainer) {
             toastContainer = document.createElement('div');
@@ -290,52 +293,173 @@ const Core = {
         const toastElement = document.getElementById(toastId);
         const bsToast = new bootstrap.Toast(toastElement, { delay: 4000 });
         bsToast.show();
-
         toastElement.addEventListener('hidden.bs.toast', () => toastElement.remove());
     },
 
-    // --- 7. نظام الإشعارات الذكي (Smart Notifications) ---
     _notifInterval: null,
     _lastNotifCount: 0,
+    _realtimeClient: null,
+    _realtimeChannel: null,
+    _realtimeInitialized: false,
+    _realtimeHandlers: {},
 
-    initNotifications: function() {
-        // إنشاء زر الجرس في الشريط العلوي
-        const actionsDiv = document.getElementById('navbar-actions');
-        if (!actionsDiv || document.getElementById('notif-bell')) return;
-        const exitBtn = actionsDiv.querySelector('.btn-exit');
-
-        const bellHTML = `
-            <div class="dropdown hover-dropdown" id="notif-bell" style="margin-left:12px;">
-                <button class="btn position-relative p-0" type="button" data-bs-toggle="dropdown" 
-                        style="background:none;border:none;color:white;font-size:1.4rem;" onclick="Core.loadNotifications()">
-                    <i class="bi bi-bell-fill"></i>
-                    <span id="notif-badge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size:0.6rem;display:none;">0</span>
-                </button>
-                <div class="dropdown-menu dropdown-menu-start shadow border-0 p-0" style="min-width:320px;max-height:400px;overflow-y:auto;border-radius:12px;" id="notif-dropdown">
-                    <div class="p-3 text-center text-muted small">جاري التحميل...</div>
-                </div>
-            </div>`;
-        exitBtn.insertAdjacentHTML('beforebegin', bellHTML);
-
-        // فحص دوري كل 8 ثواني
-        this.checkNotifCount();
-        this._notifInterval = setInterval(() => this.checkNotifCount(), 8000);
+    onRealtime: function(eventName, callback) {
+        if (!this._realtimeHandlers[eventName]) {
+            this._realtimeHandlers[eventName] = [];
+        }
+        this._realtimeHandlers[eventName].push(callback);
     },
 
-    checkNotifCount: async function() {
+    emitRealtime: function(eventName, payload) {
+        (this._realtimeHandlers[eventName] || []).forEach(handler => {
+            try {
+                handler(payload);
+            } catch (error) {
+                console.error('Realtime handler error:', error);
+            }
+        });
+    },
+
+    normalizeRealtimePayload: function(payload) {
+        if (typeof payload === 'string') {
+            try {
+                return JSON.parse(payload);
+            } catch (error) {
+                return {};
+            }
+        }
+        return payload || {};
+    },
+
+    initNotifications: function(enablePolling = true) {
+        const actionsDiv = document.getElementById('navbar-actions');
+        if (!actionsDiv) return;
+
+        if (!document.getElementById('notif-bell')) {
+            const exitBtn = actionsDiv.querySelector('.btn-exit');
+            const bellHTML = `
+                <div class="dropdown hover-dropdown" id="notif-bell" style="margin-left:12px;">
+                    <button class="btn position-relative p-0" type="button" data-bs-toggle="dropdown"
+                            style="background:none;border:none;color:white;font-size:1.4rem;" onclick="Core.loadNotifications()">
+                        <i class="bi bi-bell-fill"></i>
+                        <span id="notif-badge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size:0.6rem;display:none;">0</span>
+                    </button>
+                    <div class="dropdown-menu dropdown-menu-start shadow border-0 p-0" style="min-width:320px;max-height:400px;overflow-y:auto;border-radius:12px;" id="notif-dropdown">
+                        <div class="p-3 text-center text-muted small">جاري التحميل...</div>
+                    </div>
+                </div>`;
+
+            if (exitBtn) {
+                exitBtn.insertAdjacentHTML('beforebegin', bellHTML);
+            } else {
+                actionsDiv.insertAdjacentHTML('beforeend', bellHTML);
+            }
+        }
+
+        this.checkNotifCount(false);
+
+        if (this._notifInterval) {
+            clearInterval(this._notifInterval);
+            this._notifInterval = null;
+        }
+
+        if (enablePolling) {
+            this._notifInterval = setInterval(() => this.checkNotifCount(true), 8000);
+        }
+    },
+
+    initRealtime: async function(user = null) {
+        this.initNotifications(false);
+        if (this._realtimeInitialized) return true;
+
+        const configRes = await this.apiCall('realtime/config', 'GET');
+        if (!configRes || !configRes.success || !configRes.data || !configRes.data.enabled) {
+            this.initNotifications(true);
+            return false;
+        }
+
+        try {
+            await this.loadExternalScript('https://js.pusher.com/8.4.0/pusher.min.js', 'pusher-js-sdk');
+        } catch (error) {
+            console.warn('Pusher SDK failed to load, falling back to polling.', error);
+            this.initNotifications(true);
+            return false;
+        }
+
+        if (typeof Pusher === 'undefined') {
+            this.initNotifications(true);
+            return false;
+        }
+
+        const token = localStorage.getItem('jwt_token');
+        Pusher.logToConsole = false;
+
+        this._realtimeClient = new Pusher(configRes.data.key, {
+            cluster: configRes.data.cluster,
+            channelAuthorization: {
+                endpoint: this.buildApiUrl(configRes.data.auth_endpoint),
+                transport: 'ajax',
+                headers: token ? { Authorization: 'Bearer ' + token } : {}
+            }
+        });
+
+        this._realtimeChannel = this._realtimeClient.subscribe(configRes.data.channel);
+        this._realtimeChannel.bind('pusher:subscription_succeeded', () => {
+            console.log('Realtime connected for', user && user.job ? user.job : 'current user');
+            this.checkNotifCount(false);
+        });
+
+        this._realtimeChannel.bind('notification:new', (eventData) => {
+            const payload = this.normalizeRealtimePayload(eventData);
+            const notification = payload.notification || payload;
+            if (!notification || !notification.title) return;
+
+            this.incrementNotifBadge();
+            this.loadNotifications();
+
+            const toastMessage = notification.body ? `${notification.title} - ${notification.body}` : notification.title;
+            const toastType = notification.event_type === 'invoice_paid' ? 'success' : 'info';
+            this.showAlert(toastMessage, toastType);
+
+            this.emitRealtime('notification:new', notification);
+            if (notification.event_type) {
+                this.emitRealtime(`notification:${notification.event_type}`, notification);
+            }
+        });
+
+        this._realtimeInitialized = true;
+        return true;
+    },
+
+    incrementNotifBadge: function() {
+        const badge = document.getElementById('notif-badge');
+        if (!badge) return;
+        const current = parseInt(badge.textContent || '0', 10) || 0;
+        const next = current + 1;
+        badge.textContent = String(next);
+        badge.style.display = '';
+        this._lastNotifCount = next;
+    },
+
+    checkNotifCount: async function(showToast = true) {
         const res = await this.apiCall('notifications/unread', 'GET');
         if (!res || !res.success) return;
         const badge = document.getElementById('notif-badge');
         if (!badge) return;
 
         if (res.count > 0) {
-            badge.textContent = res.count;
+            badge.textContent = String(res.count);
             badge.style.display = '';
-            // تشغيل صوت إشعار عند ورود إشعار جديد
-            if (res.count > this._lastNotifCount && this._lastNotifCount >= 0) {
-                this.showAlert(res.data[0].title, 'info');
+            if (showToast && res.count > this._lastNotifCount && res.data && res.data[0]) {
+                const latest = res.data[0];
+                this.showAlert(latest.title, 'info');
+                this.emitRealtime('notification:new', latest);
+                if (latest.event_type) {
+                    this.emitRealtime(`notification:${latest.event_type}`, latest);
+                }
             }
         } else {
+            badge.textContent = '0';
             badge.style.display = 'none';
         }
         this._lastNotifCount = res.count;
@@ -352,12 +476,24 @@ const Core = {
             return;
         }
 
+        const badge = document.getElementById('notif-badge');
+        if (badge) {
+            badge.textContent = String(res.count || 0);
+            badge.style.display = (res.count || 0) > 0 ? '' : 'none';
+        }
+        this._lastNotifCount = res.count || 0;
+
         if (res.data.length === 0) {
             dropdown.innerHTML = '<div class="p-4 text-center text-muted"><i class="bi bi-bell-slash fs-3 d-block mb-2"></i>لا توجد إشعارات جديدة</div>';
             return;
         }
 
-        const icons = { 'new_invoice': 'bi-receipt text-primary', 'invoice_paid': 'bi-cash-coin text-success', 'new_visit': 'bi-person-plus text-info' };
+        const icons = {
+            new_invoice: 'bi-receipt text-primary',
+            invoice_paid: 'bi-cash-coin text-success',
+            new_visit: 'bi-person-plus text-info'
+        };
+
         let html = res.data.map(n => `
             <div class="d-flex align-items-start gap-2 p-3 border-bottom" style="cursor:pointer;">
                 <i class="bi ${icons[n.event_type] || 'bi-bell text-secondary'} fs-5 mt-1"></i>
@@ -366,28 +502,33 @@ const Core = {
                     <div class="text-muted" style="font-size:0.8rem;">${n.body || ''}</div>
                     <div class="text-muted" style="font-size:0.7rem;"><i class="bi bi-clock ms-1"></i>${n.time}</div>
                 </div>
-            </div>`).join('');
+            </div>
+        `).join('');
 
-        html += `<div class="p-2 text-center border-top">
-                    <button class="btn btn-sm btn-outline-secondary w-100 fw-bold" onclick="Core.markAllRead()">
-                        <i class="bi bi-check2-all ms-1"></i> تعيين الكل كمقروء
-                    </button>
-                 </div>`;
+        html += `
+            <div class="p-2 text-center border-top">
+                <button class="btn btn-sm btn-outline-secondary w-100 fw-bold" onclick="Core.markAllRead()">
+                    <i class="bi bi-check2-all ms-1"></i> تعيين الكل كمقروء
+                </button>
+            </div>`;
         dropdown.innerHTML = html;
     },
 
     markAllRead: async function() {
         await this.apiCall('notifications/read', 'POST');
         const badge = document.getElementById('notif-badge');
-        if (badge) badge.style.display = 'none';
+        if (badge) {
+            badge.textContent = '0';
+            badge.style.display = 'none';
+        }
         this._lastNotifCount = 0;
         const dropdown = document.getElementById('notif-dropdown');
-        if (dropdown) dropdown.innerHTML = '<div class="p-4 text-center text-muted"><i class="bi bi-check2-all fs-3 d-block mb-2 text-success"></i>تم تعيين الكل كمقروء</div>';
+        if (dropdown) {
+            dropdown.innerHTML = '<div class="p-4 text-center text-muted"><i class="bi bi-check2-all fs-3 d-block mb-2 text-success"></i>تم تعيين الكل كمقروء</div>';
+        }
     }
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("تم تهيئة النواة المركزية للنسخة التجريبية (MVP)...");
+    console.log('تم تهيئة النواة المركزية للنظام...');
 });
-
-

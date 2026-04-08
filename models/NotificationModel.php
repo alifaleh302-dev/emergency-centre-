@@ -13,8 +13,11 @@ class NotificationModel
     public function create(string $targetRole, string $title, string $body, string $eventType, ?int $referenceId = null): int
     {
         $sql = "INSERT INTO Notifications (target_role, title, body, event_type, reference_id)
-                VALUES (:target_role, :title, :body, :event_type, :reference_id)";
-        $stmt = $this->conn->prepare($sql . ' RETURNING notification_id');
+                VALUES (:target_role, :title, :body, :event_type, :reference_id)
+                RETURNING notification_id, target_role, title, body, event_type, reference_id,
+                          TO_CHAR(created_at, 'HH12:MI AM') AS time";
+
+        $stmt = $this->conn->prepare($sql);
         $stmt->execute([
             ':target_role' => $targetRole,
             ':title' => $title,
@@ -22,7 +25,18 @@ class NotificationModel
             ':event_type' => $eventType,
             ':reference_id' => $referenceId,
         ]);
-        return (int) $stmt->fetchColumn();
+
+        $notification = $stmt->fetch() ?: [];
+        if (!empty($notification)) {
+            try {
+                $realtime = new PusherService();
+                $realtime->broadcastRoleNotification($targetRole, $notification);
+            } catch (Throwable $exception) {
+                // لا نوقف العملية الأساسية إذا فشل البث اللحظي
+            }
+        }
+
+        return (int) ($notification['notification_id'] ?? 0);
     }
 
     public function getUnread(string $role, int $limit = 20): array
