@@ -105,6 +105,12 @@ class DoctorController extends BaseController
                 throw new InvalidArgumentException('لا يمكنك تعديل زيارة لا تتبع حساب الطبيب الحالي.');
             }
 
+            // التحقق من وجود تذكرة معاينة قبل إغلاق الزيارة
+            $ticketModel = new ExaminationTicketModel($this->conn, (new Database())->getDriver());
+            if (!$ticketModel->hasTicket($visitId)) {
+                throw new InvalidArgumentException('يجب إنشاء تذكرة معاينة قبل إغلاق الزيارة.');
+            }
+
             $diagnosis = $this->sanitizeText($this->getField($data, 'diagnosis'), 'diagnosis', 255);
             $this->model->updateFinalDiagnosis($visitId, $diagnosis);
 
@@ -248,6 +254,41 @@ class DoctorController extends BaseController
                 $this->conn->rollBack();
             }
             $this->error('تعذر إرسال الطلبات حالياً.', 500);
+        }
+    }
+
+    public function createTicket($data): void
+    {
+        try {
+            $this->requireFields($data, ['id_vis', 'notes']);
+
+            $visitId = $this->extractId($this->getField($data, 'id_vis'), 'id_vis');
+            if (!$this->model->visitExists($visitId)) {
+                throw new InvalidArgumentException('الزيارة المطلوبة غير موجودة.');
+            }
+            if (!$this->model->visitBelongsToDoctor($visitId, $this->doctor_id)) {
+                throw new InvalidArgumentException('لا يمكنك إنشاء تذكرة لزيارة لا تتبع حسابك.');
+            }
+
+            $ticketModel = new ExaminationTicketModel($this->conn, (new Database())->getDriver());
+            if ($ticketModel->hasTicket($visitId)) {
+                throw new InvalidArgumentException('تم إنشاء تذكرة لهذه الزيارة مسبقاً.');
+            }
+
+            $notes = $this->sanitizeText($this->getField($data, 'notes'), 'notes', 500);
+            $amount = $this->sanitizeAmount($this->getField($data, 'amount', 0), 'amount');
+
+            $result = $ticketModel->createTicket($visitId, $notes, $amount);
+
+            $this->respond([
+                'success' => true,
+                'message' => 'تم إنشاء تذكرة المعاينة بنجاح',
+                'ticket' => $result,
+            ]);
+        } catch (InvalidArgumentException $e) {
+            $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            $this->error('تعذر إنشاء التذكرة حالياً.', 500);
         }
     }
 

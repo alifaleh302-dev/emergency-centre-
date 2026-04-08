@@ -300,21 +300,24 @@ const Doctor = {
                 return;
             }
 
-            const headers = ["المريض", "الحالة", "التشخيص المبدئي", "الوقت", "الاجراء"];
+            const headers = ["التذكرة", "المريض", "الحالة", "الوقت", "الإجراء"];
             const rows = activeList.map(item => [
+                item.ticket_serial ? `<span class="badge bg-info bg-opacity-10 text-info fw-bold">T-${item.ticket_serial}</span>` : `<span class="badge bg-secondary bg-opacity-10 text-secondary">بدون</span>`,
                 `<span class="fw-bold text-dark">${item.name}</span>`,
                 `<span class="badge bg-warning bg-opacity-10 text-warning px-3">${item.type_case}</span>`,
-                `<span class="small text-muted">${item.diagnosis}</span>`,
                 item.time
             ]);
 
             Core.renderTable('waitingListContainer', headers, rows, (row, index) => {
                 const item = activeList[index];
+                const ticketBtn = item.ticket_serial
+                    ? `<button class="btn btn-info btn-sm fw-bold shadow-sm" disabled><i class="bi bi-ticket-perforated ms-1"></i>T-${item.ticket_serial}</button>`
+                    : `<button class="btn btn-warning btn-sm fw-bold shadow-sm" onclick="Doctor.openTicketModal('${item.visit}', '${item.name}')"><i class="bi bi-ticket-perforated ms-1"></i> تذكرة</button>`;
                 return `
-                    <div class="d-flex gap-2">
-                        <button class="btn btn-outline-primary btn-sm fw-bold shadow-sm" onclick="Doctor.openOrdersModal('${item.visit}', '${item.name}')">الطلبات</button>
-                        <button class="btn btn-success btn-sm fw-bold shadow-sm" onclick="Doctor.openFinalDiagnosisModal('${item.visit}', '${item.name}', '${item.diagnosis}')">التشخيص النهائي</button>
-                        <button class="btn btn-dark btn-sm shadow-sm" onclick="Doctor.viewFullFile('${item.patient_id}')" title="الملف الكامل"><i class="bi bi-folder2-open"></i></button>
+                    <div class="d-flex gap-1 flex-wrap">
+                        ${ticketBtn}
+                        <button class="btn btn-outline-primary btn-sm fw-bold shadow-sm" onclick="Doctor.openOrdersModal('${item.visit}', '${item.name}')"><i class="bi bi-file-medical ms-1"></i> طلبات</button>
+                        <button class="btn btn-success btn-sm fw-bold shadow-sm" onclick="Doctor.openFinalDiagnosisModal('${item.visit}', '${item.name}', '${item.diagnosis}')"><i class="bi bi-check2 ms-1"></i> إغلاق</button>
                     </div>`;
             });
         } else {
@@ -453,6 +456,63 @@ const Doctor = {
         </div>`;
         document.body.insertAdjacentHTML('beforeend', modalHTML);
         new bootstrap.Modal(document.getElementById('finalDiagModal')).show();
+    },
+
+    // --- تذكرة المعاينة ---
+    openTicketModal: function(id_vis, name) {
+        const existing = document.getElementById('ticketModal');
+        if (existing) existing.remove();
+        const hour = new Date().getHours();
+        const ticketType = (hour >= 5 && hour < 12) ? 'صباحي' : 'مسائي';
+        const typeIcon = ticketType === 'صباحي' ? 'bi-sun text-warning' : 'bi-moon-stars text-info';
+
+        const modalHTML = `
+        <div class="modal fade" id="ticketModal" tabindex="-1">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content border-0 shadow-lg">
+                    <div class="modal-header bg-warning text-dark border-0 py-3">
+                        <h5 class="modal-title fw-bold"><i class="bi bi-ticket-perforated ms-2"></i>تذكرة معاينة: ${name}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body p-4 bg-light">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <span class="small text-muted">نوع التذكرة:</span>
+                            <span class="badge bg-light text-dark border px-3 py-2"><i class="bi ${typeIcon} ms-1"></i> ${ticketType}</span>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold text-dark">ملاحظات المعاينة <span class="text-danger">*</span></label>
+                            <textarea id="ticket_notes" class="form-control shadow-none" rows="4" placeholder="اكتب ملاحظات المعاينة هنا..." required></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold text-dark">المبلغ (ريال)</label>
+                            <input type="number" id="ticket_amount" class="form-control shadow-none" value="0" min="0">
+                        </div>
+                    </div>
+                    <div class="modal-footer border-0">
+                        <button class="btn btn-warning px-5 fw-bold shadow-sm w-100" onclick="Doctor.saveTicket('${id_vis}')">
+                            <i class="bi bi-ticket-perforated ms-1"></i> حفظ التذكرة
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        new bootstrap.Modal(document.getElementById('ticketModal')).show();
+    },
+
+    saveTicket: async function(id_vis) {
+        const notes = document.getElementById('ticket_notes').value.trim();
+        if (!notes) return Core.showAlert('ملاحظات المعاينة مطلوبة', 'error');
+        const amount = parseFloat(document.getElementById('ticket_amount').value) || 0;
+
+        const response = await Core.apiCall('doctor/create_ticket', 'POST', { id_vis, notes, amount });
+        if (response && response.success) {
+            bootstrap.Modal.getInstance(document.getElementById('ticketModal')).hide();
+            Core.showAlert(`تم إنشاء التذكرة برقم T-${response.ticket.serial_number}`, 'success');
+            this.loadWaitingList();
+        } else {
+            Core.showAlert(response ? response.message : 'حدث خطأ أثناء إنشاء التذكرة', 'error');
+        }
     },
 
     // --- 3. واجهة: الطلبات المرسلة (Sent Orders) ---
@@ -624,32 +684,44 @@ const Doctor = {
         }
         if (!patient) { Core.showAlert('لم يتم العثور على الملف الطبي', 'warning'); return; }
 
-        const rows = patient.medical_file.map(v => `
-            <tr>
-                <td class="small fw-bold text-muted text-end">${v.date_visit}</td>
-                <td class="text-end"><span class="badge bg-warning bg-opacity-10 text-warning">${v.type_case}</span></td>
-                <td class="small fw-bold text-end">${v.diagnosis}</td>
-                <td class="small text-primary text-end">${v.procedures}</td>
-                <td class="small text-muted text-end">${v.notes}</td>
-            </tr>`).join('');
+        const cards = patient.medical_file.map((v, idx) => {
+            const ticketBadge = v.ticket_serial
+                ? `<span class="badge bg-info bg-opacity-10 text-info"><i class="bi bi-ticket-perforated ms-1"></i> T-${v.ticket_serial} (${v.ticket_type === 'morning' ? 'صباحي' : 'مسائي'})</span>`
+                : '';
+            const ticketNotesHTML = v.ticket_notes
+                ? `<div class="col-12 mt-2"><div class="p-2 rounded" style="background:rgba(13,202,240,0.08);border-right:3px solid #0dcaf0;"><div class="small text-muted mb-1"><i class="bi bi-ticket-perforated ms-1"></i> ملاحظات تذكرة المعاينة</div><div class="small">${v.ticket_notes}</div></div></div>`
+                : '';
+            return `
+            <div class="card mb-3 border-0 shadow-sm">
+                <div class="card-header bg-transparent d-flex justify-content-between align-items-center py-2 flex-wrap gap-2">
+                    <div class="d-flex gap-2 align-items-center">
+                        <span class="badge bg-warning bg-opacity-10 text-warning px-3">${v.type_case}</span>
+                        ${ticketBadge}
+                    </div>
+                    <span class="small text-muted"><i class="bi bi-calendar3 ms-1"></i> ${v.date_visit}</span>
+                </div>
+                <div class="card-body py-3">
+                    <div class="row g-3">
+                        <div class="col-md-6"><div class="small text-muted mb-1"><i class="bi bi-clipboard2-pulse ms-1"></i> التشخيص النهائي</div><div class="fw-bold">${v.diagnosis || '--'}</div></div>
+                        <div class="col-md-6"><div class="small text-muted mb-1"><i class="bi bi-file-medical ms-1"></i> الإجراءات / الطلبات</div><div class="text-primary small">${v.procedures || 'لا يوجد'}</div></div>
+                        ${v.notes ? `<div class="col-12"><div class="small text-muted mb-1"><i class="bi bi-chat-text ms-1"></i> ملاحظات الطبيب</div><div class="small">${v.notes}</div></div>` : ''}
+                        ${ticketNotesHTML}
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
 
         const modalHTML = `
         <div class="modal fade" id="historyModal" tabindex="-1">
-            <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content border-0 shadow-lg">
                     <div class="modal-header bg-dark text-white border-0 py-3">
-                        <h5 class="modal-title fw-bold">الملف الطبي الكامل: ${patient.name}</h5>
+                        <h5 class="modal-title fw-bold"><i class="bi bi-folder2-open ms-2"></i> الملف الطبي: ${patient.name}</h5>
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                     </div>
-                    <div class="modal-body p-0">
-                        <div class="table-responsive">
-                            <table class="table table-hover align-middle bg-white mb-0">
-                                <thead class="table-secondary small text-end">
-                                    <tr><th>التاريخ</th><th>الحالة</th><th>التشخيص النهائي</th><th>الإجراءات / الطلبات</th><th>الملاحظات</th></tr>
-                                </thead>
-                                <tbody>${rows}</tbody>
-                            </table>
-                        </div>
+                    <div class="modal-body p-3 bg-light">
+                        <div class="mb-2 text-muted small"><i class="bi bi-info-circle ms-1"></i> عدد الزيارات: ${patient.medical_file.length}</div>
+                        ${cards || '<div class="text-center text-muted p-4">لا توجد زيارات مسجلة</div>'}
                     </div>
                 </div>
             </div>

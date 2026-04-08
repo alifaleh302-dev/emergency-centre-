@@ -101,9 +101,12 @@ class DoctorModel
     {
         $sql = "SELECT v.visit_id AS visit, p.patient_id, p.full_name AS name, v.type_case,
                        {$this->formatTime('v.created_at')} AS time,
-                       v.diagnosis
+                       v.diagnosis,
+                       et.serial_number AS ticket_serial,
+                       et.ticket_type
                 FROM Visits v
                 JOIN Patients p ON v.patient_id = p.patient_id
+                LEFT JOIN Examination_Tickets et ON et.visit_id = v.visit_id
                 WHERE v.doctor_id = :doctor_id AND v.status = 'Active'
                 ORDER BY v.created_at ASC";
         $stmt = $this->conn->prepare($sql);
@@ -224,12 +227,16 @@ class DoctorModel
 
         $sql = "SELECT {$this->formatDate('v.created_at')} AS date_visit,
                        v.type_case, v.diagnosis, v.notes,
+                       et.notes AS ticket_notes,
+                       et.serial_number AS ticket_serial,
+                       et.ticket_type,
                        (SELECT {$aggregate}
                         FROM Invoices i
                         JOIN Invoice_Details id ON i.invoice_id = id.invoice_id
                         JOIN Services_Master sm ON id.service_id = sm.service_id
                         WHERE i.visit_id = v.visit_id) AS procedures
                 FROM Visits v
+                LEFT JOIN Examination_Tickets et ON et.visit_id = v.visit_id
                 WHERE v.patient_id = :patient_id AND v.status = 'Completed'
                 ORDER BY v.created_at DESC";
         $stmt = $this->conn->prepare($sql);

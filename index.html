@@ -155,6 +155,8 @@
             box-shadow: inset -5px 0 15px rgba(0,0,0,0.03); 
             height: calc(100vh - 75px);
             position: fixed;
+            display: flex;
+            flex-direction: column;
             top: 75px;
             right: 0;
             width: 270px;
@@ -400,28 +402,62 @@
     font-size: 2rem;
     margin: 0 auto 12px auto;
 }
+
+    /* === Dark Mode === */
+    [data-theme="dark"] { --bg-light: #1a1d23; --sidebar-bg: #1e293b; }
+    [data-theme="dark"] body { background-color: #1a1d23; color: #e2e8f0; }
+    [data-theme="dark"] .stat-card, [data-theme="dark"] .card { background: #2d3748; color: #e2e8f0; }
+    [data-theme="dark"] .custom-table th { background-color: #2d3748 !important; color: #a0aec0; }
+    [data-theme="dark"] .custom-table td { color: #e2e8f0; border-color: #4a5568; }
+    [data-theme="dark"] .custom-table tbody tr:hover { background-color: rgba(99,179,237,0.08); }
+    [data-theme="dark"] .form-control, [data-theme="dark"] .form-select { background: #374151; color: #e2e8f0; border-color: #4a5568; }
+    [data-theme="dark"] .form-control:focus, [data-theme="dark"] .form-select:focus { background: #4a5568; color: #fff; }
+    [data-theme="dark"] .modal-content { background: #2d3748; color: #e2e8f0; }
+    [data-theme="dark"] .modal-body.bg-light { background: #1a1d23 !important; }
+    [data-theme="dark"] .modal-header.bg-dark { background: #0f172a !important; }
+    [data-theme="dark"] .dropdown-menu { background: #2d3748; border-color: #4a5568; }
+    [data-theme="dark"] .dropdown-item { color: #e2e8f0; }
+    [data-theme="dark"] .dropdown-item:hover { background: #4a5568; }
+    [data-theme="dark"] .text-dark { color: #e2e8f0 !important; }
+    [data-theme="dark"] .text-muted { color: #94a3b8 !important; }
+    [data-theme="dark"] .bg-light { background-color: #2d3748 !important; }
+    [data-theme="dark"] .bg-white { background-color: #374151 !important; }
+    [data-theme="dark"] .border { border-color: #4a5568 !important; }
+    [data-theme="dark"] .border-bottom { border-color: #4a5568 !important; }
+    [data-theme="dark"] .custom-navbar { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important; }
+    [data-theme="dark"] .sidebar { background-color: #1e293b !important; }
+    [data-theme="dark"] .input-group-text { background: #374151; color: #e2e8f0; border-color: #4a5568; }
+    [data-theme="dark"] .alert { background: #374151; color: #e2e8f0; }
+    [data-theme="dark"] .table-secondary { background-color: #374151 !important; color: #e2e8f0; }
+    [data-theme="dark"] .badge.bg-light { background-color: #4a5568 !important; }
+    [data-theme="dark"] .form-check .form-check-label { color: #e2e8f0; }
+    [data-theme="dark"] .nav-link { color: #94a3b8; }
+    [data-theme="dark"] .nav-link.active { background-color: #4a5568 !important; color: #fff !important; }
+    [data-theme="dark"] .btn-outline-dark { color: #e2e8f0; border-color: #4a5568; }
+    [data-theme="dark"] .btn-light { background: #374151; color: #e2e8f0; border-color: #4a5568; }
     </style>
 </head>
 <body>
 
-    <nav class="custom-navbar px-4 d-flex justify-content-between align-items-center">
-        <div class="d-flex align-items-center">
+    <nav class="custom-navbar px-3 d-flex justify-content-between align-items-center">
+        <div class="d-flex align-items-center gap-2">
             <button class="toggle-btn d-md-none" id="sidebarToggle" aria-label="تبديل القائمة">
                 <span></span>
                 <span></span>
                 <span></span>
             </button>
-
-            <div class="d-none d-md-flex align-items-center text-white" id="desktop-profile-container">
-            </div>
+            <div class="d-none d-md-flex align-items-center text-white" id="desktop-profile-container"></div>
         </div>
 
         <div class="navbar-brand-custom text-white">
             E<span class="text-warning">G</span>Y<sup style="font-size: 0.7rem; color: #a8e6cf;">MT</sup>
         </div>
 
-        <div>
-            <a href="#" class="btn-exit text-decoration-none d-flex align-items-center" onclick="logout()">
+        <div class="d-flex align-items-center gap-3" id="navbar-actions">
+            <button class="btn p-0 border-0" onclick="Core.toggleTheme()" style="background:none;color:white;font-size:1.3rem;" title="الوضع الليلي">
+                <i id="theme-icon" class="bi bi-moon-fill"></i>
+            </button>
+            <a href="#" class="btn-exit text-decoration-none d-none d-md-flex align-items-center" onclick="logout()">
                 <i class="bi bi-box-arrow-left ms-2 fs-5"></i> خروج
             </a>
         </div>
@@ -439,6 +475,11 @@
 
         <ul class="sidebar-nav mt-3" id="sidebar-nav-list">
         </ul>
+        <div class="d-md-none p-3 mt-auto" style="border-top:1px solid rgba(255,255,255,0.15);">
+            <a href="#" class="btn btn-outline-light w-100 fw-bold py-2" onclick="logout()">
+                <i class="bi bi-box-arrow-left ms-2"></i> تسجيل الخروج
+            </a>
+        </div>
     </aside>
 
     <main class="main-content" id="mainContent">
@@ -470,6 +511,9 @@
                 overlay.classList.remove('active');
             }
         });
+
+        // تطبيق الوضع الليلي فوراً
+        (function(){ const t=localStorage.getItem('theme')||'light'; document.documentElement.setAttribute('data-theme',t); const i=document.getElementById('theme-icon'); if(i) i.className=t==='dark'?'bi bi-sun-fill':'bi bi-moon-fill'; })();
 
         window.addEventListener('load', () => {
             // 1. جلب بيانات الجلسة من التخزين المحلي

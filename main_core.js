@@ -16,6 +16,16 @@ style.innerHTML = `
 document.head.appendChild(style);
 
 const Core = {
+    // --- 0. الوضع الليلي ---
+    toggleTheme: function() {
+        const current = document.documentElement.getAttribute('data-theme') || 'light';
+        const next = current === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('theme', next);
+        const icon = document.getElementById('theme-icon');
+        if (icon) icon.className = next === 'dark' ? 'bi bi-sun-fill' : 'bi bi-moon-fill';
+    },
+
     getApiBase: function() {
         const configuredBase = window.APP_CONFIG && window.APP_CONFIG.apiBase
             ? String(window.APP_CONFIG.apiBase).replace(/\/+$/, '')
@@ -290,8 +300,9 @@ const Core = {
 
     initNotifications: function() {
         // إنشاء زر الجرس في الشريط العلوي
-        const exitBtn = document.querySelector('.btn-exit');
-        if (!exitBtn || document.getElementById('notif-bell')) return;
+        const actionsDiv = document.getElementById('navbar-actions');
+        if (!actionsDiv || document.getElementById('notif-bell')) return;
+        const exitBtn = actionsDiv.querySelector('.btn-exit');
 
         const bellHTML = `
             <div class="dropdown hover-dropdown" id="notif-bell" style="margin-left:12px;">

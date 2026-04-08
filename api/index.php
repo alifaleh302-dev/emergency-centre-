@@ -88,6 +88,7 @@ $routes = [
     'doctor/sent_orders' => ['methods' => ['GET'], 'handler' => fn () => $doctorHandler('getSentOrders', false)],
     'doctor/services_list' => ['methods' => ['GET'], 'handler' => fn () => $doctorHandler('getServicesList', false)],
     'doctor/medical_archive' => ['methods' => ['GET'], 'handler' => fn () => $doctorHandler('getMedicalArchive', false)],
+    'doctor/create_ticket' => ['methods' => ['POST'], 'handler' => fn () => $doctorHandler('createTicket')],
 
     'accounting/pending' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('getPendingInvoices', false)],
     'accounting/next_serials' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('getNextSerials', false)],

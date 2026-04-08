@@ -40,11 +40,26 @@
             font-size: 3rem;
             margin-bottom: 10px;
         }
-    </style>
+
+        /* Dark Mode */
+        [data-theme="dark"] body { background: linear-gradient(135deg, #1a1d23 0%, #2d3748 100%); }
+        [data-theme="dark"] .login-card { background: #2d3748; }
+        [data-theme="dark"] .login-header { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); }
+        [data-theme="dark"] .form-control { background: #374151; color: #e2e8f0; border-color: #4a5568; }
+        [data-theme="dark"] .form-control::placeholder { color: #94a3b8; }
+        [data-theme="dark"] .input-group-text { background: #374151; color: #e2e8f0; border-color: #4a5568; }
+        [data-theme="dark"] .form-label { color: #94a3b8 !important; }
+        [data-theme="dark"] .alert-danger { background: #7f1d1d; color: #fecaca; border: none; }
+        </style>
 </head>
 <body>
 
-    <div class="login-card">
+    <div style="position:fixed;top:20px;left:20px;z-index:9;">
+            <button class="btn btn-sm btn-outline-light shadow" onclick="toggleLoginTheme()" style="border-radius:50%;width:40px;height:40px;">
+                <i id="login-theme-icon" class="bi bi-moon-fill"></i>
+            </button>
+        </div>
+        <div class="login-card">
         <div class="login-header">
             <i class="bi bi-hospital login-icon"></i>
             <h4 class="fw-bold mb-0">مركز الطوارئ الطبي</h4>
@@ -77,6 +92,10 @@
         </div>
     </div>
 
+    <script>
+        (function(){ const t=localStorage.getItem('theme')||'light'; document.documentElement.setAttribute('data-theme',t); const i=document.getElementById('login-theme-icon'); if(i) i.className=t==='dark'?'bi bi-sun-fill':'bi bi-moon-fill'; })();
+        function toggleLoginTheme(){ const c=document.documentElement.getAttribute('data-theme'); const n=c==='dark'?'light':'dark'; document.documentElement.setAttribute('data-theme',n); localStorage.setItem('theme',n); const i=document.getElementById('login-theme-icon'); if(i) i.className=n==='dark'?'bi bi-sun-fill':'bi bi-moon-fill'; }
+    </script>
     <script src="main_core.js"></script>
     <script>
         async function handleLogin(event) {
