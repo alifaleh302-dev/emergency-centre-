@@ -50,22 +50,6 @@ const DoctorData = {
 
 const Doctor = {
 
-    // --- دوال مساعدة لإدارة حالة الزيارات محلياً (MVP State Management) ---
-    getCompletedVisits: function() {
-        return JSON.parse(localStorage.getItem('completed_visits') || '[]');
-    },
-    markVisitCompleted: function(visitId) {
-        const completed = this.getCompletedVisits();
-        if (!completed.includes(visitId)) {
-            completed.push(visitId);
-            localStorage.setItem('completed_visits', JSON.stringify(completed));
-        }
-    },
-    getFilteredWaitingList: function() {
-        const completed = this.getCompletedVisits();
-        return DoctorData.waiting_list.filter(item => !completed.includes(item.visit));
-    },
-
     // --- 1. واجهة: حالة جديدة (New Case) ---
         // --- 1. واجهة: حالة جديدة (New Case) ---
     viewNewCase: function() {
@@ -167,45 +151,6 @@ const Doctor = {
         }
     },
 
-
-    searchPatient: function() {
-        const query = document.getElementById('patientSearchInput').value.trim();
-        const resultArea = document.getElementById('searchResultArea');
-
-        if (query.length < 2) return;
-
-        const results = DoctorData.data_patients.filter(p => p.name.includes(query));
-
-        if (results.length > 0) {
-            // تجهيز البيانات لتمريرها لدالة renderTable
-            const headers = ['اسم المريض', 'العنوان', 'معلومات'];
-            const rows = results.map(p => [
-                `<span class="fw-bold">${p.name}</span>`,
-                p.address,
-                `<span class="badge bg-light text-dark border">زيارات سابقة: ${p.visit_num}</span>`
-            ]);
-
-            resultArea.innerHTML = `<div class="card stat-card p-0 border-0 shadow-sm" id="patientTableContainer"></div>`;
-            
-            // استخدام actionBuilder لرسم زر الإجراء في العمود الأخير
-            Core.renderTable('patientTableContainer', headers, rows, (row, index) => {
-                const p = results[index]; // استخراج الكائن الأصلي بناءً على الفهرس
-                return `
-                    <button class="btn btn-primary btn-sm fw-bold px-3 shadow-sm" onclick="Doctor.openVisitModal('${p.id_pat}', '${p.name}')">
-                        <i class="bi bi-door-open ms-1"></i> فتح زيارة
-                    </button>`;
-            });
-
-        } else {
-            resultArea.innerHTML = `
-                <div class="alert alert-warning p-4 border-0 shadow-sm d-flex flex-column flex-md-row justify-content-between align-items-center">
-                    <div class="mb-3 mb-md-0"><i class="bi bi-person-exclamation fs-3 ms-3"></i><span class="fw-bold">المريض غير مسجل مسبقاً.</span></div>
-                    <button class="btn btn-warning fw-bold px-4 shadow-sm" onclick="Doctor.openNewPatientModal('${query}')">
-                        <i class="bi bi-person-plus-fill ms-1"></i> إضافة مريض جديد
-                    </button>
-                </div>`;
-        }
-    },
 
     openNewPatientModal: function(searchedName) {
         const existing = document.getElementById('newPatientModal');
@@ -510,23 +455,6 @@ const Doctor = {
         new bootstrap.Modal(document.getElementById('finalDiagModal')).show();
     },
 
-    saveFinalDiagnosis: async function(id_vis) {
-        const diagnosis = document.getElementById('final_diag_text').value;
-        if(!diagnosis) return Core.showAlert('يرجى كتابة التشخيص النهائي', 'error');
-
-        const payload = { event: "close_visit", data: { id_vis: id_vis, diagnosis: diagnosis } };
-        
-        await Core.apiCall('doctor/final_diagnosis', 'POST', payload.data);
-        
-        // حفظ المعرف في الـ LocalStorage ليتم إخفاؤه من قائمة الانتظار
-        this.markVisitCompleted(id_vis);
-        
-        bootstrap.Modal.getInstance(document.getElementById('finalDiagModal')).hide();
-        Core.showAlert('تم حفظ التشخيص وإغلاق الزيارة بنجاح', 'success');
-        this.loadWaitingList(); // تحديث الجدول تلقائياً
-    },
-
-    // --- 3. واجهة: الطلبات المرسلة (Sent Orders) ---
     // --- 3. واجهة: الطلبات المرسلة (Sent Orders) ---
     viewSentOrders: function() {
         Core.navigateTo('viewSentOrders', () => {
@@ -681,12 +609,20 @@ const Doctor = {
         this.loadMedicalArchive(filtered);
     },
 
-    viewFullFile: function(patient_id) {
+    viewFullFile: async function(patient_id) {
         const existing = document.getElementById('historyModal');
         if (existing) existing.remove();
 
-        const patient = DoctorData.data_patients.find(p => p.id_pat == patient_id);
-        if(!patient) return;
+        // جلب السجل الطبي من السيرفر إذا لم يكن محملاً
+        let patient = DoctorData.data_patients.find(p => p.id_pat == patient_id);
+        if (!patient) {
+            const response = await Core.apiCall('doctor/medical_archive', 'GET');
+            if (response && response.success) {
+                DoctorData.data_patients = response.data;
+                patient = DoctorData.data_patients.find(p => p.id_pat == patient_id);
+            }
+        }
+        if (!patient) { Core.showAlert('لم يتم العثور على الملف الطبي', 'warning'); return; }
 
         const rows = patient.medical_file.map(v => `
             <tr>

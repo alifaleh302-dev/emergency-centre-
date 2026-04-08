@@ -211,23 +211,30 @@ const Core = {
                 }
             }
 
-            // --- التعديل الذكي لاكتشاف أخطاء الـ PHP ---
-            const rawText = await response.text(); // نقرأ الرد كنص عادي أولاً
-       //     alert(rawText)
-            if (!response.ok) {
-                console.error("[API Error Raw Response]:", rawText);
-                throw new Error(`Network response was not ok. Status: ${response.status}`);
-            }
+            const rawText = await response.text();
 
+            // محاولة تحويل الرد إلى JSON دائماً (حتى لو كان خطأ)
+            let jsonData = null;
             try {
-                // نحاول تحويل النص إلى JSON
-                return JSON.parse(rawText);
+                jsonData = JSON.parse(rawText);
             } catch (parseError) {
-                // إذا فشل التحويل، نطبع النص الذي أرسله السيرفر لنعرف المشكلة!
-                console.error("[API JSON Parse Error! السيرفر أرجع التالي]:", rawText);
-                Core.showAlert("السيرفر أرجع بيانات غير صالحة، راجع الـ Console", "error");
+                if (!response.ok) {
+                    console.error("[API Error Raw]:", rawText);
+                    Core.showAlert("حدث خطأ في السيرفر", "error");
+                    return null;
+                }
+                console.error("[API JSON Parse Error]:", rawText);
+                Core.showAlert("السيرفر أرجع بيانات غير صالحة", "error");
                 return null;
             }
+
+            // إذا كان الرد خطأ HTTP لكن JSON صالح، نُرجعه للمستدعي لعرض رسالة الخطأ الحقيقية
+            if (!response.ok) {
+                console.warn("[API Error]:", response.status, jsonData);
+                return jsonData; // {success: false, message: "..."
+            }
+
+            return jsonData;
 
         } catch(e) {
             Core.showAlert("فشل الاتصال بالخادم، تحقق من اتصالك.", "error");
