@@ -67,6 +67,18 @@ $accountingHandler = function (string $methodName, bool $passData = true) use ($
     $controller->{$methodName}();
 };
 
+$adminHandler = function (string $methodName, bool $passData = true) use ($data): void {
+    $userData = AuthMiddleware::checkAccess(['مدير النظام']);
+    $controller = new AdminController((int) $userData['user_id']);
+
+    if ($passData) {
+        $controller->{$methodName}($data);
+        return;
+    }
+
+    $controller->{$methodName}();
+};
+
 $routes = [
     'auth/login' => ['methods' => ['POST'], 'handler' => fn () => (new AuthController())->login($data)],
     'auth/me' => ['methods' => ['GET'], 'handler' => function (): void {
@@ -97,6 +109,13 @@ $routes = [
     'accounting/pay_invoice' => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('payInvoice')],
     'accounting/daily_treasury' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('getDailyTreasury', false)],
     'accounting/revenues_drilldown' => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('getRevenuesDrilldown')],
+
+    'admin/schema' => ['methods' => ['GET'], 'handler' => fn () => $adminHandler('getSchema', false)],
+    'admin/dashboard' => ['methods' => ['GET'], 'handler' => fn () => $adminHandler('getDashboard', false)],
+    'admin/list' => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('listRecords')],
+    'admin/record' => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('getRecord')],
+    'admin/save' => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('saveRecord')],
+    'admin/delete' => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('deleteRecord')],
 
     'notifications/unread' => ['methods' => ['GET'], 'handler' => function (): void {
         $userData = AuthMiddleware::checkAccess();
