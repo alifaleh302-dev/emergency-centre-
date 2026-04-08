@@ -231,6 +231,12 @@ class DoctorController extends BaseController
             $this->model->updateInvoiceTotal($invoiceId, $totalInvoicePrice);
             $this->conn->commit();
 
+            // إشعار للمحاسب بوجود فاتورة جديدة
+            try {
+                $notif = new NotificationModel($this->conn);
+                $notif->create('أمين صندوق', 'فاتورة جديدة بانتظار التحصيل', 'إجمالي: ' . $totalInvoicePrice . ' ريال', 'new_invoice', $invoiceId);
+            } catch (Throwable $e) {} // لا نوقف العملية بسبب الإشعار
+
             $this->success(null, 'تم إرسال الطلبات وحفظها بنجاح');
         } catch (InvalidArgumentException $exception) {
             if ($this->conn->inTransaction()) {

@@ -160,7 +160,7 @@ class DoctorModel
                 JOIN Invoices i ON v.visit_id = i.visit_id
                 JOIN Invoice_Details id ON i.invoice_id = id.invoice_id
                 WHERE v.doctor_id = :doctor_id
-                  AND i.created_at >= {$this->twentyFourHoursAgo()}
+                  AND i.created_at >= {$this->todayStart()}
                 GROUP BY v.visit_id, p.full_name, v.type_case
                 ORDER BY MAX(i.created_at) DESC";
         $stmt = $this->conn->prepare($sql);
@@ -273,10 +273,10 @@ class DoctorModel
             : "DATE_FORMAT({$column}, '%Y-%m-%d')";
     }
 
-    private function twentyFourHoursAgo(): string
+    private function todayStart(): string
     {
         return $this->driver === 'pgsql'
-            ? "(NOW() - INTERVAL '24 hours')"
-            : '(NOW() - INTERVAL 24 HOUR)';
+            ? "CURRENT_DATE"
+            : 'CURDATE()';
     }
 }

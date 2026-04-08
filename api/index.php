@@ -94,6 +94,23 @@ $routes = [
     'accounting/pay_invoice' => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('payInvoice')],
     'accounting/daily_treasury' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('getDailyTreasury', false)],
     'accounting/revenues_drilldown' => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('getRevenuesDrilldown')],
+
+    // إشعارات
+    'notifications/unread' => ['methods' => ['GET'], 'handler' => function (): void {
+        $userData = AuthMiddleware::checkAccess();
+        $db = new Database();
+        $model = new NotificationModel($db->getConnection());
+        $notifications = $model->getUnread($userData['job']);
+        $count = $model->countUnread($userData['job']);
+        echo json_encode(['success' => true, 'count' => $count, 'data' => $notifications], JSON_UNESCAPED_UNICODE);
+    }],
+    'notifications/read' => ['methods' => ['POST'], 'handler' => function (): void {
+        $userData = AuthMiddleware::checkAccess();
+        $db = new Database();
+        $model = new NotificationModel($db->getConnection());
+        $model->markAllRead($userData['job']);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    }],
 ];
 
 if (!isset($routes[$path])) {

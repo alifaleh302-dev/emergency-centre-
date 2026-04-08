@@ -282,6 +282,96 @@ const Core = {
         bsToast.show();
 
         toastElement.addEventListener('hidden.bs.toast', () => toastElement.remove());
+    },
+
+    // --- 7. نظام الإشعارات الذكي (Smart Notifications) ---
+    _notifInterval: null,
+    _lastNotifCount: 0,
+
+    initNotifications: function() {
+        // إنشاء زر الجرس في الشريط العلوي
+        const exitBtn = document.querySelector('.btn-exit');
+        if (!exitBtn || document.getElementById('notif-bell')) return;
+
+        const bellHTML = `
+            <div class="dropdown hover-dropdown" id="notif-bell" style="margin-left:12px;">
+                <button class="btn position-relative p-0" type="button" data-bs-toggle="dropdown" 
+                        style="background:none;border:none;color:white;font-size:1.4rem;" onclick="Core.loadNotifications()">
+                    <i class="bi bi-bell-fill"></i>
+                    <span id="notif-badge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size:0.6rem;display:none;">0</span>
+                </button>
+                <div class="dropdown-menu dropdown-menu-start shadow border-0 p-0" style="min-width:320px;max-height:400px;overflow-y:auto;border-radius:12px;" id="notif-dropdown">
+                    <div class="p-3 text-center text-muted small">جاري التحميل...</div>
+                </div>
+            </div>`;
+        exitBtn.insertAdjacentHTML('beforebegin', bellHTML);
+
+        // فحص دوري كل 8 ثواني
+        this.checkNotifCount();
+        this._notifInterval = setInterval(() => this.checkNotifCount(), 8000);
+    },
+
+    checkNotifCount: async function() {
+        const res = await this.apiCall('notifications/unread', 'GET');
+        if (!res || !res.success) return;
+        const badge = document.getElementById('notif-badge');
+        if (!badge) return;
+
+        if (res.count > 0) {
+            badge.textContent = res.count;
+            badge.style.display = '';
+            // تشغيل صوت إشعار عند ورود إشعار جديد
+            if (res.count > this._lastNotifCount && this._lastNotifCount >= 0) {
+                this.showAlert(res.data[0].title, 'info');
+            }
+        } else {
+            badge.style.display = 'none';
+        }
+        this._lastNotifCount = res.count;
+    },
+
+    loadNotifications: async function() {
+        const dropdown = document.getElementById('notif-dropdown');
+        if (!dropdown) return;
+        dropdown.innerHTML = '<div class="p-3 text-center"><div class="spinner-border spinner-border-sm text-primary"></div></div>';
+
+        const res = await this.apiCall('notifications/unread', 'GET');
+        if (!res || !res.success) {
+            dropdown.innerHTML = '<div class="p-3 text-center text-danger small">خطأ في جلب الإشعارات</div>';
+            return;
+        }
+
+        if (res.data.length === 0) {
+            dropdown.innerHTML = '<div class="p-4 text-center text-muted"><i class="bi bi-bell-slash fs-3 d-block mb-2"></i>لا توجد إشعارات جديدة</div>';
+            return;
+        }
+
+        const icons = { 'new_invoice': 'bi-receipt text-primary', 'invoice_paid': 'bi-cash-coin text-success', 'new_visit': 'bi-person-plus text-info' };
+        let html = res.data.map(n => `
+            <div class="d-flex align-items-start gap-2 p-3 border-bottom" style="cursor:pointer;">
+                <i class="bi ${icons[n.event_type] || 'bi-bell text-secondary'} fs-5 mt-1"></i>
+                <div class="flex-grow-1">
+                    <div class="fw-bold small text-dark">${n.title}</div>
+                    <div class="text-muted" style="font-size:0.8rem;">${n.body || ''}</div>
+                    <div class="text-muted" style="font-size:0.7rem;"><i class="bi bi-clock ms-1"></i>${n.time}</div>
+                </div>
+            </div>`).join('');
+
+        html += `<div class="p-2 text-center border-top">
+                    <button class="btn btn-sm btn-outline-secondary w-100 fw-bold" onclick="Core.markAllRead()">
+                        <i class="bi bi-check2-all ms-1"></i> تعيين الكل كمقروء
+                    </button>
+                 </div>`;
+        dropdown.innerHTML = html;
+    },
+
+    markAllRead: async function() {
+        await this.apiCall('notifications/read', 'POST');
+        const badge = document.getElementById('notif-badge');
+        if (badge) badge.style.display = 'none';
+        this._lastNotifCount = 0;
+        const dropdown = document.getElementById('notif-dropdown');
+        if (dropdown) dropdown.innerHTML = '<div class="p-4 text-center text-muted"><i class="bi bi-check2-all fs-3 d-block mb-2 text-success"></i>تم تعيين الكل كمقروء</div>';
     }
 };
 

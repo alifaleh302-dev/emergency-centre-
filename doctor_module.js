@@ -681,5 +681,6 @@ async function initDoctorModule() {
         { title: "السجل الطبي", icon: "bi-folder2-open", url: "javascript:void(0)", action: "Doctor.viewMedicalArchive()" }
     ];
     Core.renderSidebar(doctorLinks);
+    Core.initNotifications();
     Doctor.viewNewCase();
 }

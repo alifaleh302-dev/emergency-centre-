@@ -80,13 +80,18 @@ class AccountingController extends BaseController
                 $this->cashier_id
             );
 
+            // إشعار للطبيب بأن الفاتورة تم تحصيلها
+            try {
+                $notif = new NotificationModel($this->conn);
+                $typeName = match($docType) { 'A' => 'كاش', 'B' => 'إعفاء جزئي', 'C' => 'إعفاء كلي', default => $docType };
+                $notif->create('طبيب عام', 'تم تحصيل فاتورة (' . $typeName . ')', 'سند رقم: ' . $serialNumber, 'invoice_paid', $invoiceId);
+            } catch (Throwable $e) {}
+
             $this->respond([
                 'success' => true,
                 'message' => 'تم السداد بنجاح',
                 'serial_number' => $serialNumber,
             ]);
-        } catch (InvalidArgumentException $exception) {
-            $this->error($exception->getMessage(), 422);
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage(), 422);
         } catch (Throwable $exception) {

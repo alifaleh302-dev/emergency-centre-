@@ -47,7 +47,8 @@ class AccountingModel
 
     public function getNextSerials(): array
     {
-        $stmt = $this->conn->query('SELECT doc_name, current_serial + 1 AS next_serial FROM Document_Types ORDER BY doc_type_id ASC');
+        // A = كاش، B = إعفاء (يشمل الجزئي والكلي)
+        $stmt = $this->conn->query("SELECT doc_name, current_serial + 1 AS next_serial FROM Document_Types WHERE doc_name IN ('A','B') ORDER BY doc_type_id ASC");
         return $stmt->fetchAll();
     }
 
@@ -56,9 +57,13 @@ class AccountingModel
         try {
             $this->conn->beginTransaction();
 
-            $lockStmt = $this->conn->prepare('SELECT doc_type_id, current_serial FROM Document_Types WHERE doc_name = :doc_name FOR UPDATE');
-            $lockStmt->execute([':doc_name' => $docTypeName]);
-            $documentType = $lockStmt->fetch();
+            // سندات الإعفاء (B و C) تشترك بنفس التسلسل — نستخدم 'B' كمرجع للتسلسل
+            $serialDocName = ($docTypeName === 'C') ? 'B' : $docTypeName;
+
+            // جلب نوع السند الفعلي (A أو B أو C)
+            $docStmt = $this->conn->prepare('SELECT doc_type_id FROM Document_Types WHERE doc_name = :doc_name');
+            $docStmt->execute([':doc_name' => $docTypeName]);
+            $documentType = $docStmt->fetch();
 
             if (!$documentType) {
                 throw new InvalidArgumentException('نوع السند المطلوب غير موجود في قاعدة البيانات.');
@@ -66,18 +71,30 @@ class AccountingModel
 
             $docTypeId = (int) $documentType['doc_type_id'];
 
-            // الحصول على أعلى رقم تسلسلي فعلي من الفواتير لتجنب التصادم مع UNIQUE constraint
-            $maxStmt = $this->conn->prepare('SELECT COALESCE(MAX(serial_number), 0) FROM Invoices WHERE doc_type_id = :doc_type_id');
-            $maxStmt->execute([':doc_type_id' => $docTypeId]);
+            // قفل سجل التسلسل (قد يكون B للإعفاءات أو A للكاش)
+            $lockStmt = $this->conn->prepare('SELECT doc_type_id, current_serial FROM Document_Types WHERE doc_name = :serial_doc FOR UPDATE');
+            $lockStmt->execute([':serial_doc' => $serialDocName]);
+            $serialDoc = $lockStmt->fetch();
+
+            $serialDocTypeId = (int) $serialDoc['doc_type_id'];
+
+            // الحصول على أعلى رقم تسلسلي فعلي لنفس المجموعة
+            $serialDocIds = ($serialDocName === 'B')
+                ? [$serialDocTypeId, $docTypeId]  // B و C يشتركان
+                : [$serialDocTypeId];
+            $placeholders = implode(',', array_fill(0, count($serialDocIds), '?'));
+            $maxStmt = $this->conn->prepare("SELECT COALESCE(MAX(serial_number), 0) FROM Invoices WHERE doc_type_id IN ($placeholders)");
+            $maxStmt->execute($serialDocIds);
             $actualMax = (int) $maxStmt->fetchColumn();
 
-            $baseSerial = max((int) $documentType['current_serial'], $actualMax);
+            $baseSerial = max((int) $serialDoc['current_serial'], $actualMax);
             $newSerial = $baseSerial + 1;
 
+            // تحديث العداد في سجل التسلسل
             $updateSerialStmt = $this->conn->prepare('UPDATE Document_Types SET current_serial = :current_serial WHERE doc_type_id = :doc_type_id');
             $updateSerialStmt->execute([
                 ':current_serial' => $newSerial,
-                ':doc_type_id' => $documentType['doc_type_id'],
+                ':doc_type_id' => $serialDocTypeId,
             ]);
 
             $updateInvoiceSql = "UPDATE Invoices SET
@@ -120,7 +137,7 @@ class AccountingModel
                 JOIN Document_Types dt ON i.doc_type_id = dt.doc_type_id
                 JOIN Users u ON i.accountant_id = u.user_id
                 WHERE i.accountant_id IS NOT NULL
-                  AND {$timestamp} >= {$this->twentyFourHoursAgo()}
+                  AND {$timestamp} >= {$this->todayStart()}
                 ORDER BY {$timestamp} DESC";
         $stmt = $this->conn->query($sql);
         return $stmt->fetchAll();
@@ -236,11 +253,11 @@ class AccountingModel
             : "DATE_FORMAT({$column}, '%Y-%m-%d %h:%i %p')";
     }
 
-    private function twentyFourHoursAgo(): string
+    private function todayStart(): string
     {
         return $this->driver === 'pgsql'
-            ? "(NOW() - INTERVAL '24 hours')"
-            : '(NOW() - INTERVAL 24 HOUR)';
+            ? "CURRENT_DATE"
+            : 'CURDATE()';
     }
 
     private function yearExpression(string $column): string

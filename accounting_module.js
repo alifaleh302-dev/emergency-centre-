@@ -130,7 +130,7 @@ const Accountant = {
         if (serialsRes && serialsRes.success) {
             AccountantData.next_serials = serialsRes.data;
         } else {
-            AccountantData.next_serials = { 'A': '--', 'B': '--', 'C': '--' };
+            AccountantData.next_serials = { 'A': '--', 'B': '--' };
         }
 
         const servicesList = inv.order.map(srv => `
@@ -221,7 +221,7 @@ const Accountant = {
             btnConfirm.disabled = false;
             feedback.setAttribute('data-doctype', 'C');
             feedback.setAttribute('data-exemption', total);
-            serialDisplay.innerText = serials['C']; // تسلسل الإعفاء الكلي
+            serialDisplay.innerText = serials['B']; // تسلسل الإعفاء (موحد للجزئي والكلي)
             serialDisplay.className = "fw-bold fs-5 text-danger";
         }
     },
@@ -672,6 +672,7 @@ loading()
         { title: "الإيرادات", icon: "bi-graph-up-arrow", url: "javascript:void(0)", action: "Accountant.viewRevenues('years')" }
     ];
     Core.renderSidebar(accountingLinks);
+    Core.initNotifications();
     
     // تشغيل الواجهة الافتراضية
     Accountant.viewPendingInvoices();
