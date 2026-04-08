@@ -484,11 +484,18 @@ class AdminModel
     private function normalizeValue(array $column, mixed $value): mixed
     {
         if ($value === '' || $value === null) {
-            return $column['nullable'] ? null : '';
+            if ($column['nullable']) {
+                return null;
+            }
+            throw new InvalidArgumentException('الحقل ' . $column['label'] . ' مطلوب.');
         }
 
         if ($column['is_boolean']) {
-            return filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? false;
+            $boolValue = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($boolValue === null) {
+                throw new InvalidArgumentException('الحقل ' . $column['label'] . ' يجب أن يكون نعم أو لا.');
+            }
+            return $boolValue ? 'true' : 'false';
         }
 
         if ($column['is_numeric']) {

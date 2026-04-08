@@ -490,7 +490,7 @@ const Admin = {
         }
 
         const fieldsHtml = Object.values(tableMeta.columns)
-            .filter(column => !column.auto_increment)
+            .filter(column => !column.auto_increment && column.editable !== false)
             .map(column => this.renderFormField(tableMeta, column, record[column.name]))
             .join('');
 
