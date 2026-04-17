@@ -51,11 +51,13 @@ ON CONFLICT (role_id) DO UPDATE
 
 -- 6) إنشاء مستخدم admin افتراضي
 --    username: admin
---    password: Admin@123   (هذا hash لها بـ bcrypt cost=10)
+--    password: Admin@123   (bcrypt cost=12, مولَّد عبر PHP password_hash)
 --    يرجى تغيير كلمة المرور فور أول تسجيل دخول!
+--    ملاحظة: يجب استخدام hash مولَّد بـ PHP password_hash() وليس bcrypt.py
+--    لأن psycopg2 قد يعامل `$` كـ placeholder ويشوّه الـ hash.
 INSERT INTO users (username, password_hash, full_name, role_id, is_active)
 VALUES ('admin',
-        '$2b$10$ilkOYl4l4XSAZHe8ybXLZ.bq9.P1tpRuvUycVTUqtaoUSY9CW7BF.',
+        '$2y$12$ssOttzwwdtH7K6bHC1zicuxPVffwFzCq6UnxiTBH21sLoMjV9q6lu',
         'مدير النظام الرئيسي',
         5,
         TRUE)
