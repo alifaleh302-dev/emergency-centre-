@@ -110,12 +110,22 @@ $routes = [
     'accounting/daily_treasury' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('getDailyTreasury', false)],
     'accounting/revenues_drilldown' => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('getRevenuesDrilldown')],
 
-    'admin/schema' => ['methods' => ['GET'], 'handler' => fn () => $adminHandler('getSchema', false)],
-    'admin/dashboard' => ['methods' => ['GET'], 'handler' => fn () => $adminHandler('getDashboard', false)],
-    'admin/list' => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('listRecords')],
-    'admin/record' => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('getRecord')],
-    'admin/save' => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('saveRecord')],
-    'admin/delete' => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('deleteRecord')],
+    'admin/schema'           => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getSchema', false)],
+    'admin/dashboard'        => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getDashboard', false)],
+    'admin/dashboard_charts' => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getDashboardCharts', false)],
+    'admin/list'             => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('listRecords')],
+    'admin/record'           => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('getRecord')],
+    'admin/save'             => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('saveRecord')],
+    'admin/delete'           => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('deleteRecord')],
+    'admin/export'           => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('exportRecords')],
+    'admin/change_password'  => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('changeUserPassword')],
+    'admin/toggle_user'      => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('toggleUser')],
+    'admin/cancel_invoice'   => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('cancelInvoice')],
+    'admin/cancel_visit'     => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('cancelVisit')],
+    'admin/broadcast'        => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('broadcastNotification')],
+    'admin/audit_log'        => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('getAuditLog')],
+    'admin/reports/revenue'  => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('reportRevenue')],
+    'admin/reports/doctors'  => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('reportDoctors')],
 
     'notifications/unread' => ['methods' => ['GET'], 'handler' => function (): void {
         $userData = AuthMiddleware::checkAccess();

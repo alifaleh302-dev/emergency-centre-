@@ -1,7 +1,28 @@
 <?php
 declare(strict_types=1);
 
-const BASE_PATH = __DIR__ . '/..';
+if (!defined('BASE_PATH')) {
+    define('BASE_PATH', __DIR__ . '/..');
+}
+
+// Polyfill minimal mbstring functions to keep the app usable even if the
+// mbstring extension is not loaded on the host (Render sometimes ships a
+// slim PHP image). These simple shims use byte-level operations which are
+// sufficient for our short UI strings and validation lengths.
+if (!function_exists('mb_substr')) {
+    function mb_substr($str, $start, $length = null, $encoding = null) {
+        if ($length === null) { return substr((string) $str, (int) $start); }
+        return substr((string) $str, (int) $start, (int) $length);
+    }
+}
+if (!function_exists('mb_strlen')) {
+    function mb_strlen($str, $encoding = null) {
+        return strlen((string) $str);
+    }
+}
+if (!function_exists('mb_strtolower')) {
+    function mb_strtolower($str, $encoding = null) { return strtolower((string) $str); }
+}
 
 (function (string $basePath): void {
     $envPath = $basePath . '/.env';

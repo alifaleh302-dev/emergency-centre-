@@ -107,13 +107,17 @@ class AdminModel
         $stats = [
             'tables_count' => $tableCount,
             'users_count' => (int) $this->scalar('SELECT COUNT(*) FROM Users'),
-            'active_users_count' => (int) $this->scalar('SELECT COUNT(*) FROM Users WHERE role_id IS NOT NULL'),
+            'active_users_count' => (int) $this->scalar('SELECT COUNT(*) FROM Users WHERE role_id IS NOT NULL AND COALESCE(is_active, TRUE) = TRUE'),
             'patients_count' => (int) $this->scalar('SELECT COUNT(*) FROM Patients'),
+            'patients_today' => (int) $this->scalar('SELECT COUNT(*) FROM Patients WHERE DATE(created_at) = CURRENT_DATE'),
             'active_visits_count' => (int) $this->scalar("SELECT COUNT(*) FROM Visits WHERE status = 'Active'"),
             'completed_visits_count' => (int) $this->scalar("SELECT COUNT(*) FROM Visits WHERE status = 'Completed'"),
-            'pending_invoices_count' => (int) $this->scalar('SELECT COUNT(*) FROM Invoices WHERE accountant_id IS NULL'),
-            'paid_invoices_today' => (int) $this->scalar('SELECT COUNT(*) FROM Invoices WHERE accountant_id IS NOT NULL AND DATE(COALESCE(paid_at, created_at)) = CURRENT_DATE'),
-            'revenue_today' => (float) $this->scalar('SELECT COALESCE(SUM(net_amount), 0) FROM Invoices WHERE accountant_id IS NOT NULL AND DATE(COALESCE(paid_at, created_at)) = CURRENT_DATE'),
+            'visits_today' => (int) $this->scalar('SELECT COUNT(*) FROM Visits WHERE DATE(visit_date) = CURRENT_DATE'),
+            'pending_invoices_count' => (int) $this->scalar('SELECT COUNT(*) FROM Invoices WHERE accountant_id IS NULL AND cancelled_at IS NULL'),
+            'paid_invoices_today' => (int) $this->scalar('SELECT COUNT(*) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND DATE(COALESCE(paid_at, created_at)) = CURRENT_DATE'),
+            'cancelled_invoices_count' => (int) $this->scalar('SELECT COUNT(*) FROM Invoices WHERE cancelled_at IS NOT NULL'),
+            'revenue_today' => (float) $this->scalar('SELECT COALESCE(SUM(net_amount), 0) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND DATE(COALESCE(paid_at, created_at)) = CURRENT_DATE'),
+            'revenue_month' => (float) $this->scalar("SELECT COALESCE(SUM(net_amount), 0) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND DATE_TRUNC('month', COALESCE(paid_at, created_at)) = DATE_TRUNC('month', CURRENT_DATE)"),
             'tickets_today' => (int) $this->scalar('SELECT COUNT(*) FROM Examination_Tickets WHERE DATE(created_at) = CURRENT_DATE'),
             'notifications_today' => (int) $this->scalar('SELECT COUNT(*) FROM Notifications WHERE DATE(created_at) = CURRENT_DATE'),
         ];
@@ -551,5 +555,344 @@ class AdminModel
             return true;
         }
         return is_string($default) && str_contains($default, 'nextval(');
+    }
+
+    // ========================================================================
+    //   🆕 الميزات المضافة حديثاً للوحة الإدارة الكاملة
+    // ========================================================================
+
+    /**
+     * يرفق تسميات المفاتيح الأجنبية إلى كل صف (مثلاً role_id → role_name)
+     * يُنادى من داخل getTableRows لإثراء البيانات قبل عرضها.
+     */
+    public function enrichRowsWithForeignLabels(string $table, array $rows): array
+    {
+        $meta = $this->requireTableMeta($table);
+        foreach ($meta['columns'] as $columnName => $column) {
+            if (!$column['is_foreign'] || empty($column['foreign_options'])) {
+                continue;
+            }
+            $optionMap = [];
+            foreach ($column['foreign_options'] as $option) {
+                $optionMap[(string) $option['value']] = (string) $option['label'];
+            }
+            foreach ($rows as &$row) {
+                if (!array_key_exists($columnName, $row)) {
+                    continue;
+                }
+                $v = $row[$columnName];
+                if ($v === null || $v === '') {
+                    $row['_fk_' . $columnName] = null;
+                    continue;
+                }
+                $row['_fk_' . $columnName] = $optionMap[(string) $v] ?? null;
+            }
+            unset($row);
+        }
+        return $rows;
+    }
+
+    /**
+     * بيانات الرسوم البيانية للداشبورد (آخر 30 يوم إيراد / توزيع الحالات / أكثر الخدمات / نشاط الأطباء)
+     */
+    public function getDashboardCharts(): array
+    {
+        // 1) إيراد آخر 30 يوم
+        $revenueDaily = $this->conn->query(
+            "SELECT TO_CHAR(DATE(COALESCE(paid_at, created_at)), 'YYYY-MM-DD') AS day,
+                    COALESCE(SUM(net_amount), 0) AS total,
+                    COUNT(*) AS invoices_count
+             FROM Invoices
+             WHERE accountant_id IS NOT NULL
+               AND cancelled_at IS NULL
+               AND COALESCE(paid_at, created_at) >= CURRENT_DATE - INTERVAL '29 days'
+             GROUP BY day
+             ORDER BY day ASC"
+        )->fetchAll() ?: [];
+
+        // 2) توزيع أنواع الحالات
+        $caseTypes = $this->conn->query(
+            "SELECT COALESCE(ct.case_name, 'غير محدد') AS label, COUNT(*) AS total
+             FROM Visits v
+             LEFT JOIN Emergency_Case_Types ct ON v.case_type_id = ct.case_type_id
+             GROUP BY ct.case_name
+             ORDER BY total DESC
+             LIMIT 8"
+        )->fetchAll() ?: [];
+
+        // 3) أكثر الخدمات طلباً
+        $topServices = $this->conn->query(
+            "SELECT s.service_name AS label, COUNT(*) AS total,
+                    COALESCE(SUM(id.service_price_at_time), 0) AS revenue
+             FROM Invoice_Details id
+             JOIN Services_Master s ON id.service_id = s.service_id
+             GROUP BY s.service_name
+             ORDER BY total DESC
+             LIMIT 8"
+        )->fetchAll() ?: [];
+
+        // 4) نشاط الأطباء (عدد الزيارات لكل طبيب)
+        $doctors = $this->conn->query(
+            "SELECT u.full_name AS label,
+                    COUNT(v.visit_id) AS total,
+                    COUNT(CASE WHEN v.status = 'Completed' THEN 1 END) AS completed
+             FROM Users u
+             LEFT JOIN Visits v ON v.doctor_id = u.user_id
+             WHERE u.role_id = 1
+             GROUP BY u.user_id, u.full_name
+             ORDER BY total DESC
+             LIMIT 8"
+        )->fetchAll() ?: [];
+
+        // 5) أحدث 10 فواتير و 10 زيارات
+        $recentInvoices = $this->conn->query(
+            "SELECT i.invoice_id, i.serial_number, i.net_amount,
+                    COALESCE(i.paid_at, i.created_at) AS ts,
+                    p.full_name AS patient_name,
+                    u.full_name AS accountant_name,
+                    CASE WHEN i.cancelled_at IS NOT NULL THEN 'ملغاة'
+                         WHEN i.accountant_id IS NOT NULL THEN 'مدفوعة'
+                         ELSE 'معلقة' END AS status
+             FROM Invoices i
+             LEFT JOIN Visits v ON i.visit_id = v.visit_id
+             LEFT JOIN Patients p ON v.patient_id = p.patient_id
+             LEFT JOIN Users u ON i.accountant_id = u.user_id
+             ORDER BY COALESCE(i.paid_at, i.created_at) DESC
+             LIMIT 10"
+        )->fetchAll() ?: [];
+
+        $recentVisits = $this->conn->query(
+            "SELECT v.visit_id, v.visit_date, v.status, v.diagnosis,
+                    p.full_name AS patient_name,
+                    u.full_name AS doctor_name,
+                    ct.case_name
+             FROM Visits v
+             LEFT JOIN Patients p ON v.patient_id = p.patient_id
+             LEFT JOIN Users u ON v.doctor_id = u.user_id
+             LEFT JOIN Emergency_Case_Types ct ON v.case_type_id = ct.case_type_id
+             ORDER BY v.visit_date DESC
+             LIMIT 10"
+        )->fetchAll() ?: [];
+
+        return [
+            'revenue_daily'   => $revenueDaily,
+            'case_types'      => $caseTypes,
+            'top_services'    => $topServices,
+            'doctors_activity'=> $doctors,
+            'recent_invoices' => $recentInvoices,
+            'recent_visits'   => $recentVisits,
+        ];
+    }
+
+    /**
+     * يجلب كل السجلات بدون Pagination (للتصدير) — يطبّق نفس الفلاتر والبحث
+     */
+    public function getTableRowsForExport(string $table, string $search = '', array $filters = []): array
+    {
+        $result = $this->getTableRows($table, 1, 10000, $search, $filters, null, 'ASC');
+        return [
+            'rows'    => $this->enrichRowsWithForeignLabels($table, $result['rows']),
+            'columns' => $this->requireTableMeta($table)['columns'],
+            'label'   => $result['meta']['label'],
+        ];
+    }
+
+    /**
+     * تحديث كلمة مرور مستخدم
+     */
+    public function changeUserPassword(int $userId, string $newPassword): bool
+    {
+        if (mb_strlen($newPassword) < 6) {
+            throw new InvalidArgumentException('كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل.');
+        }
+        $hash = password_hash($newPassword, PASSWORD_BCRYPT);
+        $stmt = $this->conn->prepare('UPDATE Users SET password_hash = :h WHERE user_id = :id');
+        return $stmt->execute([':h' => $hash, ':id' => $userId]);
+    }
+
+    /**
+     * تفعيل / تعطيل مستخدم
+     */
+    public function toggleUserActive(int $userId, bool $active): bool
+    {
+        $stmt = $this->conn->prepare('UPDATE Users SET is_active = :a WHERE user_id = :id');
+        return $stmt->execute([':a' => $active ? 'true' : 'false', ':id' => $userId]);
+    }
+
+    /**
+     * إلغاء فاتورة (Soft delete)
+     */
+    public function cancelInvoice(int $invoiceId, int $adminId, string $reason): array
+    {
+        $stmt = $this->conn->prepare(
+            'UPDATE Invoices SET cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r
+             WHERE invoice_id = :id AND cancelled_at IS NULL
+             RETURNING invoice_id, serial_number, net_amount'
+        );
+        $stmt->execute([':id' => $invoiceId, ':by' => $adminId, ':r' => mb_substr($reason, 0, 255)]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            throw new InvalidArgumentException('الفاتورة غير موجودة أو ملغاة مسبقاً.');
+        }
+        return $row;
+    }
+
+    /**
+     * إلغاء زيارة
+     */
+    public function cancelVisit(int $visitId, int $adminId, string $reason): array
+    {
+        $stmt = $this->conn->prepare(
+            "UPDATE Visits SET status = 'Cancelled', cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r
+             WHERE visit_id = :id AND cancelled_at IS NULL
+             RETURNING visit_id, status"
+        );
+        try {
+            $stmt->execute([':id' => $visitId, ':by' => $adminId, ':r' => mb_substr($reason, 0, 255)]);
+        } catch (PDOException $e) {
+            // إذا كانت قيمة enum غير مضافة بعد، نكتفي بتعليم cancelled_at
+            $fallback = $this->conn->prepare(
+                "UPDATE Visits SET cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r
+                 WHERE visit_id = :id AND cancelled_at IS NULL
+                 RETURNING visit_id, status"
+            );
+            $fallback->execute([':id' => $visitId, ':by' => $adminId, ':r' => mb_substr($reason, 0, 255)]);
+            $row = $fallback->fetch();
+            if (!$row) {
+                throw new InvalidArgumentException('الزيارة غير موجودة أو ملغاة مسبقاً.');
+            }
+            return $row;
+        }
+        $row = $stmt->fetch();
+        if (!$row) {
+            throw new InvalidArgumentException('الزيارة غير موجودة أو ملغاة مسبقاً.');
+        }
+        return $row;
+    }
+
+    /**
+     * بث إشعار يدوي إلى دور
+     */
+    public function broadcastNotification(string $targetRole, string $title, string $body): array
+    {
+        $stmt = $this->conn->prepare(
+            "INSERT INTO Notifications (target_role, title, body, event_type, reference_id)
+             VALUES (:role, :title, :body, 'admin_broadcast', NULL)
+             RETURNING notification_id, created_at"
+        );
+        $stmt->execute([
+            ':role'  => mb_substr($targetRole, 0, 50),
+            ':title' => mb_substr($title, 0, 150),
+            ':body'  => mb_substr($body, 0, 500),
+        ]);
+        return $stmt->fetch();
+    }
+
+    /**
+     * سجل التدقيق (Audit Log) مع فلترة
+     */
+    public function getAuditLogs(int $page = 1, int $perPage = 25, array $filters = []): array
+    {
+        $where = [];
+        $params = [];
+        if (!empty($filters['action'])) {
+            $where[] = 'action = :action';
+            $params[':action'] = $filters['action'];
+        }
+        if (!empty($filters['table'])) {
+            $where[] = 'table_name = :table';
+            $params[':table'] = $filters['table'];
+        }
+        if (!empty($filters['username'])) {
+            $where[] = 'username ILIKE :username';
+            $params[':username'] = '%' . $filters['username'] . '%';
+        }
+        if (!empty($filters['from'])) {
+            $where[] = 'created_at >= :from';
+            $params[':from'] = $filters['from'];
+        }
+        if (!empty($filters['to'])) {
+            $where[] = 'created_at <= :to';
+            $params[':to'] = $filters['to'];
+        }
+
+        $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
+        $total = (int) $this->fetchColumnBind('SELECT COUNT(*) FROM audit_logs' . $whereSql, $params);
+
+        $perPage = max(1, min($perPage, 100));
+        $offset = ($page - 1) * $perPage;
+
+        $sql = 'SELECT log_id, user_id, username, action, table_name, record_id, old_values, new_values, ip_address, created_at
+                FROM audit_logs' . $whereSql .
+               ' ORDER BY created_at DESC LIMIT ' . $perPage . ' OFFSET ' . $offset;
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll() ?: [];
+
+        return [
+            'rows' => $rows,
+            'meta' => [
+                'total' => $total,
+                'page'  => $page,
+                'pages' => (int) ceil($total / $perPage),
+                'per_page' => $perPage,
+            ],
+        ];
+    }
+
+    /**
+     * تقرير الإيرادات حسب الخدمة
+     */
+    public function reportRevenueByService(?string $from = null, ?string $to = null): array
+    {
+        $where = ['i.accountant_id IS NOT NULL', 'i.cancelled_at IS NULL'];
+        $params = [];
+        if ($from) { $where[] = 'COALESCE(i.paid_at, i.created_at) >= :from'; $params[':from'] = $from; }
+        if ($to)   { $where[] = 'COALESCE(i.paid_at, i.created_at) <= :to';   $params[':to']   = $to; }
+        $sql = "SELECT sc.category_name AS category,
+                       s.service_name   AS service,
+                       COUNT(*)         AS count,
+                       COALESCE(SUM(id.service_price_at_time), 0) AS revenue
+                FROM Invoice_Details id
+                JOIN Invoices i       ON id.invoice_id = i.invoice_id
+                JOIN Services_Master s ON id.service_id = s.service_id
+                LEFT JOIN Service_Categories sc ON s.category_id = sc.category_id
+                WHERE " . implode(' AND ', $where) . "
+                GROUP BY sc.category_name, s.service_name
+                ORDER BY revenue DESC";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll() ?: [];
+    }
+
+    /**
+     * تقرير أداء الأطباء
+     */
+    public function reportDoctorPerformance(?string $from = null, ?string $to = null): array
+    {
+        $where = ['u.role_id = 1'];
+        $params = [];
+        if ($from) { $where[] = '(v.visit_date IS NULL OR v.visit_date >= :from)'; $params[':from'] = $from; }
+        if ($to)   { $where[] = '(v.visit_date IS NULL OR v.visit_date <= :to)';   $params[':to']   = $to; }
+        $sql = "SELECT u.user_id, u.full_name AS doctor,
+                       COUNT(v.visit_id) AS visits,
+                       COUNT(CASE WHEN v.status = 'Completed' THEN 1 END) AS completed,
+                       COUNT(CASE WHEN v.status = 'Active' THEN 1 END) AS active,
+                       COUNT(DISTINCT v.patient_id) AS unique_patients
+                FROM Users u
+                LEFT JOIN Visits v ON v.doctor_id = u.user_id
+                WHERE " . implode(' AND ', $where) . "
+                GROUP BY u.user_id, u.full_name
+                ORDER BY visits DESC";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll() ?: [];
+    }
+
+    private function fetchColumnBind(string $sql, array $params): mixed
+    {
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchColumn();
     }
 }
