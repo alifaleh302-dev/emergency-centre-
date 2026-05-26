@@ -8,10 +8,10 @@ class AdminController extends BaseController
     private PDO $conn;
     private AdminModel $model;
     private AuditService $audit;
-    private int $userId;
+    private string $userId;
     private string $username;
 
-    public function __construct(int $userId)
+    public function __construct(string $userId)
     {
         $database = new Database();
         $this->conn = $database->getConnection();
@@ -86,7 +86,7 @@ class AdminController extends BaseController
     {
         try {
             $table = $this->sanitizeText($this->getField($data, 'table'), 'table', 120);
-            $id = $this->sanitizeInteger($this->getField($data, 'id'), 'id', 1);
+            $id = $this->sanitizeIdentifier($this->getField($data, 'id'), 'id');
             $this->success([
                 'record' => $this->model->getRecord($table, $id),
             ]);
@@ -103,12 +103,13 @@ class AdminController extends BaseController
         try {
             $table = $this->sanitizeText($this->getField($data, 'table'), 'table', 120);
             $idRaw = $this->getField($data, 'id');
-            $id = ($idRaw === null || $idRaw === '') ? null : $this->sanitizeInteger($idRaw, 'id', 1);
+            $id = ($idRaw === null || $idRaw === '') ? null : $this->sanitizeIdentifier($idRaw, 'id');
             $record = $this->toArray($this->getField($data, 'record', []));
 
-            if ($table === 'users' && $id !== null && $id === $this->userId) {
-                $roleId = $record['role_id'] ?? null;
-                if ($roleId !== null && (int) $roleId !== 5) {
+            // إذا كان المدير يعدل حسابه الحالي فلا يسمح له بسحب صلاحية المدير من نفسه.
+            if ($table === 'users' && $id !== null && (string) $id === (string) $this->userId) {
+                $roleId = isset($record['role_id']) ? (string) $record['role_id'] : null;
+                if ($roleId !== null && $roleId !== '' && !$this->isAdminRole($roleId)) {
                     throw new InvalidArgumentException('لا يمكن سحب صلاحية المدير من الحساب الحالي أثناء الجلسة.');
                 }
             }
@@ -122,11 +123,12 @@ class AdminController extends BaseController
             $saved = $this->model->saveRecord($table, $record, $id);
 
             // ✅ Audit
+            $savedPk = $saved[$this->primaryKeyOf($table)] ?? null;
             $this->audit->log(
                 $this->userId, $this->username,
                 $id === null ? 'CREATE' : 'UPDATE',
                 $table,
-                (int) ($saved[$this->primaryKeyOf($table)] ?? 0),
+                $savedPk !== null ? (string) $savedPk : null,
                 $oldValues, $saved
             );
 
@@ -148,9 +150,9 @@ class AdminController extends BaseController
     {
         try {
             $table = $this->sanitizeText($this->getField($data, 'table'), 'table', 120);
-            $id = $this->sanitizeInteger($this->getField($data, 'id'), 'id', 1);
+            $id = $this->sanitizeIdentifier($this->getField($data, 'id'), 'id');
 
-            if ($table === 'users' && $id === $this->userId) {
+            if ($table === 'users' && (string) $id === (string) $this->userId) {
                 throw new InvalidArgumentException('لا يمكن حذف الحساب الحالي المستخدم في الجلسة.');
             }
 
@@ -159,7 +161,7 @@ class AdminController extends BaseController
 
             $this->model->deleteRecord($table, $id);
 
-            $this->audit->log($this->userId, $this->username, 'DELETE', $table, $id, $oldValues, null);
+            $this->audit->log($this->userId, $this->username, 'DELETE', $table, (string) $id, $oldValues, null);
 
             $this->success(null, 'تم حذف السجل بنجاح.');
         } catch (InvalidArgumentException $e) {
@@ -203,10 +205,10 @@ class AdminController extends BaseController
     public function changeUserPassword($data): void
     {
         try {
-            $targetId = $this->sanitizeInteger($this->getField($data, 'user_id'), 'user_id', 1);
+            $targetId = $this->sanitizeIdentifier($this->getField($data, 'user_id'), 'user_id');
             $newPass  = (string) $this->getField($data, 'new_password', '');
             $this->model->changeUserPassword($targetId, $newPass);
-            $this->audit->log($this->userId, $this->username, 'UPDATE', 'users', $targetId, null, ['action' => 'password_changed']);
+            $this->audit->log($this->userId, $this->username, 'UPDATE', 'users', (string) $targetId, null, ['action' => 'password_changed']);
             $this->success(null, 'تم تغيير كلمة المرور بنجاح.');
         } catch (InvalidArgumentException $e) {
             $this->error($e->getMessage(), 422);
@@ -219,13 +221,13 @@ class AdminController extends BaseController
     public function toggleUser($data): void
     {
         try {
-            $targetId = $this->sanitizeInteger($this->getField($data, 'user_id'), 'user_id', 1);
-            if ($targetId === $this->userId) {
+            $targetId = $this->sanitizeIdentifier($this->getField($data, 'user_id'), 'user_id');
+            if ((string) $targetId === (string) $this->userId) {
                 throw new InvalidArgumentException('لا يمكن تعطيل الحساب الحالي.');
             }
             $active = filter_var($this->getField($data, 'active', true), FILTER_VALIDATE_BOOLEAN);
             $this->model->toggleUserActive($targetId, $active);
-            $this->audit->log($this->userId, $this->username, 'UPDATE', 'users', $targetId, null, ['is_active' => $active]);
+            $this->audit->log($this->userId, $this->username, 'UPDATE', 'users', (string) $targetId, null, ['is_active' => $active]);
             $this->success(null, $active ? 'تم تفعيل المستخدم.' : 'تم تعطيل المستخدم.');
         } catch (InvalidArgumentException $e) {
             $this->error($e->getMessage(), 422);
@@ -239,10 +241,10 @@ class AdminController extends BaseController
     public function cancelInvoice($data): void
     {
         try {
-            $invoiceId = $this->sanitizeInteger($this->getField($data, 'invoice_id'), 'invoice_id', 1);
+            $invoiceId = $this->sanitizeIdentifier($this->getField($data, 'invoice_id'), 'invoice_id');
             $reason    = $this->sanitizeText($this->getField($data, 'reason', 'بدون سبب محدد'), 'reason', 255, true);
             $row = $this->model->cancelInvoice($invoiceId, $this->userId, $reason);
-            $this->audit->log($this->userId, $this->username, 'CANCEL', 'invoices', $invoiceId, null, ['reason' => $reason]);
+            $this->audit->log($this->userId, $this->username, 'CANCEL', 'invoices', (string) $invoiceId, null, ['reason' => $reason]);
             $this->success(['invoice' => $row], 'تم إلغاء الفاتورة بنجاح.');
         } catch (InvalidArgumentException $e) {
             $this->error($e->getMessage(), 422);
@@ -255,10 +257,10 @@ class AdminController extends BaseController
     public function cancelVisit($data): void
     {
         try {
-            $visitId = $this->sanitizeInteger($this->getField($data, 'visit_id'), 'visit_id', 1);
+            $visitId = $this->sanitizeIdentifier($this->getField($data, 'visit_id'), 'visit_id');
             $reason  = $this->sanitizeText($this->getField($data, 'reason', 'بدون سبب محدد'), 'reason', 255, true);
             $row = $this->model->cancelVisit($visitId, $this->userId, $reason);
-            $this->audit->log($this->userId, $this->username, 'CANCEL', 'visits', $visitId, null, ['reason' => $reason]);
+            $this->audit->log($this->userId, $this->username, 'CANCEL', 'visits', (string) $visitId, null, ['reason' => $reason]);
             $this->success(['visit' => $row], 'تم إلغاء الزيارة بنجاح.');
         } catch (InvalidArgumentException $e) {
             $this->error($e->getMessage(), 422);
@@ -276,7 +278,8 @@ class AdminController extends BaseController
             $title = $this->sanitizeText($this->getField($data, 'title'), 'title', 150);
             $body  = $this->sanitizeText($this->getField($data, 'body', ''), 'body', 500, true);
             $row = $this->model->broadcastNotification($role, $title, $body);
-            $this->audit->log($this->userId, $this->username, 'CREATE', 'notifications', (int) ($row['notification_id'] ?? 0), null, ['target_role' => $role, 'title' => $title]);
+            $notifId = $row['notification_id'] ?? null;
+            $this->audit->log($this->userId, $this->username, 'CREATE', 'notifications', $notifId !== null ? (string) $notifId : null, null, ['target_role' => $role, 'title' => $title]);
             $this->success(['notification' => $row], 'تم بث الإشعار إلى ' . $role);
         } catch (InvalidArgumentException $e) {
             $this->error($e->getMessage(), 422);
@@ -348,6 +351,26 @@ class AdminController extends BaseController
             if ($meta['table'] === $table) return $meta['primary_key'];
         }
         return 'id';
+    }
+
+    /**
+     * يتحقق ممّا إذا كان الدور المحدد هو دور المدير (role_code = 5).
+     * يدعم الأدوار المعرّفة بـ UUID (جديد) أو بـ INTEGER (قديم) بدون افتراض.
+     */
+    private function isAdminRole(string $roleId): bool
+    {
+        if ($roleId === '' ) return false;
+        if (preg_match('/^\d+$/', $roleId)) {
+            return (int) $roleId === 5;
+        }
+        try {
+            $stmt = $this->conn->prepare('SELECT role_code FROM Roles WHERE role_id = :id LIMIT 1');
+            $stmt->execute([':id' => $roleId]);
+            $code = $stmt->fetchColumn();
+            return $code !== false && (int) $code === 5;
+        } catch (Throwable $e) {
+            return false;
+        }
     }
 
     private function toArray(mixed $value): array

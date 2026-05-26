@@ -45,7 +45,7 @@ $path = trim($path, '/');
 
 $doctorHandler = function (string $methodName, bool $passData = true) use ($data): void {
     $userData = AuthMiddleware::checkAccess(['طبيب عام']);
-    $controller = new DoctorController((int) $userData['user_id']);
+    $controller = new DoctorController((string) $userData['user_id']);
 
     if ($passData) {
         $controller->{$methodName}($data);
@@ -57,7 +57,7 @@ $doctorHandler = function (string $methodName, bool $passData = true) use ($data
 
 $accountingHandler = function (string $methodName, bool $passData = true) use ($data): void {
     $userData = AuthMiddleware::checkAccess(['أمين صندوق']);
-    $controller = new AccountingController((int) $userData['user_id']);
+    $controller = new AccountingController((string) $userData['user_id']);
 
     if ($passData) {
         $controller->{$methodName}($data);
@@ -69,7 +69,7 @@ $accountingHandler = function (string $methodName, bool $passData = true) use ($
 
 $adminHandler = function (string $methodName, bool $passData = true) use ($data): void {
     $userData = AuthMiddleware::checkAccess(['مدير النظام']);
-    $controller = new AdminController((int) $userData['user_id']);
+    $controller = new AdminController((string) $userData['user_id']);
 
     if ($passData) {
         $controller->{$methodName}($data);

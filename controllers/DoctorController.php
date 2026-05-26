@@ -5,9 +5,9 @@ class DoctorController extends BaseController
 {
     private PDO $conn;
     private DoctorModel $model;
-    private int $doctor_id;
+    private string $doctor_id;
 
-    public function __construct(int $doctor_id)
+    public function __construct(string $doctor_id)
     {
         $database = new Database();
         $this->conn = $database->getConnection();

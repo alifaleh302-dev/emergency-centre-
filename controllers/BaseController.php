@@ -104,6 +104,35 @@ class BaseController
         return $intValue;
     }
 
+    /**
+     * Sanitize a primary-key identifier that may be either a UUID string
+     * or a positive integer. Returns the cleaned value as a string,
+     * suitable for binding against UUID or integer PostgreSQL columns.
+     */
+    protected function sanitizeIdentifier($value, string $fieldName): string
+    {
+        if ($value === null) {
+            throw new InvalidArgumentException("الحقل {$fieldName} مطلوب.");
+        }
+
+        $stringValue = trim((string) $value);
+        if ($stringValue === '') {
+            throw new InvalidArgumentException("الحقل {$fieldName} مطلوب.");
+        }
+
+        // UUID v1-v5 (lowercased or uppercased, with hyphens)
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $stringValue)) {
+            return strtolower($stringValue);
+        }
+
+        // Positive integer fallback (for legacy integer PKs)
+        if (preg_match('/^\d+$/', $stringValue) && (int) $stringValue >= 1) {
+            return $stringValue;
+        }
+
+        throw new InvalidArgumentException("الحقل {$fieldName} غير صالح.");
+    }
+
     protected function extractId($rawValue, string $fieldName): int
     {
         $normalized = preg_replace('/\D+/', '', (string) $rawValue);

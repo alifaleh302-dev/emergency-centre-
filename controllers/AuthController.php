@@ -58,7 +58,8 @@ class AuthController extends BaseController
                 'iss' => 'EmergencyCenter',
                 'exp' => time() + (60 * 60 * 8),
                 'data' => [
-                    'user_id' => (int) $user['user_id'],
+                    // المعرّف في النظام على شكل UUID جديد، لذا نحفظه كـ string
+                    'user_id' => (string) $user['user_id'],
                     'name' => (string) $user['full_name'],
                     'job' => (string) $user['role_name'],
                 ],
@@ -67,7 +68,7 @@ class AuthController extends BaseController
             $jwt = JWT::encode($tokenPayload);
 
             session_regenerate_id(true);
-            $_SESSION['user_id'] = (int) $user['user_id'];
+            $_SESSION['user_id'] = (string) $user['user_id'];
             $_SESSION['name'] = (string) $user['full_name'];
             $_SESSION['job'] = (string) $user['role_name'];
             $_SESSION['session_fingerprint'] = hash('sha256', (string) ($_SERVER['HTTP_USER_AGENT'] ?? 'unknown-agent'));

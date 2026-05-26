@@ -33,7 +33,7 @@ class AuthMiddleware
             self::deny('ليس لديك صلاحية للوصول إلى هذا المورد.', 403);
         }
 
-        $_SESSION['user_id'] = (int) $decoded['data']['user_id'];
+        $_SESSION['user_id'] = (string) $decoded['data']['user_id'];
         $_SESSION['name'] = (string) $decoded['data']['name'];
         $_SESSION['job'] = (string) $decoded['data']['job'];
         $_SESSION['session_fingerprint'] = self::buildFingerprint();

@@ -7,9 +7,9 @@ class AccountingController extends BaseController
 {
     private PDO $conn;
     private AccountingModel $model;
-    private int $cashier_id;
+    private string $cashier_id;
 
-    public function __construct(int $cashier_id)
+    public function __construct(string $cashier_id)
     {
         $database = new Database();
         $this->conn = $database->getConnection();

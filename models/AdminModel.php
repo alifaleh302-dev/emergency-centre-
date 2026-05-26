@@ -252,12 +252,16 @@ class AdminModel
         ];
     }
 
-    public function getRecord(string $table, int $id): array
+    /**
+     * جلب سجل واحد بواسطة المفتاح الأساسي.
+     * يقبل المعرّف كـ string أو int (لدعم UUID و SERIAL على حدّ سواء).
+     */
+    public function getRecord(string $table, int|string $id): array
     {
         $meta = $this->requireTableMeta($table);
         $pk = $meta['primary_key'];
         $stmt = $this->conn->prepare('SELECT * FROM ' . $this->quoteIdentifier($table) . ' WHERE ' . $this->quoteIdentifier($pk) . ' = :id LIMIT 1');
-        $stmt->execute([':id' => $id]);
+        $stmt->execute([':id' => (string) $id]);
         $row = $stmt->fetch();
         if (!$row) {
             throw new InvalidArgumentException('السجل المطلوب غير موجود.');
@@ -268,7 +272,11 @@ class AdminModel
         return $row;
     }
 
-    public function saveRecord(string $table, array $record, ?int $id = null): array
+    /**
+     * حفظ سجل (INSERT/UPDATE) مع دعم المفاتيح UUID و SERIAL
+     * + إنشاء/تحديث تلقائي لـ created_at / updated_at
+     */
+    public function saveRecord(string $table, array $record, int|string|null $id = null): array
     {
         $meta = $this->requireTableMeta($table);
         $pk = $meta['primary_key'];
@@ -277,7 +285,13 @@ class AdminModel
 
         $prepared = [];
         foreach ($columns as $columnName => $column) {
+            // تجاهل الأعمدة المدارة تلقائياً من قاعدة البيانات:
+            // (أ) المفتاح الأساسي بواجد توليد تلقائي (nextval / gen_random_uuid / uuid_generate_v4)
+            // (ب) أعمدة الطوابع الزمنية created_at / updated_at
             if ($columnName === $pk && $column['auto_increment']) {
+                continue;
+            }
+            if (in_array($columnName, ['created_at', 'updated_at'], true)) {
                 continue;
             }
             if (!array_key_exists($columnName, $record)) {
@@ -288,6 +302,7 @@ class AdminModel
             if ($table === 'users' && $columnName === 'password_hash') {
                 $value = trim((string) $value);
                 if ($value === '') {
+                    // عند التعديل نترك القديمة، عند الإنشاء سيفشل NOT NULL ويعيد خطأ واضحاً
                     continue;
                 }
                 $prepared[$columnName] = password_hash($value, PASSWORD_BCRYPT);
@@ -302,6 +317,9 @@ class AdminModel
                 if ($columnName === $pk && $column['auto_increment']) {
                     continue;
                 }
+                if (in_array($columnName, ['created_at', 'updated_at'], true)) {
+                    continue;
+                }
                 if (!$column['nullable'] && !$column['has_default'] && !array_key_exists($columnName, $prepared)) {
                     throw new InvalidArgumentException('الحقل ' . ($column['label'] ?? $columnName) . ' مطلوب.');
                 }
@@ -311,40 +329,59 @@ class AdminModel
                 throw new InvalidArgumentException('لا توجد بيانات صالحة للحفظ.');
             }
 
+            // بناء الأعمدة والعلامات، مع إضافة created_at / updated_at تلقائياً إن وجدت
             $insertColumns = array_keys($prepared);
+            $columnExpressions = array_map(fn(string $columnName) => $this->quoteIdentifier($columnName), $insertColumns);
             $placeholders = array_map(fn(string $columnName) => ':' . $columnName, $insertColumns);
+
+            foreach (['created_at', 'updated_at'] as $tsColumn) {
+                if (isset($columns[$tsColumn])) {
+                    $columnExpressions[] = $this->quoteIdentifier($tsColumn);
+                    $placeholders[] = 'NOW()';
+                }
+            }
+
             $sql = 'INSERT INTO ' . $this->quoteIdentifier($table)
-                . ' (' . implode(', ', array_map([$this, 'quoteIdentifier'], $insertColumns)) . ')'
+                . ' (' . implode(', ', $columnExpressions) . ')'
                 . ' VALUES (' . implode(', ', $placeholders) . ') RETURNING ' . $this->quoteIdentifier($pk);
             $stmt = $this->conn->prepare($sql);
             $stmt->execute($this->prefixParams($prepared));
-            $newId = (int) $stmt->fetchColumn();
-            return $this->getRecord($table, $newId);
+            // لا نحول إلى int لأن المفاتيح في النظام على شكل UUID (string)
+            $newId = $stmt->fetchColumn();
+            if ($newId === false || $newId === null || $newId === '') {
+                throw new RuntimeException('تعذر الحصول على معرّف السجل الجديد.');
+            }
+            return $this->getRecord($table, (string) $newId);
         }
 
         if (!$this->recordExists($table, $pk, $id)) {
             throw new InvalidArgumentException('السجل المطلوب تعديله غير موجود.');
         }
 
-        if (empty($prepared)) {
-            return $this->getRecord($table, (int) $id);
-        }
-
+        // عند التحديث: حتّى لو لم رسالة حقول أخرى، على الأقل نحدّث updated_at
         $setClauses = [];
         foreach (array_keys($prepared) as $columnName) {
             $setClauses[] = $this->quoteIdentifier($columnName) . ' = :' . $columnName;
         }
+        if (isset($columns['updated_at'])) {
+            $setClauses[] = $this->quoteIdentifier('updated_at') . ' = NOW()';
+        }
+
+        if (empty($setClauses)) {
+            return $this->getRecord($table, (string) $id);
+        }
+
         $sql = 'UPDATE ' . $this->quoteIdentifier($table)
             . ' SET ' . implode(', ', $setClauses)
             . ' WHERE ' . $this->quoteIdentifier($pk) . ' = :_id';
         $params = $this->prefixParams($prepared);
-        $params[':_id'] = $id;
+        $params[':_id'] = (string) $id;
         $stmt = $this->conn->prepare($sql);
         $stmt->execute($params);
-        return $this->getRecord($table, (int) $id);
+        return $this->getRecord($table, (string) $id);
     }
 
-    public function deleteRecord(string $table, int $id): void
+    public function deleteRecord(string $table, int|string $id): void
     {
         $meta = $this->requireTableMeta($table);
         $pk = $meta['primary_key'];
@@ -353,7 +390,7 @@ class AdminModel
         }
 
         $stmt = $this->conn->prepare('DELETE FROM ' . $this->quoteIdentifier($table) . ' WHERE ' . $this->quoteIdentifier($pk) . ' = :id');
-        $stmt->execute([':id' => $id]);
+        $stmt->execute([':id' => (string) $id]);
     }
 
     private function getTableMeta(string $table): array
@@ -382,7 +419,7 @@ class AdminModel
             ];
         }
 
-        $columnStmt = $this->conn->prepare("SELECT column_name, data_type, is_nullable, column_default, udt_name
+        $columnStmt = $this->conn->prepare("SELECT column_name, data_type, is_nullable, column_default, udt_name, is_identity
                                            FROM information_schema.columns
                                            WHERE table_schema='public' AND table_name=:table
                                            ORDER BY ordinal_position ASC");
@@ -405,7 +442,12 @@ class AdminModel
                 'nullable' => $row['is_nullable'] === 'YES',
                 'default' => $row['column_default'],
                 'has_default' => $row['column_default'] !== null,
-                'auto_increment' => is_string($row['column_default']) && str_contains((string) $row['column_default'], 'nextval('),
+                // يعرف العمود على أنه "تلقائي" إذا كان يستخدم:
+                //   - SERIAL/BIGSERIAL  (nextval)
+                //   - UUID تلقائي    (gen_random_uuid / uuid_generate_v4)
+                //   - IDENTITY columns (column_default + identity_generation)
+                'auto_increment' => $this->isAutoGeneratedDefault((string) ($row['column_default'] ?? ''))
+                    || (isset($row['is_identity']) && $row['is_identity'] === 'YES'),
                 'is_primary' => $name === $primaryKey,
                 'is_foreign' => isset($foreignKeys[$name]),
                 'foreign' => $foreignKeys[$name] ?? null,
@@ -475,13 +517,13 @@ class AdminModel
         throw new InvalidArgumentException('الجدول المطلوب غير مسموح.');
     }
 
-    private function recordExists(string $table, string $pk, ?int $id): bool
+    private function recordExists(string $table, string $pk, int|string|null $id): bool
     {
-        if ($id === null) {
+        if ($id === null || $id === '') {
             return false;
         }
         $stmt = $this->conn->prepare('SELECT 1 FROM ' . $this->quoteIdentifier($table) . ' WHERE ' . $this->quoteIdentifier($pk) . ' = :id LIMIT 1');
-        $stmt->execute([':id' => $id]);
+        $stmt->execute([':id' => (string) $id]);
         return (bool) $stmt->fetchColumn();
     }
 
@@ -549,12 +591,29 @@ class AdminModel
         return trim(str_replace('_', ' ', $value));
     }
 
+    /**
+     * يتحقّق إذا كان العمود تديره قاعدة البيانات تلقائياً
+     * (لا ينبغي عرضه في نماذج الإدخال).
+     */
     private function isSystemManagedColumn(string $name, mixed $default): bool
     {
-        if ($name === 'created_at') {
+        if (in_array($name, ['created_at', 'updated_at'], true)) {
             return true;
         }
-        return is_string($default) && str_contains($default, 'nextval(');
+        return is_string($default) && $this->isAutoGeneratedDefault($default);
+    }
+
+    /**
+     * تعرّف الدوال الافتراضية التي تولّد قيم المفاتيح تلقائياً في PostgreSQL.
+     */
+    private function isAutoGeneratedDefault(string $default): bool
+    {
+        if ($default === '') return false;
+        $normalized = strtolower($default);
+        return str_contains($normalized, 'nextval(')
+            || str_contains($normalized, 'gen_random_uuid')
+            || str_contains($normalized, 'uuid_generate_v')
+            || str_contains($normalized, 'identity');
     }
 
     // ========================================================================
@@ -700,36 +759,36 @@ class AdminModel
     /**
      * تحديث كلمة مرور مستخدم
      */
-    public function changeUserPassword(int $userId, string $newPassword): bool
+    public function changeUserPassword(int|string $userId, string $newPassword): bool
     {
         if (mb_strlen($newPassword) < 6) {
             throw new InvalidArgumentException('كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل.');
         }
         $hash = password_hash($newPassword, PASSWORD_BCRYPT);
-        $stmt = $this->conn->prepare('UPDATE Users SET password_hash = :h WHERE user_id = :id');
-        return $stmt->execute([':h' => $hash, ':id' => $userId]);
+        $stmt = $this->conn->prepare('UPDATE Users SET password_hash = :h, updated_at = NOW() WHERE user_id = :id');
+        return $stmt->execute([':h' => $hash, ':id' => (string) $userId]);
     }
 
     /**
      * تفعيل / تعطيل مستخدم
      */
-    public function toggleUserActive(int $userId, bool $active): bool
+    public function toggleUserActive(int|string $userId, bool $active): bool
     {
-        $stmt = $this->conn->prepare('UPDATE Users SET is_active = :a WHERE user_id = :id');
-        return $stmt->execute([':a' => $active ? 'true' : 'false', ':id' => $userId]);
+        $stmt = $this->conn->prepare('UPDATE Users SET is_active = :a, updated_at = NOW() WHERE user_id = :id');
+        return $stmt->execute([':a' => $active ? 'true' : 'false', ':id' => (string) $userId]);
     }
 
     /**
      * إلغاء فاتورة (Soft delete)
      */
-    public function cancelInvoice(int $invoiceId, int $adminId, string $reason): array
+    public function cancelInvoice(int|string $invoiceId, int|string $adminId, string $reason): array
     {
         $stmt = $this->conn->prepare(
-            'UPDATE Invoices SET cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r
+            'UPDATE Invoices SET cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r, updated_at = NOW()
              WHERE invoice_id = :id AND cancelled_at IS NULL
              RETURNING invoice_id, serial_number, net_amount'
         );
-        $stmt->execute([':id' => $invoiceId, ':by' => $adminId, ':r' => mb_substr($reason, 0, 255)]);
+        $stmt->execute([':id' => (string) $invoiceId, ':by' => (string) $adminId, ':r' => mb_substr($reason, 0, 255)]);
         $row = $stmt->fetch();
         if (!$row) {
             throw new InvalidArgumentException('الفاتورة غير موجودة أو ملغاة مسبقاً.');
@@ -740,23 +799,23 @@ class AdminModel
     /**
      * إلغاء زيارة
      */
-    public function cancelVisit(int $visitId, int $adminId, string $reason): array
+    public function cancelVisit(int|string $visitId, int|string $adminId, string $reason): array
     {
         $stmt = $this->conn->prepare(
-            "UPDATE Visits SET status = 'Cancelled', cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r
+            "UPDATE Visits SET status = 'Cancelled', cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r, updated_at = NOW()
              WHERE visit_id = :id AND cancelled_at IS NULL
              RETURNING visit_id, status"
         );
         try {
-            $stmt->execute([':id' => $visitId, ':by' => $adminId, ':r' => mb_substr($reason, 0, 255)]);
+            $stmt->execute([':id' => (string) $visitId, ':by' => (string) $adminId, ':r' => mb_substr($reason, 0, 255)]);
         } catch (PDOException $e) {
             // إذا كانت قيمة enum غير مضافة بعد، نكتفي بتعليم cancelled_at
             $fallback = $this->conn->prepare(
-                "UPDATE Visits SET cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r
+                "UPDATE Visits SET cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r, updated_at = NOW()
                  WHERE visit_id = :id AND cancelled_at IS NULL
                  RETURNING visit_id, status"
             );
-            $fallback->execute([':id' => $visitId, ':by' => $adminId, ':r' => mb_substr($reason, 0, 255)]);
+            $fallback->execute([':id' => (string) $visitId, ':by' => (string) $adminId, ':r' => mb_substr($reason, 0, 255)]);
             $row = $fallback->fetch();
             if (!$row) {
                 throw new InvalidArgumentException('الزيارة غير موجودة أو ملغاة مسبقاً.');
