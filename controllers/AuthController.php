@@ -58,7 +58,7 @@ class AuthController extends BaseController
                 'iss' => 'EmergencyCenter',
                 'exp' => time() + (60 * 60 * 8),
                 'data' => [
-                    // المعرّف في النظام على شكل UUID جديد، لذا نحفظه كـ string
+                    // المعرّف أصبح INT (SERIAL) بعد الترحيل 003 - ولكن نحفظه كـ string في JWT/Session
                     'user_id' => (string) $user['user_id'],
                     'name' => (string) $user['full_name'],
                     'job' => (string) $user['role_name'],

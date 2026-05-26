@@ -355,14 +355,11 @@ class AdminController extends BaseController
 
     /**
      * يتحقق ممّا إذا كان الدور المحدد هو دور المدير (role_code = 5).
-     * يدعم الأدوار المعرّفة بـ UUID (جديد) أو بـ INTEGER (قديم) بدون افتراض.
+     * بعد الترحيل 003: role_id أصبح INT ويتطابق مع role_code.
      */
     private function isAdminRole(string $roleId): bool
     {
-        if ($roleId === '' ) return false;
-        if (preg_match('/^\d+$/', $roleId)) {
-            return (int) $roleId === 5;
-        }
+        if ($roleId === '' || !preg_match('/^\d+$/', $roleId)) return false;
         try {
             $stmt = $this->conn->prepare('SELECT role_code FROM Roles WHERE role_id = :id LIMIT 1');
             $stmt->execute([':id' => $roleId]);
