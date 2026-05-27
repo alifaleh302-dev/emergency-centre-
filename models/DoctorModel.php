@@ -140,8 +140,12 @@ class DoctorModel
 
     public function createPendingInvoice(int $visitId): int
     {
+        // الفاتورة المعلقة لا تملك سنداً محاسبياً نهائياً بعد، لكن المخطط الحالي
+        // يفرض serial_number موجباً وغير صفري. لذلك نولّد رقماً مؤقتاً موجباً
+        // لحين السداد، ثم يتم استبداله بالرقم الرسمي داخل AccountingModel::processPayment.
         $sql = "INSERT INTO Invoices (serial_number, visit_id, total, exemption_value, net_amount)
-                VALUES (0, :visit_id, 0, 0, 0)";
+                SELECT COALESCE(MAX(serial_number), 0) + 1, :visit_id, 0, 0, 0
+                FROM Invoices";
 
         return $this->insertAndGetId($sql, [':visit_id' => $visitId], 'invoice_id');
     }
