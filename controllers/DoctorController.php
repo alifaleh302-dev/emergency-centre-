@@ -5,14 +5,21 @@ class DoctorController extends BaseController
 {
     private PDO $conn;
     private DoctorModel $model;
-    private string $doctor_id;
+    private int $doctor_id;
 
     public function __construct(string $doctor_id)
     {
         $database = new Database();
         $this->conn = $database->getConnection();
         $this->model = new DoctorModel($this->conn, $database->getDriver());
-        $this->doctor_id = $doctor_id;
+        // doctor_id يصلنا كنص من الـ JWT لذا نحوّله إلى int ليطابق توقيعات الـ DoctorModel
+        // (الذي يتوقع int مع تفعيل strict_types، وإلا سيُرفع TypeError ويظهر للمستخدم
+        // الرسالة العامة "حدث خطأ أثناء معالجة طلب الطبيب").
+        $normalized = (int) preg_replace('/\D+/', '', $doctor_id);
+        if ($normalized <= 0) {
+            throw new InvalidArgumentException('معرّف الطبيب غير صالح.');
+        }
+        $this->doctor_id = $normalized;
     }
 
     public function newPatient($data): void
