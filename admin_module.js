@@ -118,7 +118,7 @@ const Admin = {
             patients: 'bi-person-vcard', visits: 'bi-clipboard2-pulse',
             invoices: 'bi-receipt', invoice_details: 'bi-list-check',
             document_types: 'bi-file-earmark-text', services_master: 'bi-bandaid',
-            service_categories: 'bi-diagram-3', emergency_case_types: 'bi-heart-pulse',
+            service_categories: 'bi-diagram-3', departments: 'bi-building', emergency_case_types: 'bi-heart-pulse',
             medical_results: 'bi-clipboard2-data', notifications: 'bi-bell',
             examination_tickets: 'bi-ticket-perforated', audit_logs: 'bi-shield-check',
         };
@@ -463,7 +463,7 @@ const Admin = {
     renderTableScreen: function(tableMeta, rows, meta) {
         const visibleColumns = Object.values(tableMeta.columns).filter(c => c.visible_in_list !== false);
         const filterFields = Object.values(tableMeta.columns)
-            .filter(c => c.name !== 'password_hash')
+            .filter(c => c.name !== 'password_hash' && c.visible_in_list !== false)
             .map(c => this.renderFilterField(c)).join('');
 
         const rowsHtml = rows.length
@@ -803,7 +803,9 @@ const Admin = {
                 </div>
             </div>
         `);
-        new bootstrap.Modal(document.getElementById('adminCrudModal')).show();
+        const modalEl = document.getElementById('adminCrudModal');
+        new bootstrap.Modal(modalEl).show();
+        await this.refreshLiveForeignOptions(tableMeta, record);
     },
 
     renderFormField: function(tableMeta, column, value) {
@@ -822,13 +824,14 @@ const Admin = {
                 </div>`;
         }
 
-        if (column.foreign && column.foreign_options?.length) {
+        if (column.foreign) {
+            const initialOptions = column.foreign_options || [];
             return `
                 <div class="col-12 col-md-6">
                     <label class="form-label fw-bold">${label}</label>
-                    <select id="${id}" class="form-select">
+                    <select id="${id}" class="form-select" data-live-foreign="1" data-current-value="${this.escapeHtml(String(currentValue ?? ''))}" data-ref-table="${this.escapeHtml(String(column.foreign.table))}" data-ref-column="${this.escapeHtml(String(column.foreign.column))}">
                         <option value="">${column.nullable ? 'اختياري' : 'اختر قيمة'}</option>
-                        ${column.foreign_options.map(o => `<option value="${o.value}" ${String(currentValue)===String(o.value)?'selected':''}>${this.escapeHtml(String(o.label))}</option>`).join('')}
+                        ${initialOptions.map(o => `<option value="${o.value}" ${String(currentValue)===String(o.value)?'selected':''}>${this.escapeHtml(String(o.label))}</option>`).join('')}
                     </select>
                 </div>`;
         }
@@ -879,6 +882,29 @@ const Admin = {
         const raw = String(value);
         if (column.data_type.includes('timestamp')) return raw.replace(' ', 'T').slice(0,16);
         return raw.slice(0,10);
+    },
+
+    refreshLiveForeignOptions: async function(tableMeta, record = {}) {
+        const foreignColumns = Object.values(tableMeta.columns).filter(c => c.foreign);
+        if (!foreignColumns.length) return;
+
+        await Promise.all(foreignColumns.map(async (column) => {
+            const selectEl = document.getElementById(`field-${column.name}`);
+            if (!selectEl) return;
+
+            const response = await Core.apiCall('admin/reference_options', 'POST', {
+                table: tableMeta.table,
+                column: column.name,
+            });
+
+            if (!response?.success) return;
+            const currentValue = record?.[column.name] ?? selectEl.dataset.currentValue ?? '';
+            const placeholder = column.nullable ? 'اختياري' : 'اختر قيمة';
+            const options = response.data?.options || [];
+            selectEl.innerHTML = [`<option value="">${placeholder}</option>`]
+                .concat(options.map(o => `<option value="${o.value}" ${String(currentValue)===String(o.value)?'selected':''}>${this.escapeHtml(String(o.label))}</option>`))
+                .join('');
+        }));
     },
 
     saveRecord: async function(tableName, id = null) {

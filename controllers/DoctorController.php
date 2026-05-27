@@ -287,25 +287,32 @@ class DoctorController extends BaseController
     {
         try {
             $services = $this->model->getAvailableServices();
-            $grouped = ['lab' => [], 'ray' => [], 'sur' => []];
+            $departments = [];
 
             foreach ($services as $service) {
-                $item = [
-                    'id' => $service['service_id'],
-                    'name' => $service['service_name'],
-                ];
+                $departmentId = isset($service['department_id']) ? (int) $service['department_id'] : 0;
+                if ($departmentId <= 0) {
+                    continue;
+                }
 
-                $department = mb_strtolower((string) $service['department']);
-                if (str_contains($department, 'laboratory') || str_contains($department, 'مختبر')) {
-                    $grouped['lab'][] = $item;
-                } elseif (str_contains($department, 'radiology') || str_contains($department, 'أشعة')) {
-                    $grouped['ray'][] = $item;
-                } elseif (str_contains($department, 'nursing') || str_contains($department, 'تمريض')) {
-                    $grouped['sur'][] = $item;
+                if (!isset($departments[$departmentId])) {
+                    $departments[$departmentId] = [
+                        'id' => $departmentId,
+                        'name' => $service['department_name'] ?? 'قسم غير محدد',
+                        'code' => $service['department_code'] ?? ('dept_' . $departmentId),
+                        'services' => [],
+                    ];
+                }
+
+                if (!empty($service['service_id'])) {
+                    $departments[$departmentId]['services'][] = [
+                        'id' => (int) $service['service_id'],
+                        'name' => $service['service_name'],
+                    ];
                 }
             }
 
-            $this->success($grouped);
+            $this->success(array_values($departments));
         } catch (Throwable $exception) {
             $this->error('تعذر جلب قائمة الخدمات حالياً.', 500);
         }
@@ -325,13 +332,29 @@ class DoctorController extends BaseController
             }
 
             $orderPayload = $this->getField($data, 'order');
-            $labOrders = (is_object($orderPayload) && isset($orderPayload->lab) && is_array($orderPayload->lab)) ? $orderPayload->lab : [];
-            $rayOrders = (is_object($orderPayload) && isset($orderPayload->ray) && is_array($orderPayload->ray)) ? $orderPayload->ray : [];
-            $surOrders = (is_object($orderPayload) && isset($orderPayload->sur) && is_array($orderPayload->sur)) ? $orderPayload->sur : [];
+            $orderGroups = [];
+            if (is_object($orderPayload)) {
+                foreach (get_object_vars($orderPayload) as $groupItems) {
+                    if (is_array($groupItems)) {
+                        $orderGroups[] = $groupItems;
+                    }
+                }
+            } elseif (is_array($orderPayload)) {
+                foreach ($orderPayload as $groupItems) {
+                    if (is_array($groupItems)) {
+                        $orderGroups[] = $groupItems;
+                    }
+                }
+            }
+
+            $flattenedOrders = [];
+            foreach ($orderGroups as $groupItems) {
+                $flattenedOrders = array_merge($flattenedOrders, $groupItems);
+            }
 
             $allOrderIds = array_values(array_unique(array_map(
                 'intval',
-                array_filter(array_merge($labOrders, $rayOrders, $surOrders), static fn ($value) => is_numeric($value) && (int) $value > 0)
+                array_filter($flattenedOrders, static fn ($value) => is_numeric($value) && (int) $value > 0)
             )));
 
             if (empty($allOrderIds)) {

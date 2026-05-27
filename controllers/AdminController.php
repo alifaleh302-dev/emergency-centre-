@@ -55,6 +55,22 @@ class AdminController extends BaseController
         }
     }
 
+    public function getReferenceOptions($data): void
+    {
+        try {
+            $table = $this->sanitizeText($this->getField($data, 'table'), 'table', 120);
+            $column = $this->sanitizeText($this->getField($data, 'column'), 'column', 120);
+            $this->success([
+                'options' => $this->model->getReferenceOptionsForField($table, $column),
+            ]);
+        } catch (InvalidArgumentException $e) {
+            $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            error_log('admin/reference_options: ' . $e->getMessage());
+            $this->error('تعذر جلب القيم المرجعية الحية.', 500);
+        }
+    }
+
     // -------------------- CRUD --------------------
     public function listRecords($data): void
     {

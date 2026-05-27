@@ -283,10 +283,22 @@ class DoctorModel
 
     public function getAvailableServices(): array
     {
-        $sql = "SELECT sm.service_id, sm.service_name, sc.department
-                FROM Services_Master sm
-                JOIN Service_Categories sc ON sm.category_id = sc.category_id
-                ORDER BY sm.service_name ASC";
+        $sql = "SELECT
+                    d.department_id,
+                    d.department_name,
+                    d.department_code,
+                    COALESCE(d.sort_order, 999) AS sort_order,
+                    sm.service_id,
+                    sm.service_name
+                FROM departments d
+                LEFT JOIN service_categories sc
+                    ON sc.department_id = d.department_id
+                   AND COALESCE(sc.is_active, TRUE) = TRUE
+                LEFT JOIN services_master sm
+                    ON sm.category_id = sc.category_id
+                   AND COALESCE(sm.is_active, TRUE) = TRUE
+                WHERE COALESCE(d.is_active, TRUE) = TRUE
+                ORDER BY COALESCE(d.sort_order, 999) ASC, d.department_name ASC, sm.service_name ASC";
         $stmt = $this->conn->query($sql);
         return $stmt->fetchAll();
     }

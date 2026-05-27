@@ -23,7 +23,7 @@ const DoctorData = {
 
     caseTypes: ["طوارئ باطنية", "تسمم", "سقوط", "حوادث سير", "حروق", "نوبة قلبية", "ضيق تنفس", "إصابة عمل", "نزيف", "أخرى"],
     districts: ["السبعين", "الوحدة", "عمران", "التحرير", "بني الحارث"],
-    availableServices: { lab: [], sur: [], ray: [] },
+    availableServices: [],
 
     // إعدادات الترويسة الديناميكية (تُجلب من السيرفر مرة واحدة عند الإقلاع)
     headerSettings: null
@@ -410,7 +410,7 @@ const Doctor = {
                             <div class="ticket-paper">
 
                                 <!-- ====== ترويسة رسمية ====== -->
-                                <div class="ticket-header">
+                                <div class="ticket-header ticket-header-print-only">
                                     <div class="ticket-header-side ticket-header-left">
                                         <div class="ticket-number-box">
                                             <span class="ticket-number-label">رقم التذكرة</span>
@@ -603,6 +603,7 @@ const Doctor = {
             gap: 16px; align-items: start;
             position: relative; z-index: 1;
         }
+        #closeVisitModal .ticket-header-print-only { display: none; }
         #closeVisitModal .ticket-header-side { font-size: 0.83rem; line-height: 1.75; }
         #closeVisitModal .ticket-header-left  { text-align: left; direction: ltr; }
         #closeVisitModal .ticket-header-right { text-align: right; }
@@ -668,9 +669,10 @@ const Doctor = {
         #closeVisitModal .ticket-divider {
             border: none;
             border-top: 2px double #198754;
-            margin: 18px 0 20px;
+            margin: 0 0 20px;
             opacity: 1;
         }
+        #closeVisitModal .ticket-header-print-only { display: none !important; }
 
         /* ====== جسم النموذج ====== */
         #closeVisitModal .ticket-body { font-size: 0.95rem; position: relative; z-index: 1; }
@@ -700,19 +702,25 @@ const Doctor = {
 
         /* ====== Rx / ملاحظات ====== */
         #closeVisitModal .ticket-rx-section {
-            display: flex; gap: 18px; margin-top: 22px;
-            align-items: flex-start; position: relative; z-index: 1;
+            display: block; margin-top: 22px;
+            position: relative; z-index: 1;
         }
         #closeVisitModal .ticket-rx-label {
-            font-size: 2.8rem; font-style: italic;
+            display: inline-block;
+            font-size: 2.3rem; font-style: italic;
             font-family: 'Georgia', 'Times New Roman', serif;
-            font-weight: 700; min-width: 70px;
+            font-weight: 700;
             color: #198754; line-height: 1;
             border-bottom: 3px solid #198754;
             padding-bottom: 4px;
+            margin-bottom: 14px;
         }
-        #closeVisitModal .ticket-rx-body { flex: 1; }
+        #closeVisitModal .ticket-rx-body { width: 100%; display: block; }
         #closeVisitModal .ticket-textarea {
+            display: block;
+            width: 100%;
+            min-height: 240px;
+            resize: vertical;
             border: 1.5px dashed #adb5bd;
             border-radius: 6px;
             background: rgba(255, 244, 179, 0.15);
@@ -786,7 +794,7 @@ const Doctor = {
             #closeVisitModal .ticket-header-right { text-align: center; direction: rtl; }
             #closeVisitModal .ticket-date-line { justify-content: center; }
             #closeVisitModal .ticket-title-box { font-size: 1rem; padding: 5px 18px; }
-            #closeVisitModal .ticket-rx-section { flex-direction: column; gap: 10px; }
+            #closeVisitModal .ticket-rx-section { display: block; }
             #closeVisitModal .ticket-rx-label {
                 min-width: auto; font-size: 1.8rem;
                 border-bottom: none; padding-bottom: 0;
@@ -848,6 +856,7 @@ const Doctor = {
                 font-weight: 800;
             }
             #closeVisitModal .ticket-divider { border-top-color: #000 !important; }
+            #closeVisitModal .ticket-header-print-only { display: grid !important; }
             #closeVisitModal .ticket-rx-label {
                 color: #000 !important;
                 border-bottom-color: #000 !important;
@@ -941,14 +950,14 @@ const Doctor = {
     // ============================================================
     // 4) الطلبات (Orders) - بدون تغيير جوهري
     // ============================================================
-    renderServiceCheckboxes: function(category, items) {
+    renderServiceCheckboxes: function(groupKey, items) {
         if (!items || items.length === 0) return `<div class="text-muted small">لا توجد خدمات في هذا القسم.</div>`;
         return `
         <div class="row g-2">
             ${items.map(item => `
-                <div class="col-md-6">
-                    <div class="form-check p-2 border rounded-3 hover-shadow bg-light">
-                        <input class="form-check-input ms-2" type="checkbox" value="${item.id}" data-cat="${category}" id="check_${item.id}">
+                <div class="col-12 col-md-6">
+                    <div class="form-check p-2 border rounded-3 hover-shadow bg-light h-100">
+                        <input class="form-check-input ms-2" type="checkbox" value="${item.id}" data-group="${groupKey}" id="check_${item.id}">
                         <label class="form-check-label small fw-bold" for="check_${item.id}">${item.name}</label>
                     </div>
                 </div>`).join('')}
@@ -959,9 +968,50 @@ const Doctor = {
         const existing = document.getElementById('ordersModal');
         if (existing) existing.remove();
 
+        const departments = Array.isArray(DoctorData.availableServices)
+            ? DoctorData.availableServices
+            : [];
+
+        const normalizeTabId = (dept, index) => {
+            const raw = String(dept.code || dept.id || index + 1).trim();
+            const safe = raw.replace(/[^a-zA-Z0-9_-]/g, '_');
+            return `dept-tab-${safe || index + 1}`;
+        };
+
+        const navTabs = departments.length
+            ? departments.map((dept, index) => {
+                const tabId = normalizeTabId(dept, index);
+                return `<li class="nav-item" role="presentation">
+                    <button class="nav-link ${index === 0 ? 'active' : ''} btn-sm px-4 fw-bold" data-bs-toggle="pill" data-bs-target="#${tabId}" type="button" role="tab">
+                        ${this._escapeHtml(dept.name || `قسم ${index + 1}`)}
+                    </button>
+                </li>`;
+            }).join('')
+            : '<li class="nav-item"><span class="nav-link disabled btn-sm px-4">لا توجد أقسام مفعلة</span></li>';
+
+        const tabPanels = departments.length
+            ? departments.map((dept, index) => {
+                const tabId = normalizeTabId(dept, index);
+                const groupKey = String(dept.code || `dept_${dept.id || index + 1}`).trim() || `dept_${index + 1}`;
+                return `<div class="tab-pane fade ${index === 0 ? 'show active' : ''}" id="${tabId}" role="tabpanel">
+                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+                        <div>
+                            <h6 class="mb-0 fw-bold text-primary">${this._escapeHtml(dept.name || `قسم ${index + 1}`)}</h6>
+                            <small class="text-muted">الخدمات المتاحة داخل هذا القسم</small>
+                        </div>
+                        <span class="badge bg-primary-subtle text-primary rounded-pill px-3 py-2">${dept.services.length} خدمة</span>
+                    </div>
+                    ${this.renderServiceCheckboxes(groupKey, dept.services)}
+                </div>`;
+            }).join('')
+            : `<div class="text-center text-muted py-5">
+                <i class="bi bi-inboxes fs-1 d-block mb-2"></i>
+                لا توجد أقسام مرتبطة بخدمات حالياً.
+            </div>`;
+
         const modalHTML = `
         <div class="modal fade" id="ordersModal" tabindex="-1">
-            <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content border-0 shadow-lg">
                     <div class="modal-header bg-primary text-white border-0 py-3">
                         <h5 class="modal-title fw-bold"><i class="bi bi-file-medical ms-2"></i>إرسال طلبات: ${name}</h5>
@@ -969,15 +1019,18 @@ const Doctor = {
                     </div>
                     <div class="modal-body p-4 bg-light">
                         <div class="card p-3 border-0 shadow-sm">
-                            <ul class="nav nav-pills mb-3 gap-2" id="pills-tab" role="tablist">
-                                <li class="nav-item"><button class="nav-link active btn-sm px-4 fw-bold" data-bs-toggle="pill" data-bs-target="#tab-lab">مختبر</button></li>
-                                <li class="nav-item"><button class="nav-link btn-sm px-4 fw-bold" data-bs-toggle="pill" data-bs-target="#tab-ray">أشعة</button></li>
-                                <li class="nav-item"><button class="nav-link btn-sm px-4 fw-bold" data-bs-toggle="pill" data-bs-target="#tab-sur">تمريض</button></li>
+                            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+                                <div>
+                                    <h6 class="fw-bold mb-1">الأقسام الطبية</h6>
+                                    <small class="text-muted">يتم عرض الأقسام المضافة فعلياً فقط، مع الخدمات التابعة لكل قسم مباشرة.</small>
+                                </div>
+                                <span class="badge bg-success-subtle text-success rounded-pill px-3 py-2">${departments.length} قسم</span>
+                            </div>
+                            <ul class="nav nav-pills mb-3 gap-2 flex-wrap" id="pills-tab" role="tablist">
+                                ${navTabs}
                             </ul>
-                            <div class="tab-content border p-3 rounded-3 bg-white" id="pills-tabContent" style="min-height: 200px;">
-                                <div class="tab-pane fade show active" id="tab-lab">${this.renderServiceCheckboxes('lab', DoctorData.availableServices.lab)}</div>
-                                <div class="tab-pane fade" id="tab-ray">${this.renderServiceCheckboxes('ray', DoctorData.availableServices.ray)}</div>
-                                <div class="tab-pane fade" id="tab-sur">${this.renderServiceCheckboxes('sur', DoctorData.availableServices.sur)}</div>
+                            <div class="tab-content border p-3 rounded-3 bg-white" id="pills-tabContent" style="min-height: 220px;">
+                                ${tabPanels}
                             </div>
                         </div>
                     </div>
@@ -993,13 +1046,17 @@ const Doctor = {
     },
 
     sendOrders: async function(id_vis) {
-        const payload = { id_vis: id_vis, order: { lab: [], sur: [], ray: [] } };
+        const payload = { id_vis: id_vis, order: {} };
+        let selectedCount = 0;
+
         document.querySelectorAll('#ordersModal input[type="checkbox"]:checked').forEach(chk => {
-            const cat = chk.getAttribute('data-cat');
-            payload.order[cat].push(parseInt(chk.value));
+            const groupKey = chk.getAttribute('data-group') || 'default';
+            if (!payload.order[groupKey]) payload.order[groupKey] = [];
+            payload.order[groupKey].push(parseInt(chk.value));
+            selectedCount += 1;
         });
 
-        if (payload.order.lab.length === 0 && payload.order.sur.length === 0 && payload.order.ray.length === 0) {
+        if (selectedCount === 0) {
             return Core.showAlert('يرجى اختيار طلب واحد على الأقل', 'warning');
         }
 

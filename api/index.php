@@ -115,6 +115,7 @@ $routes = [
     'admin/schema'           => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getSchema', false)],
     'admin/dashboard'        => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getDashboard', false)],
     'admin/dashboard_charts' => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getDashboardCharts', false)],
+    'admin/reference_options'=> ['methods' => ['POST'], 'handler' => fn () => $adminHandler('getReferenceOptions')],
     'admin/list'             => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('listRecords')],
     'admin/record'           => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('getRecord')],
     'admin/save'             => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('saveRecord')],
