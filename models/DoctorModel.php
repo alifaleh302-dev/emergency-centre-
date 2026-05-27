@@ -55,6 +55,30 @@ class DoctorModel
         return (bool) $stmt->fetchColumn();
     }
 
+    /**
+     * يتحقق ما إذا كان لدى المريض زيارة نشطة (مفتوحة) حالياً.
+     * يدعم قيد uq_visits_one_active_per_patient على مستوى التطبيق
+     * بإعطاء رسالة عربية واضحة قبل الوصول إلى محرك قاعدة البيانات.
+     */
+    public function hasActiveVisit(int $patientId): bool
+    {
+        $stmt = $this->conn->prepare(
+            "SELECT visit_id FROM Visits WHERE patient_id = :pid AND status = 'Active' LIMIT 1"
+        );
+        $stmt->execute([':pid' => $patientId]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    public function getActiveVisitIdForPatient(int $patientId): ?int
+    {
+        $stmt = $this->conn->prepare(
+            "SELECT visit_id FROM Visits WHERE patient_id = :pid AND status = 'Active' LIMIT 1"
+        );
+        $stmt->execute([':pid' => $patientId]);
+        $id = $stmt->fetchColumn();
+        return $id === false ? null : (int) $id;
+    }
+
     public function visitExists(int $visitId): bool
     {
         $stmt = $this->conn->prepare('SELECT visit_id FROM Visits WHERE visit_id = :visit_id LIMIT 1');
@@ -145,6 +169,41 @@ class DoctorModel
         ]);
     }
 
+    /**
+     * يغلق الزيارة بكتابة التشخيص النهائي + الملاحظات + اسم العيادة
+     * + بيانات الطبيب الذي قام بالإغلاق (محفوظة تاريخياً).
+     */
+    public function closeVisit(
+        int $visitId,
+        string $diagnosis,
+        string $finalNotes,
+        ?string $clinicName,
+        int $closedById,
+        string $closedByName
+    ): bool {
+        $sql = "UPDATE Visits SET
+                    diagnosis      = :diagnosis,
+                    final_notes    = :final_notes,
+                    clinic_name    = :clinic_name,
+                    closed_by      = :closed_by,
+                    closed_by_name = :closed_by_name,
+                    closed_at      = CURRENT_TIMESTAMP,
+                    status         = 'Completed'
+                WHERE visit_id = :visit_id";
+        $stmt = $this->conn->prepare($sql);
+        return $stmt->execute([
+            ':diagnosis'      => $diagnosis,
+            ':final_notes'    => $finalNotes,
+            ':clinic_name'    => $clinicName !== null && $clinicName !== '' ? $clinicName : null,
+            ':closed_by'      => $closedById,
+            ':closed_by_name' => $closedByName,
+            ':visit_id'       => $visitId,
+        ]);
+    }
+
+    /**
+     * تُبقى للتوافق الخلفي - تُحدث التشخيص فقط دون إغلاق.
+     */
     public function updateFinalDiagnosis(int $visitId, string $diagnosis): bool
     {
         $sql = "UPDATE Visits SET diagnosis = :diagnosis, status = 'Completed' WHERE visit_id = :visit_id";
@@ -153,6 +212,42 @@ class DoctorModel
             ':diagnosis' => $diagnosis,
             ':visit_id' => $visitId,
         ]);
+    }
+
+    /**
+     * يجلب البيانات اللازمة لتعبئة نافذة "إغلاق الزيارة" تلقائياً:
+     * اسم المريض، العمر، الجنس، نوع الحالة، التشخيص المبدئي، رقم/نوع التذكرة.
+     */
+    public function getVisitCloseData(int $visitId): ?array
+    {
+        $ageExpr = $this->driver === 'pgsql'
+            ? "DATE_PART('year', AGE(p.birth_date))"
+            : "TIMESTAMPDIFF(YEAR, p.birth_date, CURDATE())";
+
+        $sql = "SELECT
+                    v.visit_id,
+                    v.patient_id,
+                    v.type_case,
+                    v.diagnosis        AS initial_diagnosis,
+                    v.notes            AS initial_notes,
+                    p.full_name        AS patient_name,
+                    p.gender,
+                    p.place1,
+                    p.place2,
+                    {$ageExpr}::int    AS age,
+                    {$this->formatDate('v.created_at')} AS visit_date_hint,
+                    et.serial_number   AS ticket_serial,
+                    et.ticket_type     AS ticket_type,
+                    et.amount          AS ticket_amount
+                FROM Visits v
+                JOIN Patients p             ON v.patient_id = p.patient_id
+                LEFT JOIN Examination_Tickets et ON et.visit_id = v.visit_id
+                WHERE v.visit_id = :vid
+                LIMIT 1";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':vid' => $visitId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
     }
 
     public function getSentOrders(int $doctorId): array

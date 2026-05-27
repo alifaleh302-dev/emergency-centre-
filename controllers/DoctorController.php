@@ -6,12 +6,14 @@ class DoctorController extends BaseController
     private PDO $conn;
     private DoctorModel $model;
     private int $doctor_id;
+    private string $driver;
 
     public function __construct(string $doctor_id)
     {
         $database = new Database();
         $this->conn = $database->getConnection();
-        $this->model = new DoctorModel($this->conn, $database->getDriver());
+        $this->driver = $database->getDriver();
+        $this->model = new DoctorModel($this->conn, $this->driver);
         // doctor_id يصلنا كنص من الـ JWT لذا نحوّله إلى int ليطابق توقيعات الـ DoctorModel
         // (الذي يتوقع int مع تفعيل strict_types، وإلا سيُرفع TypeError ويظهر للمستخدم
         // الرسالة العامة "حدث خطأ أثناء معالجة طلب الطبيب").
@@ -20,6 +22,18 @@ class DoctorController extends BaseController
             throw new InvalidArgumentException('معرّف الطبيب غير صالح.');
         }
         $this->doctor_id = $normalized;
+    }
+
+    /**
+     * يجلب الاسم الكامل للطبيب الحالي من جدول users لاستخدامه في إغلاق
+     * الزيارة (حفظ تاريخي) + في نموذج الطباعة.
+     */
+    private function fetchDoctorFullName(): string
+    {
+        $stmt = $this->conn->prepare('SELECT full_name FROM users WHERE user_id = :uid LIMIT 1');
+        $stmt->execute([':uid' => $this->doctor_id]);
+        $name = $stmt->fetchColumn();
+        return $name ? (string) $name : '';
     }
 
     public function newPatient($data): void
@@ -44,10 +58,18 @@ class DoctorController extends BaseController
 
             $this->conn->beginTransaction();
             $patientId = $this->model->createPatient($name, $gender, $birthDate, $place1, $place2);
-            $this->model->createVisit($patientId, $this->doctor_id, $caseTypeId, $diagnosis, $note, $typeCase);
+            $visitId   = $this->model->createVisit($patientId, $this->doctor_id, $caseTypeId, $diagnosis, $note, $typeCase);
+
+            // إصدار تلقائي لتذكرة معاينة (صباحية/مسائية + تسعير افتراضي من system_settings)
+            $ticketModel = new ExaminationTicketModel($this->conn, $this->driver);
+            $ticket = $ticketModel->autoIssue($visitId, $note);
             $this->conn->commit();
 
-            $this->success(null, 'تم تسجيل المريض وفتح الزيارة بنجاح');
+            $this->success([
+                'visit_id'      => $visitId,
+                'patient_id'    => $patientId,
+                'ticket'        => $ticket,
+            ], 'تم تسجيل المريض وفتح الزيارة وإصدار تذكرة T-' . $ticket['serial_number']);
         } catch (InvalidArgumentException $exception) {
             if ($this->conn->inTransaction()) {
                 $this->conn->rollBack();
@@ -71,16 +93,38 @@ class DoctorController extends BaseController
                 throw new InvalidArgumentException('المريض المطلوب غير موجود.');
             }
 
+            // تحقق مسبق من وجود زيارة نشطة لإظهار رسالة عربية واضحة
+            // قبل الاصطدام بقيد uq_visits_one_active_per_patient.
+            if ($this->model->hasActiveVisit($patientId)) {
+                throw new InvalidArgumentException('لا يمكن فتح زيارة جديدة؛ يوجد لدى المريض زيارة مفتوحة حالياً. يرجى إغلاق الزيارة السابقة أولاً.');
+            }
+
             $typeCase = $this->sanitizeText($this->getField($data, 'type_case'), 'type_case', 100);
             $diagnosis = $this->sanitizeText($this->getField($data, 'diagnosis', ''), 'diagnosis', 255, true);
             $note = $this->sanitizeText($this->getField($data, 'note', ''), 'note', 500, true);
             $caseTypeId = $this->model->getCaseTypeId($typeCase) ?? 1;
 
-            $this->model->createVisit($patientId, $this->doctor_id, $caseTypeId, $diagnosis, $note, $typeCase);
-            $this->success(null, 'تم فتح الزيارة بنجاح');
+            $this->conn->beginTransaction();
+            $visitId = $this->model->createVisit($patientId, $this->doctor_id, $caseTypeId, $diagnosis, $note, $typeCase);
+
+            // إصدار تلقائي لتذكرة المعاينة
+            $ticketModel = new ExaminationTicketModel($this->conn, $this->driver);
+            $ticket = $ticketModel->autoIssue($visitId, $note);
+            $this->conn->commit();
+
+            $this->success([
+                'visit_id' => $visitId,
+                'ticket'   => $ticket,
+            ], 'تم فتح الزيارة وإصدار تذكرة T-' . $ticket['serial_number']);
         } catch (InvalidArgumentException $exception) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
             $this->error($exception->getMessage(), 422);
         } catch (Throwable $exception) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
             $this->error($this->mapDoctorError($exception), 400);
         }
     }
@@ -99,10 +143,16 @@ class DoctorController extends BaseController
         }
     }
 
+    /**
+     * إغلاق الزيارة (النسخة الجديدة المتوافقة مع نموذج "تذكرة معاينة"):
+     *   - diagnosis  (إجباري) التشخيص النهائي
+     *   - final_notes (إجباري) ملاحظات الطبيب
+     *   - clinic     (اختياري) اسم العيادة
+     */
     public function finalDiagnosis($data): void
     {
         try {
-            $this->requireFields($data, ['id_vis', 'diagnosis']);
+            $this->requireFields($data, ['id_vis', 'diagnosis', 'final_notes']);
 
             $visitId = $this->extractId($this->getField($data, 'id_vis'), 'id_vis');
             if (!$this->model->visitExists($visitId)) {
@@ -112,20 +162,58 @@ class DoctorController extends BaseController
                 throw new InvalidArgumentException('لا يمكنك تعديل زيارة لا تتبع حساب الطبيب الحالي.');
             }
 
-            // التحقق من وجود تذكرة معاينة قبل إغلاق الزيارة
-            $ticketModel = new ExaminationTicketModel($this->conn, (new Database())->getDriver());
-            if (!$ticketModel->hasTicket($visitId)) {
-                throw new InvalidArgumentException('يجب إنشاء تذكرة معاينة قبل إغلاق الزيارة.');
-            }
+            $diagnosis  = $this->sanitizeText($this->getField($data, 'diagnosis'),   'diagnosis',   255);
+            $finalNotes = $this->sanitizeText($this->getField($data, 'final_notes'), 'final_notes', 1500);
+            $clinic     = $this->sanitizeText($this->getField($data, 'clinic', ''),  'clinic',      150, true);
+            $doctorName = $this->fetchDoctorFullName();
 
-            $diagnosis = $this->sanitizeText($this->getField($data, 'diagnosis'), 'diagnosis', 255);
-            $this->model->updateFinalDiagnosis($visitId, $diagnosis);
+            $this->model->closeVisit(
+                $visitId,
+                $diagnosis,
+                $finalNotes,
+                $clinic !== '' ? $clinic : null,
+                $this->doctor_id,
+                $doctorName
+            );
 
-            $this->success(null, 'تم حفظ التشخيص وإغلاق الزيارة');
+            $this->success(null, 'تم حفظ التشخيص وإغلاق الزيارة بنجاح');
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage(), 422);
         } catch (Throwable $exception) {
             $this->error('تعذر حفظ التشخيص النهائي حالياً.', 500);
+        }
+    }
+
+    /**
+     * Endpoint جديد: يرجع بيانات نموذج إغلاق الزيارة
+     * (بيانات المريض + اسم الطبيب الحالي + إعدادات الترويسة).
+     */
+    public function getVisitCloseData($data): void
+    {
+        try {
+            $this->requireFields($data, ['id_vis']);
+            $visitId = $this->extractId($this->getField($data, 'id_vis'), 'id_vis');
+
+            if (!$this->model->visitBelongsToDoctor($visitId, $this->doctor_id)) {
+                throw new InvalidArgumentException('لا يمكنك فتح زيارة لا تتبع حسابك.');
+            }
+
+            $payload = $this->model->getVisitCloseData($visitId);
+            if (!$payload) {
+                throw new InvalidArgumentException('الزيارة غير موجودة.');
+            }
+
+            // إضافة اسم الطبيب المعالج + إعدادات الترويسة لتغني العميل عن طلب إضافي
+            $payload['attending_doctor'] = $this->fetchDoctorFullName();
+            $payload['gender_ar']        = ($payload['gender'] === 'Male') ? 'ذكر' : 'أنثى';
+            $payload['address']          = trim(((string) ($payload['place1'] ?? '')) . ' / ' . ((string) ($payload['place2'] ?? '')), ' /');
+            $payload['header']           = (new SettingsService($this->conn))->getHeader();
+
+            $this->success($payload);
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب بيانات إغلاق الزيارة.', 500);
         }
     }
 
@@ -264,39 +352,14 @@ class DoctorController extends BaseController
         }
     }
 
+    /**
+     * ملحوظة: بعد إعادة الهيكلة الجديدة لنظام التذاكر، لم تعد هنالك حاجة
+     * لإنشاء تذكرة يدوياً. التذكرة تُصدر آلياً عند فتح الزيارة.
+     * تُترك هذه الدالة كتوأمة أمان لتلفّ أيّ عميل قديم ثم تُعجّل بخطأ واضح.
+     */
     public function createTicket($data): void
     {
-        try {
-            $this->requireFields($data, ['id_vis', 'notes']);
-
-            $visitId = $this->extractId($this->getField($data, 'id_vis'), 'id_vis');
-            if (!$this->model->visitExists($visitId)) {
-                throw new InvalidArgumentException('الزيارة المطلوبة غير موجودة.');
-            }
-            if (!$this->model->visitBelongsToDoctor($visitId, $this->doctor_id)) {
-                throw new InvalidArgumentException('لا يمكنك إنشاء تذكرة لزيارة لا تتبع حسابك.');
-            }
-
-            $ticketModel = new ExaminationTicketModel($this->conn, (new Database())->getDriver());
-            if ($ticketModel->hasTicket($visitId)) {
-                throw new InvalidArgumentException('تم إنشاء تذكرة لهذه الزيارة مسبقاً.');
-            }
-
-            $notes = $this->sanitizeText($this->getField($data, 'notes'), 'notes', 500);
-            $amount = $this->sanitizeAmount($this->getField($data, 'amount', 0), 'amount');
-
-            $result = $ticketModel->createTicket($visitId, $notes, $amount);
-
-            $this->respond([
-                'success' => true,
-                'message' => 'تم إنشاء تذكرة المعاينة بنجاح',
-                'ticket' => $result,
-            ]);
-        } catch (InvalidArgumentException $e) {
-            $this->error($e->getMessage(), 422);
-        } catch (Throwable $e) {
-            $this->error('تعذر إنشاء التذكرة حالياً.', 500);
-        }
+        $this->error('تم استبدال إصدار التذاكر اليدوي، وأصبح تلقائياً عند فتح الزيارة.', 410);
     }
 
     public function getMedicalArchive(): void
@@ -336,8 +399,12 @@ class DoctorController extends BaseController
     {
         $message = $exception->getMessage();
 
-        if (str_contains($message, 'زيارة سابقة لا تزال نشطة')) {
-            return 'لا يمكن فتح زيارة جديدة؛ المريض لديه زيارة نشطة حالياً.';
+        // PostgreSQL: انتهاك قيد uq_visits_one_active_per_patient
+        if (
+            str_contains($message, 'uq_visits_one_active_per_patient') ||
+            str_contains($message, 'زيارة سابقة لا تزال نشطة')
+        ) {
+            return 'لا يمكن فتح زيارة جديدة؛ يوجد لدى المريض زيارة مفتوحة حالياً. يرجى إغلاق الزيارة السابقة أولاً.';
         }
 
         if (str_contains($message, 'unique_patient_identity')) {

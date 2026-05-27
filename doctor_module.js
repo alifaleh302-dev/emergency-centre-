@@ -1,57 +1,39 @@
 /**
  * doctor_module.js
- * موديول الطبيب العام - النسخة التجريبية (MVP)
- * متوافق مع العرض الديناميكي للجداول ومجهز للربط المستقبلي بـ WebSockets
+ * موديول الطبيب العام - الإصدار الثاني
+ *
+ * تحديثات هذه النسخة:
+ *   1) تقييد فتح أكثر من زيارة نشطة لنفس المريض (رسالة عربية واضحة).
+ *   2) حذف إصدار التذاكر اليدوي - أصبحت التذكرة تُصدر تلقائياً مع الزيارة.
+ *   3) نافذة "إغلاق الزيارة" الجديدة:
+ *        - تصميم مطابق لنموذج "تذكرة المعاينة" الورقي.
+ *        - تعبئة تلقائية لبيانات المريض والطبيب.
+ *        - حقول إجبارية: التشخيص النهائي + الملاحظات.
+ *        - حقل العيادة اختياري.
+ *        - زر طباعة مباشر (Print-Friendly).
+ *        - ترويسة ديناميكية تُجلب من system_settings عبر settings/header.
  */
 
 const DoctorData = {
-    currentUser: {}, 
+    currentUser: {},
 
-    waiting_list: [
-        { visit: "VIS-101", name: "محمد علي", type_case: "تسمم", time: "08:15 AM", diagnosis: "اشتباه تسمم غذائي حاد" },
-        { visit: "VIS-102", name: "فاطمة أحمد", type_case: "حريق", time: "09:00 AM", diagnosis: "حروق من الدرجة الثانية في اليد اليمنى" },
-        { visit: "VIS-103", name: "صالح عبدالكريم", type_case: "سقوط", time: "09:30 AM", diagnosis: "اشتباه كسر في الساعد" }
-    ],
-
-    data_patients: [
-        {
-            id_pat: "PAT-001", name: "سالم عبدالله", address: "السبعين / صنعاء", visit_num: 2, last_visit_date: "2026-03-20",
-            medical_file: [
-                { date_visit: "2026-03-20", type_case: "سقوط", diagnosis: "كدمات خفيفة في الركبة", procedures: "أشعة للقدم", notes: "راحة لمدة يومين مع مسكنات" },
-                { date_visit: "2025-10-15", type_case: "حمى", diagnosis: "التهاب لوزتين", procedures: "فحص دم CBC", notes: "صرف مضاد حيوي" }
-            ]
-        },
-        {
-            id_pat: "PAT-002", name: "يحيى صالح المنعي", address: "عمران / حارة النصر", visit_num: 1, last_visit_date: "2026-01-10",
-            medical_file: [
-                { date_visit: "2026-01-10", type_case: "ضيق تنفس", diagnosis: "نوبة ربو خفيفة", procedures: "جلسة أكسجين", notes: "مراجعة العيادة بعد أسبوع" }
-            ]
-        }
-    ],
-
-    sent_orders: [
-        { 
-            visit: "VIS-101", name: "محمد علي", type_case: "تسمم", order_count: 2, 
-            details: [
-                { orders: "CBC, STOOL", time: "08:30 AM", status: "مكتمل" },
-                { orders: "تركيب مغذية", time: "08:35 AM", status: "قيد الانتظار" }
-            ]
-        }
-    ],
+    waiting_list: [],
+    data_patients: [],
+    sent_orders: [],
 
     caseTypes: ["طوارئ باطنية", "تسمم", "سقوط", "حوادث سير", "حروق", "نوبة قلبية", "ضيق تنفس", "إصابة عمل", "نزيف", "أخرى"],
     districts: ["السبعين", "الوحدة", "عمران", "التحرير", "بني الحارث"],
-    availableServices: {
-        lab: ["CBC", "STOOL", "سكر عشوائي", "وظائف كبد"],
-        sur: ["خياطة جرح", "تركيب مغذية", "تغيير ضماد", "ضرب إبرة"],
-        ray: ["أشعة صدر", "القدم اليسرى", "الجمجمة", "تلفزيون بطن"]
-    }
+    availableServices: { lab: [], sur: [], ray: [] },
+
+    // إعدادات الترويسة الديناميكية (تُجلب من السيرفر مرة واحدة عند الإقلاع)
+    headerSettings: null
 };
 
 const Doctor = {
 
-    // --- 1. واجهة: حالة جديدة (New Case) ---
-        // --- 1. واجهة: حالة جديدة (New Case) ---
+    // ============================================================
+    // 1) واجهة: حالة جديدة (New Case)
+    // ============================================================
     viewNewCase: function() {
         Core.navigateTo('viewNewCase', () => {
             const mainContent = document.getElementById('mainContent');
@@ -66,7 +48,7 @@ const Doctor = {
                     <div class="card stat-card p-4 mb-4 border-0 shadow-sm">
                         <div class="input-group input-group-lg">
                             <span class="input-group-text bg-white border-start-0"><i class="bi bi-search text-primary"></i></span>
-                            <input type="text" class="form-control border-end-0 shadow-none" 
+                            <input type="text" class="form-control border-end-0 shadow-none"
                                    placeholder="بحث ذكي بالاسم، أو أجزاء متفرقة من الاسم..." id="patientSearchInput" onkeyup="Doctor.handleSearchInput()">
                         </div>
                     </div>
@@ -81,13 +63,10 @@ const Doctor = {
         });
     },
 
-    // مؤقت (Debounce) لمنع إرسال طلبات كثيرة للسيرفر مع كل حرف
     searchTimeout: null,
     handleSearchInput: function() {
         clearTimeout(this.searchTimeout);
-        this.searchTimeout = setTimeout(() => {
-            this.executeSearch();
-        }, 400); // ينتظر 400 ملي ثانية بعد توقف المستخدم عن الكتابة
+        this.searchTimeout = setTimeout(() => this.executeSearch(), 400);
     },
 
     executeSearch: async function() {
@@ -100,17 +79,12 @@ const Doctor = {
         }
 
         resultArea.innerHTML = `<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div></div>`;
-
-        // الاتصال الحقيقي بالـ Backend
-        const response = await Core.apiCall('doctor/search_patient', 'POST', { query: query });
+        const response = await Core.apiCall('doctor/search_patient', 'POST', { query });
 
         if (response && response.success) {
             const results = response.data;
-
             if (results.length > 0) {
                 const headers = ['اسم المريض', 'العنوان', 'معلومات'];
-                
-                // دالة مساعدة لتلوين الكلمات المبحوث عنها
                 const keywords = query.split(/\s+/).filter(kw => kw.length > 0);
                 const highlightText = (text) => {
                     let highlighted = text;
@@ -128,20 +102,18 @@ const Doctor = {
                 ]);
 
                 resultArea.innerHTML = `<div class="card stat-card p-0 border-0 shadow-sm" id="patientTableContainer"></div>`;
-                
                 Core.renderTable('patientTableContainer', headers, rows, (row, index) => {
-                    const p = results[index]; 
+                    const p = results[index];
                     return `
-                        <button class="btn btn-primary btn-sm fw-bold px-3 shadow-sm" onclick="Doctor.openVisitModal('${p.patient_id}', '${p.full_name}')">
+                        <button class="btn btn-primary btn-sm fw-bold px-3 shadow-sm" onclick="Doctor.openVisitModal('${p.patient_id}', '${(p.full_name || '').replace(/'/g, "\\'")}')">
                             <i class="bi bi-door-open ms-1"></i> فتح زيارة
                         </button>`;
                 });
-
             } else {
                 resultArea.innerHTML = `
                     <div class="alert alert-warning p-4 border-0 shadow-sm d-flex flex-column flex-md-row justify-content-between align-items-center">
                         <div class="mb-3 mb-md-0"><i class="bi bi-person-exclamation fs-3 ms-3"></i><span class="fw-bold">المريض غير مسجل مسبقاً.</span></div>
-                        <button class="btn btn-warning fw-bold px-4 shadow-sm" onclick="Doctor.openNewPatientModal('${query}')">
+                        <button class="btn btn-warning fw-bold px-4 shadow-sm" onclick="Doctor.openNewPatientModal('${query.replace(/'/g, "\\'")}')">
                             <i class="bi bi-person-plus-fill ms-1"></i> إضافة مريض جديد
                         </button>
                     </div>`;
@@ -150,7 +122,6 @@ const Doctor = {
             resultArea.innerHTML = `<div class="alert alert-danger">حدث خطأ أثناء البحث.</div>`;
         }
     },
-
 
     openNewPatientModal: function(searchedName) {
         const existing = document.getElementById('newPatientModal');
@@ -174,11 +145,15 @@ const Doctor = {
                             <div class="col-md-3"><label class="form-label small fw-bold">الجنس</label><select id="np_gender" class="form-select shadow-none"><option value="ذكر">ذكر</option><option value="أنثى">أنثى</option></select></div>
                             <div class="col-md-6"><label class="form-label small fw-bold">المديرية</label><select id="np_place1" class="form-select shadow-none">${districtOptions}</select></div>
                             <div class="col-md-6"><label class="form-label small fw-bold">الحي</label><input type="text" id="np_place2" class="form-control shadow-none"></div>
-                            
+
                             <div class="col-12 mt-3"><hr></div>
                             <div class="col-md-6"><label class="form-label small fw-bold text-danger">نوع الحالة</label><select id="np_type_case" class="form-select shadow-none">${caseOptions}</select></div>
                             <div class="col-md-6"><label class="form-label small fw-bold text-primary">التشخيص المبدئي</label><input type="text" id="np_diagnosis" class="form-control shadow-none"></div>
                             <div class="col-12"><label class="form-label small fw-bold">ملاحظة</label><textarea id="np_note" class="form-control shadow-none" rows="2"></textarea></div>
+                        </div>
+                        <div class="alert alert-info small mt-3 mb-0">
+                            <i class="bi bi-info-circle ms-1"></i>
+                            سيتم إصدار تذكرة معاينة (صباحية/مسائية حسب الوقت الحالي) تلقائياً عند حفظ الزيارة.
                         </div>
                     </div>
                     <div class="modal-footer border-0">
@@ -204,10 +179,9 @@ const Doctor = {
         };
 
         const response = await Core.apiCall('doctor/new_patient', 'POST', payload);
-
         if (response && response.success) {
             bootstrap.Modal.getInstance(document.getElementById('newPatientModal')).hide();
-            Core.showAlert('تم تسجيل المريض وفتح الزيارة بنجاح', 'success');
+            Core.showAlert(response.message || 'تم تسجيل المريض وفتح الزيارة بنجاح', 'success');
             document.getElementById('patientSearchInput').value = '';
             document.getElementById('searchResultArea').innerHTML = '';
         } else {
@@ -233,6 +207,10 @@ const Doctor = {
                         <div class="mb-3"><label class="form-label small fw-bold text-danger">نوع الحالة</label><select id="v_type_case" class="form-select shadow-none">${caseOptions}</select></div>
                         <div class="mb-3"><label class="form-label small fw-bold text-primary">التشخيص المبدئي</label><input type="text" id="v_diagnosis" class="form-control shadow-none"></div>
                         <div class="mb-3"><label class="form-label small fw-bold">ملاحظة</label><textarea id="v_note" class="form-control shadow-none" rows="2"></textarea></div>
+                        <div class="alert alert-info small mb-0">
+                            <i class="bi bi-info-circle ms-1"></i>
+                            سيتم إصدار تذكرة معاينة (صباحية/مسائية) تلقائياً عند حفظ الزيارة.
+                        </div>
                     </div>
                     <div class="modal-footer border-0">
                         <button class="btn btn-primary px-5 fw-bold shadow-sm" onclick="Doctor.saveExistingPatientVisit('${id_pat}')">حفظ وفتح الزيارة</button>
@@ -253,21 +231,22 @@ const Doctor = {
         };
 
         const response = await Core.apiCall('doctor/existing_patient_visit', 'POST', payload);
-
         if (response && response.success) {
             bootstrap.Modal.getInstance(document.getElementById('openVisitModal')).hide();
-            Core.showAlert('تم فتح الزيارة بنجاح', 'success');
+            Core.showAlert(response.message || 'تم فتح الزيارة بنجاح', 'success');
         } else {
-            Core.showAlert(response ? response.message : 'حدث خطأ أثناء فتح الزيارة', 'error');
+            // إبراز رسالة الخطأ بشكل واضح (خاصة قيد الزيارة النشطة الواحدة)
+            Core.showAlert(response ? response.message : 'حدث خطأ أثناء فتح الزيارة', 'warning');
         }
     },
 
-// --- 2. واجهة: قائمة الانتظار (Waiting List) ---
+    // ============================================================
+    // 2) واجهة: قائمة الانتظار (Waiting List)
+    // ============================================================
     viewWaitingList: function() {
         Core.navigateTo('viewWaitingList', () => {
             const mainContent = document.getElementById('mainContent');
             const tools = [
-                // تعديل بسيط هنا لكي يقوم الزر بتحديث البيانات من السيرفر مباشرة دون إعادة رسم الواجهة كاملة
                 { label: "تحديث القائمة", icon: "bi-arrow-repeat", action: "Doctor.loadWaitingList()" }
             ];
 
@@ -286,38 +265,37 @@ const Doctor = {
         const container = document.getElementById('waitingListContainer');
         if (!container) return;
 
-        // إظهار مؤشر التحميل أثناء جلب البيانات من السيرفر
         container.innerHTML = `<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div></div>`;
-
-        // الاتصال الحقيقي بالـ Backend لجلب قائمة الانتظار للطبيب الحالي
         const response = await Core.apiCall('doctor/waiting_list', 'GET');
 
         if (response && response.success) {
             const activeList = response.data;
-
             if (activeList.length === 0) {
                 container.innerHTML = `<div class="p-5 text-center text-muted"><i class="bi bi-check-circle fs-1 text-success mb-3 d-block"></i>لا توجد حالات في قائمة الانتظار حالياً.</div>`;
                 return;
             }
 
             const headers = ["التذكرة", "المريض", "الحالة", "الوقت", "الإجراء"];
-            const rows = activeList.map(item => [
-                item.ticket_serial ? `<span class="badge bg-info bg-opacity-10 text-info fw-bold">T-${item.ticket_serial}</span>` : `<span class="badge bg-secondary bg-opacity-10 text-secondary">بدون</span>`,
-                `<span class="fw-bold text-dark">${item.name}</span>`,
-                `<span class="badge bg-warning bg-opacity-10 text-warning px-3">${item.type_case}</span>`,
-                item.time
-            ]);
+            const rows = activeList.map(item => {
+                const typeIcon = item.ticket_type === 'morning' ? 'bi-sun text-warning' : 'bi-moon-stars text-info';
+                const ticketBadge = item.ticket_serial
+                    ? `<span class="badge bg-info bg-opacity-10 text-info fw-bold px-3 py-2"><i class="bi ${typeIcon} ms-1"></i> T-${item.ticket_serial}</span>`
+                    : `<span class="badge bg-secondary bg-opacity-10 text-secondary">بدون</span>`;
+                return [
+                    ticketBadge,
+                    `<span class="fw-bold text-dark">${item.name}</span>`,
+                    `<span class="badge bg-warning bg-opacity-10 text-warning px-3">${item.type_case}</span>`,
+                    item.time
+                ];
+            });
 
             Core.renderTable('waitingListContainer', headers, rows, (row, index) => {
                 const item = activeList[index];
-                const ticketBtn = item.ticket_serial
-                    ? `<button class="btn btn-info btn-sm fw-bold shadow-sm" disabled><i class="bi bi-ticket-perforated ms-1"></i>T-${item.ticket_serial}</button>`
-                    : `<button class="btn btn-warning btn-sm fw-bold shadow-sm" onclick="Doctor.openTicketModal('${item.visit}', '${item.name}')"><i class="bi bi-ticket-perforated ms-1"></i> تذكرة</button>`;
+                // ⚠️ ملاحظة مهمة: تم حذف زر "تذكرة" - التذكرة تُصدر تلقائياً عند فتح الزيارة.
                 return `
                     <div class="d-flex gap-1 flex-wrap">
-                        ${ticketBtn}
-                        <button class="btn btn-outline-primary btn-sm fw-bold shadow-sm" onclick="Doctor.openOrdersModal('${item.visit}', '${item.name}')"><i class="bi bi-file-medical ms-1"></i> طلبات</button>
-                        <button class="btn btn-success btn-sm fw-bold shadow-sm" onclick="Doctor.openFinalDiagnosisModal('${item.visit}', '${item.name}', '${item.diagnosis}')"><i class="bi bi-check2 ms-1"></i> إغلاق</button>
+                        <button class="btn btn-outline-primary btn-sm fw-bold shadow-sm" onclick="Doctor.openOrdersModal('${item.visit}', '${(item.name || '').replace(/'/g, "\\'")}')"><i class="bi bi-file-medical ms-1"></i> طلبات</button>
+                        <button class="btn btn-success btn-sm fw-bold shadow-sm" onclick="Doctor.openCloseVisitModal('${item.visit}')"><i class="bi bi-check2 ms-1"></i> إغلاق الزيارة</button>
                     </div>`;
             });
         } else {
@@ -325,27 +303,352 @@ const Doctor = {
         }
     },
 
-    // ... (دوال openOrdersModal و sendOrders تبقى كما هي مؤقتاً وسنحدثها في الخطوة القادمة) ...
+    // ============================================================
+    // 3) نافذة إغلاق الزيارة الجديدة (Examination Ticket Modal)
+    // ============================================================
+    /**
+     * يفتح نافذة الإغلاق المصممة على غرار "تذكرة المعاينة" الورقية.
+     * - يجلب بيانات المريض والطبيب من السيرفر.
+     * - يجلب إعدادات الترويسة (مخزّنة محلياً بعد أول طلب).
+     * - يدعم الطباعة وحفظ الإغلاق مع التشخيص النهائي والملاحظات.
+     */
+    openCloseVisitModal: async function(visitFormatted) {
+        // visitFormatted قد يكون "VIS-55" - نستخرج الرقم
+        const visitId = String(visitFormatted).replace(/\D+/g, '');
+        if (!visitId) return Core.showAlert('معرف زيارة غير صالح', 'error');
 
-    // تحديث دالة حفظ التشخيص النهائي لتلغي الاعتماد على localStorage
-    saveFinalDiagnosis: async function(id_vis) {
-        const diagnosis = document.getElementById('final_diag_text').value;
-        if(!diagnosis) return Core.showAlert('يرجى كتابة التشخيص النهائي', 'error');
+        // إظهار loading toast
+        Core.showAlert('جاري تحضير نموذج إغلاق الزيارة...', 'info');
 
-        // إرسال التشخيص للسيرفر
-        const response = await Core.apiCall('doctor/final_diagnosis', 'POST', { id_vis: id_vis, diagnosis: diagnosis });
-        
+        const response = await Core.apiCall('doctor/visit_close_data', 'POST', { id_vis: visitId });
+        if (!response || !response.success) {
+            return Core.showAlert(response ? response.message : 'تعذر جلب بيانات الزيارة', 'error');
+        }
+
+        const data = response.data;
+        // حفظ إعدادات الترويسة محلياً
+        DoctorData.headerSettings = data.header || DoctorData.headerSettings;
+
+        this._renderCloseVisitModal(visitId, data);
+    },
+
+    _renderCloseVisitModal: function(visitId, data) {
+        const existing = document.getElementById('closeVisitModal');
+        if (existing) existing.remove();
+
+        const h = data.header || {};
+        const today = new Date();
+        const dateStr = today.toLocaleDateString('en-GB'); // dd/mm/yyyy
+
+        const ticketSerial = data.ticket_serial || '---';
+        const ticketTypeAr = data.ticket_type === 'morning' ? 'صباحية' : (data.ticket_type === 'evening' ? 'مسائية' : '');
+
+        // الترويسة - نفس تصميم الورقة الأصلية مع شعار في الوسط
+        const logoHTML = h.logo_url
+            ? `<img src="${h.logo_url}" alt="logo" style="height:64px;object-fit:contain;">`
+            : `<div style="height:64px;width:64px;display:flex;align-items:center;justify-content:center;font-size:38px;">🏥</div>`;
+
+        const modalHTML = `
+        <div class="modal fade" id="closeVisitModal" tabindex="-1" aria-modal="true">
+            <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content border-0 shadow-lg">
+
+                    <div class="modal-header bg-success text-white border-0 py-3 d-print-none">
+                        <h5 class="modal-title fw-bold">
+                            <i class="bi bi-clipboard2-check ms-2"></i>
+                            إغلاق الزيارة وإصدار تذكرة المعاينة
+                        </h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+
+                    <div class="modal-body p-0 bg-white">
+                        <!-- ====================== المنطقة القابلة للطباعة ====================== -->
+                        <div id="printableTicket" class="p-4">
+                            <div class="ticket-paper">
+
+                                <!-- ====== ترويسة ديناميكية ====== -->
+                                <div class="ticket-header">
+                                    <div class="ticket-header-side ticket-header-left">
+                                        <div class="ticket-number-box">
+                                            <span class="ticket-number-label">رقم التذكرة</span>
+                                            <span class="ticket-number-value">${ticketSerial}</span>
+                                        </div>
+                                        <div class="ticket-date-line"><span>التاريخ:</span><span class="ticket-date-value">${dateStr}</span><span class="hijri-suffix">هـ</span></div>
+                                        <div class="ticket-date-line"><span>الموافق:</span><span class="ticket-date-value">${dateStr}</span><span class="hijri-suffix">م</span></div>
+                                    </div>
+
+                                    <div class="ticket-header-center">
+                                        ${logoHTML}
+                                        <div class="ticket-title-box">${h.form_title || 'تذكرة معاينة'}</div>
+                                    </div>
+
+                                    <div class="ticket-header-side ticket-header-right">
+                                        <div class="org-line org-main">${h.country || ''}</div>
+                                        <div class="org-line">${h.ministry || ''}</div>
+                                        <div class="org-line">${h.office || ''}</div>
+                                        <div class="org-line">${h.directorate || ''}</div>
+                                        <div class="org-line">${h.center || ''}</div>
+                                        <div class="org-line">${h.admin || ''}</div>
+                                    </div>
+                                </div>
+
+                                <hr class="ticket-divider">
+
+                                <!-- ====== بيانات المريض (Auto-fill) ====== -->
+                                <div class="ticket-body">
+                                    <div class="row g-3">
+                                        <div class="col-md-7">
+                                            <div class="ticket-field">
+                                                <span class="ticket-label">اسم المريض / <em>Name</em>:</span>
+                                                <span class="ticket-value">${data.patient_name || ''}</span>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-5">
+                                            <div class="ticket-field">
+                                                <span class="ticket-label">العيادة:</span>
+                                                <input type="text" id="cv_clinic" class="ticket-input d-print-none" placeholder="(اختياري)">
+                                                <span class="ticket-value d-none d-print-inline" id="cv_clinic_print">&nbsp;</span>
+                                            </div>
+                                        </div>
+
+                                        <div class="col-md-4">
+                                            <div class="ticket-field">
+                                                <span class="ticket-label">العمر / <em>Age</em>:</span>
+                                                <span class="ticket-value">${data.age || ''}</span>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <div class="ticket-field">
+                                                <span class="ticket-label"><em>Sex</em> / الجنس:</span>
+                                                <span class="ticket-value">${data.gender_ar || ''}</span>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <div class="ticket-field">
+                                                <span class="ticket-label">نوع الحالة:</span>
+                                                <span class="ticket-value">${data.type_case || ''}</span>
+                                            </div>
+                                        </div>
+
+                                        <div class="col-12">
+                                            <div class="ticket-field">
+                                                <span class="ticket-label">التشخيص النهائي / <em>Diagnosis</em>: <span class="text-danger">*</span></span>
+                                                <input type="text" id="cv_diagnosis" class="ticket-input d-print-none" value="${(data.initial_diagnosis || '').replace(/"/g, '&quot;')}" placeholder="حقل إجباري">
+                                                <span class="ticket-value d-none d-print-inline" id="cv_diagnosis_print"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- ====== Rx / الملاحظات ====== -->
+                                <div class="ticket-rx-section">
+                                    <div class="ticket-rx-label">Rx :</div>
+                                    <div class="ticket-rx-body">
+                                        <label class="form-label small fw-bold text-danger d-print-none">الملاحظات <span>*</span></label>
+                                        <textarea id="cv_notes" class="form-control ticket-textarea d-print-none" rows="8" placeholder="حقل إجباري - اكتب الملاحظات والوصفة هنا..."></textarea>
+                                        <div class="ticket-notes-print d-none d-print-block" id="cv_notes_print"></div>
+                                    </div>
+                                </div>
+
+                                <!-- ====== التذييل: الطبيب + التوقيع ====== -->
+                                <div class="ticket-footer">
+                                    <div class="ticket-footer-line">
+                                        <span class="ticket-label">اسم الطبيب المعالج:</span>
+                                        <span class="ticket-value">${data.attending_doctor || ''}</span>
+                                    </div>
+                                    <div class="ticket-footer-line">
+                                        <span class="ticket-label">التوقيع:</span>
+                                        <span class="ticket-signature">.................................</span>
+                                    </div>
+                                </div>
+
+                                ${h.footer_note ? `<div class="ticket-footer-note">${h.footer_note}</div>` : ''}
+
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="modal-footer border-0 bg-light d-print-none">
+                        <small class="text-muted me-auto">
+                            <i class="bi bi-info-circle ms-1"></i>
+                            التشخيص النهائي والملاحظات حقول إجبارية لإتمام الإغلاق.
+                            ${ticketTypeAr ? `نوع التذكرة: <strong>${ticketTypeAr}</strong>.` : ''}
+                        </small>
+                        <button type="button" class="btn btn-outline-secondary px-4 fw-bold" data-bs-dismiss="modal">إلغاء</button>
+                        <button type="button" class="btn btn-info text-white px-4 fw-bold" onclick="Doctor.printCloseVisit()">
+                            <i class="bi bi-printer ms-1"></i> طباعة
+                        </button>
+                        <button type="button" class="btn btn-success px-5 fw-bold shadow-sm" onclick="Doctor.saveCloseVisit('${visitId}')">
+                            <i class="bi bi-check2-circle ms-1"></i> حفظ وإغلاق الزيارة
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        this._injectTicketStyles();
+        new bootstrap.Modal(document.getElementById('closeVisitModal')).show();
+    },
+
+    /**
+     * يحقن CSS الخاص بالنموذج (مرة واحدة فقط).
+     * يفصل بين الشاشة (modal تفاعلي) والطباعة (ورقة A4 نظيفة).
+     */
+    _injectTicketStyles: function() {
+        if (document.getElementById('ticketStylesInjected')) return;
+        const css = `
+        /* ---------- تنسيق نموذج التذكرة على الشاشة ---------- */
+        #closeVisitModal .ticket-paper {
+            border: 1px solid #adb5bd;
+            border-radius: 6px;
+            padding: 20px 24px;
+            background: #fff;
+            color: #212529;
+            font-family: 'Cairo', sans-serif;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        #closeVisitModal .ticket-header { display: grid; grid-template-columns: 1fr auto 1.4fr; gap: 12px; align-items: start; }
+        #closeVisitModal .ticket-header-side { font-size: 0.85rem; line-height: 1.7; }
+        #closeVisitModal .ticket-header-left { text-align: left; direction: ltr; }
+        #closeVisitModal .ticket-header-right { text-align: right; }
+        #closeVisitModal .ticket-header-right .org-main { font-weight: 800; font-size: 1rem; }
+        #closeVisitModal .ticket-header-center { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+        #closeVisitModal .ticket-number-box {
+            border: 1.5px solid #495057;
+            border-radius: 4px;
+            padding: 4px 10px;
+            display: inline-flex; gap: 8px; align-items: center;
+            font-weight: 700;
+        }
+        #closeVisitModal .ticket-number-value { color: #c0392b; font-weight: 800; }
+        #closeVisitModal .ticket-date-line { display: flex; gap: 6px; align-items: center; justify-content: flex-start; margin-top: 4px; direction: rtl; }
+        #closeVisitModal .ticket-date-value { font-weight: 600; min-width: 80px; border-bottom: 1px dashed #6c757d; padding: 0 4px; text-align: center; }
+        #closeVisitModal .ticket-title-box {
+            background: #e9ecef;
+            border: 1px solid #adb5bd;
+            border-radius: 20px;
+            padding: 4px 18px;
+            font-weight: 800;
+            font-size: 1.1rem;
+            margin-top: 4px;
+        }
+        #closeVisitModal .ticket-divider { border-color: #6c757d; margin: 14px 0 18px; }
+        #closeVisitModal .ticket-body { font-size: 0.95rem; }
+        #closeVisitModal .ticket-field { display: flex; gap: 6px; align-items: baseline; padding-bottom: 3px; border-bottom: 1px dotted #6c757d; }
+        #closeVisitModal .ticket-label { font-weight: 700; white-space: nowrap; }
+        #closeVisitModal .ticket-label em { font-style: italic; color: #495057; font-weight: 500; }
+        #closeVisitModal .ticket-value { flex: 1; padding: 0 6px; font-weight: 600; }
+        #closeVisitModal .ticket-input {
+            flex: 1; border: none; outline: none;
+            border-bottom: 1px dotted #6c757d;
+            background: rgba(255, 235, 100, 0.12);
+            padding: 2px 6px;
+            font-family: inherit; font-weight: 600;
+        }
+        #closeVisitModal .ticket-input:focus { background: rgba(255, 235, 100, 0.3); }
+        #closeVisitModal .ticket-rx-section { display: flex; gap: 16px; margin-top: 18px; }
+        #closeVisitModal .ticket-rx-label { font-size: 2.4rem; font-style: italic; font-family: 'Georgia', serif; font-weight: 700; min-width: 60px; }
+        #closeVisitModal .ticket-rx-body { flex: 1; }
+        #closeVisitModal .ticket-textarea {
+            border: 1px dashed #adb5bd; border-radius: 4px;
+            background: rgba(255, 235, 100, 0.08);
+            font-family: inherit; font-size: 0.95rem;
+            min-height: 180px;
+        }
+        #closeVisitModal .ticket-footer { display: flex; justify-content: space-between; gap: 30px; margin-top: 24px; padding-top: 14px; border-top: 1px dashed #adb5bd; }
+        #closeVisitModal .ticket-footer-line { display: flex; gap: 6px; align-items: baseline; }
+        #closeVisitModal .ticket-signature { letter-spacing: 2px; color: #6c757d; }
+        #closeVisitModal .ticket-footer-note { font-size: 0.75rem; color: #6c757d; text-align: center; margin-top: 16px; padding-top: 8px; border-top: 1px dotted #ced4da; }
+        #closeVisitModal .ticket-notes-print { padding: 8px; min-height: 180px; }
+
+        /* ---------- تنسيق الطباعة ---------- */
+        @media print {
+            @page { size: A4; margin: 12mm; }
+            body * { visibility: hidden; }
+            #printableTicket, #printableTicket * { visibility: visible; }
+            #printableTicket {
+                position: absolute; left: 0; right: 0; top: 0;
+                width: 100%; padding: 0 !important; background: #fff !important;
+            }
+            #closeVisitModal .ticket-paper { box-shadow: none; border: 1px solid #000 !important; }
+            #closeVisitModal .ticket-input,
+            #closeVisitModal .ticket-textarea { display: none !important; }
+            #closeVisitModal .d-print-inline { display: inline !important; }
+            #closeVisitModal .d-print-block  { display: block !important; }
+            #closeVisitModal .d-print-none   { display: none !important; }
+            #closeVisitModal .ticket-value, #closeVisitModal .ticket-notes-print { color: #000 !important; }
+            .modal-backdrop { display: none !important; }
+            #closeVisitModal { position: static !important; overflow: visible !important; background: none !important; }
+            #closeVisitModal .modal-dialog { max-width: 100% !important; margin: 0 !important; }
+            #closeVisitModal .modal-content { border: none !important; box-shadow: none !important; }
+        }
+        `;
+        const styleEl = document.createElement('style');
+        styleEl.id = 'ticketStylesInjected';
+        styleEl.textContent = css;
+        document.head.appendChild(styleEl);
+    },
+
+    /**
+     * طباعة النموذج: ينسخ القيم من الحقول التفاعلية إلى عناصر العرض،
+     * ثم يستدعي window.print().
+     */
+    printCloseVisit: function() {
+        const clinic     = document.getElementById('cv_clinic')?.value || '';
+        const diagnosis  = document.getElementById('cv_diagnosis')?.value || '';
+        const notes      = document.getElementById('cv_notes')?.value || '';
+
+        const clinicEl    = document.getElementById('cv_clinic_print');
+        const diagEl      = document.getElementById('cv_diagnosis_print');
+        const notesEl     = document.getElementById('cv_notes_print');
+
+        if (clinicEl)  clinicEl.textContent  = clinic || ' ';
+        if (diagEl)    diagEl.textContent    = diagnosis || ' ';
+        if (notesEl)   notesEl.innerText     = notes || ' ';
+
+        // إعطاء المتصفح فرصة لتطبيق التحديثات قبل الطباعة
+        setTimeout(() => window.print(), 50);
+    },
+
+    /**
+     * حفظ الإغلاق على السيرفر بعد التحقق من الحقول الإجبارية.
+     */
+    saveCloseVisit: async function(visitId) {
+        const clinic    = document.getElementById('cv_clinic').value.trim();
+        const diagnosis = document.getElementById('cv_diagnosis').value.trim();
+        const notes     = document.getElementById('cv_notes').value.trim();
+
+        if (!diagnosis) {
+            document.getElementById('cv_diagnosis').focus();
+            return Core.showAlert('التشخيص النهائي حقل إجباري', 'warning');
+        }
+        if (!notes) {
+            document.getElementById('cv_notes').focus();
+            return Core.showAlert('الملاحظات حقل إجباري', 'warning');
+        }
+
+        const payload = {
+            id_vis: visitId,
+            diagnosis,
+            final_notes: notes,
+            clinic
+        };
+
+        const response = await Core.apiCall('doctor/final_diagnosis', 'POST', payload);
         if (response && response.success) {
-            bootstrap.Modal.getInstance(document.getElementById('finalDiagModal')).hide();
-            Core.showAlert('تم حفظ التشخيص وإغلاق الزيارة بنجاح', 'success');
-            
-            // تحديث الجدول مباشرة من السيرفر (المريض سيختفي تلقائياً لأن حالته أصبحت Completed في القاعدة)
-            this.loadWaitingList(); 
+            bootstrap.Modal.getInstance(document.getElementById('closeVisitModal')).hide();
+            Core.showAlert(response.message || 'تم إغلاق الزيارة بنجاح', 'success');
+            // تحديث قائمة الانتظار - المريض سيختفي تلقائياً
+            this.loadWaitingList();
         } else {
-            Core.showAlert(response ? response.message : 'حدث خطأ أثناء حفظ التشخيص', 'error');
+            Core.showAlert(response ? response.message : 'حدث خطأ أثناء الإغلاق', 'error');
         }
     },
-// دالة مساعدة لرسم مربعات الاختيار داخل التبويبات (نفس التصميم الأصلي)
+
+    // ============================================================
+    // 4) الطلبات (Orders) - بدون تغيير جوهري
+    // ============================================================
     renderServiceCheckboxes: function(category, items) {
         if (!items || items.length === 0) return `<div class="text-muted small">لا توجد خدمات في هذا القسم.</div>`;
         return `
@@ -359,11 +662,11 @@ const Doctor = {
                 </div>`).join('')}
         </div>`;
     },
+
     openOrdersModal: function(id_vis, name) {
         const existing = document.getElementById('ordersModal');
         if (existing) existing.remove();
 
-        // استخدام نفس تصميم التبويبات (Nav Pills) الأصلي والأنيق
         const modalHTML = `
         <div class="modal fade" id="ordersModal" tabindex="-1">
             <div class="modal-dialog modal-lg modal-dialog-centered">
@@ -375,26 +678,14 @@ const Doctor = {
                     <div class="modal-body p-4 bg-light">
                         <div class="card p-3 border-0 shadow-sm">
                             <ul class="nav nav-pills mb-3 gap-2" id="pills-tab" role="tablist">
-                                <li class="nav-item">
-                                    <button class="nav-link active btn-sm px-4 fw-bold" data-bs-toggle="pill" data-bs-target="#tab-lab">مختبر</button>
-                                </li>
-                                <li class="nav-item">
-                                    <button class="nav-link btn-sm px-4 fw-bold" data-bs-toggle="pill" data-bs-target="#tab-ray">أشعة</button>
-                                </li>
-                                <li class="nav-item">
-                                    <button class="nav-link btn-sm px-4 fw-bold" data-bs-toggle="pill" data-bs-target="#tab-sur">تمريض</button>
-                                </li>
+                                <li class="nav-item"><button class="nav-link active btn-sm px-4 fw-bold" data-bs-toggle="pill" data-bs-target="#tab-lab">مختبر</button></li>
+                                <li class="nav-item"><button class="nav-link btn-sm px-4 fw-bold" data-bs-toggle="pill" data-bs-target="#tab-ray">أشعة</button></li>
+                                <li class="nav-item"><button class="nav-link btn-sm px-4 fw-bold" data-bs-toggle="pill" data-bs-target="#tab-sur">تمريض</button></li>
                             </ul>
                             <div class="tab-content border p-3 rounded-3 bg-white" id="pills-tabContent" style="min-height: 200px;">
-                                <div class="tab-pane fade show active" id="tab-lab">
-                                    ${this.renderServiceCheckboxes('lab', DoctorData.availableServices.lab)}
-                                </div>
-                                <div class="tab-pane fade" id="tab-ray">
-                                    ${this.renderServiceCheckboxes('ray', DoctorData.availableServices.ray)}
-                                </div>
-                                <div class="tab-pane fade" id="tab-sur">
-                                    ${this.renderServiceCheckboxes('sur', DoctorData.availableServices.sur)}
-                                </div>
+                                <div class="tab-pane fade show active" id="tab-lab">${this.renderServiceCheckboxes('lab', DoctorData.availableServices.lab)}</div>
+                                <div class="tab-pane fade" id="tab-ray">${this.renderServiceCheckboxes('ray', DoctorData.availableServices.ray)}</div>
+                                <div class="tab-pane fade" id="tab-sur">${this.renderServiceCheckboxes('sur', DoctorData.availableServices.sur)}</div>
                             </div>
                         </div>
                     </div>
@@ -405,13 +696,12 @@ const Doctor = {
                 </div>
             </div>
         </div>`;
-        
         document.body.insertAdjacentHTML('beforeend', modalHTML);
         new bootstrap.Modal(document.getElementById('ordersModal')).show();
     },
+
     sendOrders: async function(id_vis) {
         const payload = { id_vis: id_vis, order: { lab: [], sur: [], ray: [] } };
-        
         document.querySelectorAll('#ordersModal input[type="checkbox"]:checked').forEach(chk => {
             const cat = chk.getAttribute('data-cat');
             payload.order[cat].push(parseInt(chk.value));
@@ -422,7 +712,6 @@ const Doctor = {
         }
 
         const response = await Core.apiCall('doctor/send_orders', 'POST', payload);
-
         if (response && response.success) {
             bootstrap.Modal.getInstance(document.getElementById('ordersModal')).hide();
             Core.showAlert('تم إرسال الطلبات للأقسام بنجاح', 'success');
@@ -432,95 +721,13 @@ const Doctor = {
         }
     },
 
-    openFinalDiagnosisModal: function(id_vis, name, initialDiag) {
-        const existing = document.getElementById('finalDiagModal');
-        if (existing) existing.remove();
-
-        const modalHTML = `
-        <div class="modal fade" id="finalDiagModal" tabindex="-1">
-            <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content border-0 shadow-lg">
-                    <div class="modal-header bg-success text-white border-0">
-                        <h5 class="modal-title fw-bold">التشخيص النهائي وإغلاق الزيارة: ${name}</h5>
-                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                    </div>
-                    <div class="modal-body p-4">
-                        <label class="form-label small fw-bold text-success">التشخيص النهائي</label>
-                        <textarea id="final_diag_text" class="form-control shadow-none border-success" rows="4">${initialDiag}</textarea>
-                    </div>
-                    <div class="modal-footer border-0 bg-light">
-                        <button class="btn btn-success px-5 fw-bold shadow-sm" onclick="Doctor.saveFinalDiagnosis('${id_vis}')">حفظ وإغلاق الزيارة</button>
-                    </div>
-                </div>
-            </div>
-        </div>`;
-        document.body.insertAdjacentHTML('beforeend', modalHTML);
-        new bootstrap.Modal(document.getElementById('finalDiagModal')).show();
-    },
-
-    // --- تذكرة المعاينة ---
-    openTicketModal: function(id_vis, name) {
-        const existing = document.getElementById('ticketModal');
-        if (existing) existing.remove();
-        const hour = new Date().getHours();
-        const ticketType = (hour >= 5 && hour < 12) ? 'صباحي' : 'مسائي';
-        const typeIcon = ticketType === 'صباحي' ? 'bi-sun text-warning' : 'bi-moon-stars text-info';
-
-        const modalHTML = `
-        <div class="modal fade" id="ticketModal" tabindex="-1">
-            <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content border-0 shadow-lg">
-                    <div class="modal-header bg-warning text-dark border-0 py-3">
-                        <h5 class="modal-title fw-bold"><i class="bi bi-ticket-perforated ms-2"></i>تذكرة معاينة: ${name}</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                    </div>
-                    <div class="modal-body p-4 bg-light">
-                        <div class="d-flex justify-content-between align-items-center mb-3">
-                            <span class="small text-muted">نوع التذكرة:</span>
-                            <span class="badge bg-light text-dark border px-3 py-2"><i class="bi ${typeIcon} ms-1"></i> ${ticketType}</span>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label fw-bold text-dark">ملاحظات المعاينة <span class="text-danger">*</span></label>
-                            <textarea id="ticket_notes" class="form-control shadow-none" rows="4" placeholder="اكتب ملاحظات المعاينة هنا..." required></textarea>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label fw-bold text-dark">المبلغ (ريال)</label>
-                            <input type="number" id="ticket_amount" class="form-control shadow-none" value="0" min="0">
-                        </div>
-                    </div>
-                    <div class="modal-footer border-0">
-                        <button class="btn btn-warning px-5 fw-bold shadow-sm w-100" onclick="Doctor.saveTicket('${id_vis}')">
-                            <i class="bi bi-ticket-perforated ms-1"></i> حفظ التذكرة
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>`;
-        document.body.insertAdjacentHTML('beforeend', modalHTML);
-        new bootstrap.Modal(document.getElementById('ticketModal')).show();
-    },
-
-    saveTicket: async function(id_vis) {
-        const notes = document.getElementById('ticket_notes').value.trim();
-        if (!notes) return Core.showAlert('ملاحظات المعاينة مطلوبة', 'error');
-        const amount = parseFloat(document.getElementById('ticket_amount').value) || 0;
-
-        const response = await Core.apiCall('doctor/create_ticket', 'POST', { id_vis, notes, amount });
-        if (response && response.success) {
-            bootstrap.Modal.getInstance(document.getElementById('ticketModal')).hide();
-            Core.showAlert(`تم إنشاء التذكرة برقم T-${response.ticket.serial_number}`, 'success');
-            this.loadWaitingList();
-        } else {
-            Core.showAlert(response ? response.message : 'حدث خطأ أثناء إنشاء التذكرة', 'error');
-        }
-    },
-
-    // --- 3. واجهة: الطلبات المرسلة (Sent Orders) ---
+    // ============================================================
+    // 5) الطلبات المرسلة (Sent Orders)
+    // ============================================================
     viewSentOrders: function() {
         Core.navigateTo('viewSentOrders', () => {
             const mainContent = document.getElementById('mainContent');
             const tools = [{ label: "تحديث", icon: "bi-arrow-repeat", action: "Doctor.loadSentOrders()" }];
-
             mainContent.innerHTML = `
                 <div class="container-fluid p-0 animate-in">
                     ${Core.renderHeaderWithTools('الطلبات المرسلة', 'تتبع الفحوصات والخدمات التي طلبتها لمرضى اليوم.', tools)}
@@ -533,30 +740,21 @@ const Doctor = {
     loadSentOrders: async function() {
         const container = document.getElementById('sentOrdersContainer');
         if(!container) return;
-        
-        // مؤشر التحميل
         container.innerHTML = `<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div></div>`;
-        
-        // جلب البيانات من السيرفر
         const response = await Core.apiCall('doctor/sent_orders', 'GET');
-        
         if (response && response.success) {
-            // حفظ البيانات محلياً لتستخدمها نافذة "عرض الطلبات" دون الحاجة لطلب السيرفر مرة أخرى
-            DoctorData.sent_orders = response.data; 
+            DoctorData.sent_orders = response.data;
             const activeList = response.data;
-
             if (activeList.length === 0) {
                 container.innerHTML = `<div class="p-5 text-center text-muted"><i class="bi bi-check-circle fs-1 text-success mb-3 d-block"></i>لا توجد طلبات مرسلة اليوم.</div>`;
                 return;
             }
-
             const headers = ["المريض", "نوع الحالة", "عدد الطلبات", "الإجراء"];
             const rows = activeList.map(item => [
                 `<span class="fw-bold">${item.name}</span>`,
                 `<span class="badge bg-secondary bg-opacity-10 text-dark px-3">${item.type_case}</span>`,
                 `<span class="badge bg-primary rounded-pill px-3">${item.order_count}</span>`
             ]);
-
             Core.renderTable('sentOrdersContainer', headers, rows, (row, index) => {
                 const item = activeList[index];
                 return `
@@ -568,18 +766,16 @@ const Doctor = {
             container.innerHTML = `<div class="p-5 text-center text-danger">حدث خطأ أثناء جلب البيانات.</div>`;
         }
     },
+
     openSentOrdersDetails: function(visit_id) {
         const existing = document.getElementById('sentOrdersDetailsModal');
         if (existing) existing.remove();
-
         const patientData = DoctorData.sent_orders.find(s => s.visit === visit_id);
         if(!patientData) return;
-
         const rows = patientData.details.map(d => {
             const statusBadge = d.status === 'مكتمل' ? '<span class="badge bg-success bg-opacity-10 text-success">مكتمل</span>' : '<span class="badge bg-warning bg-opacity-10 text-warning">قيد الانتظار</span>';
             return `<tr><td class="fw-bold text-end">${d.orders}</td><td class="text-muted small text-end">${d.time}</td><td class="text-end">${statusBadge}</td></tr>`;
         }).join('');
-
         const modalHTML = `
         <div class="modal fade" id="sentOrdersDetailsModal" tabindex="-1">
             <div class="modal-dialog modal-dialog-centered">
@@ -601,22 +797,21 @@ const Doctor = {
         new bootstrap.Modal(document.getElementById('sentOrdersDetailsModal')).show();
     },
 
-  // --- 4. واجهة: السجل الطبي (Medical Record) ---
+    // ============================================================
+    // 6) السجل الطبي (Medical Archive)
+    // ============================================================
     viewMedicalArchive: function() {
         Core.navigateTo('viewMedicalArchive', () => {
             const mainContent = document.getElementById('mainContent');
             const tools = [
                 { label: "تحديث السجل", icon: "bi-arrow-repeat", action: "Doctor.loadMedicalArchive()" }
             ];
-
             mainContent.innerHTML = `
                 <div class="container-fluid p-0 animate-in">
                     ${Core.renderHeaderWithTools('السجل الطبي', 'الأرشيف الكامل لجميع المرضى وزياراتهم السابقة.', tools)}
-                    
                     <div class="card stat-card p-4 mb-4 border-0 shadow-sm">
                         <input type="text" class="form-control shadow-none bg-light" placeholder="بحث سريع باسم المريض في السجل الطبي..." id="archiveSearch" onkeyup="Doctor.filterArchive()">
                     </div>
-                    
                     <div class="card stat-card p-0 border-0 shadow-sm" id="archiveTableContainer"></div>
                 </div>`;
             this.loadMedicalArchive();
@@ -626,33 +821,27 @@ const Doctor = {
     loadMedicalArchive: async function(filteredData = null) {
         const container = document.getElementById('archiveTableContainer');
         if (!container) return;
-
-        // إذا لم يتم تمرير بيانات مفلترة، نجلبها من السيرفر
         if (!filteredData) {
             container.innerHTML = `<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div></div>`;
             const response = await Core.apiCall('doctor/medical_archive', 'GET');
-            
             if (response && response.success) {
-                DoctorData.data_patients = response.data; // حفظها محلياً لتسريع البحث
+                DoctorData.data_patients = response.data;
                 filteredData = response.data;
             } else {
                 container.innerHTML = `<div class="p-5 text-center text-danger">حدث خطأ أثناء جلب السجل الطبي.</div>`;
                 return;
             }
         }
-
         if (filteredData.length === 0) {
             container.innerHTML = `<div class="p-5 text-center text-muted">لا يوجد سجلات مطابقة.</div>`;
             return;
         }
-
         const headers = ["اسم المريض", "عدد الزيارات", "آخر زيارة", "الإجراء"];
         const rows = filteredData.map(p => [
             `<span class="fw-bold">${p.name}</span>`,
             `<span class="badge bg-primary bg-opacity-10 text-primary px-3">${p.visit_num}</span>`,
             `<span class="small text-muted">${p.last_visit_date}</span>`
         ]);
-
         Core.renderTable('archiveTableContainer', headers, rows, (row, index) => {
             const p = filteredData[index];
             return `
@@ -664,7 +853,6 @@ const Doctor = {
 
     filterArchive: function() {
         const query = document.getElementById('archiveSearch').value.toLowerCase();
-        // تصفية البيانات المحفوظة محلياً بناءً على الاسم لسرعة الاستجابة
         const filtered = DoctorData.data_patients.filter(p => p.name.toLowerCase().includes(query));
         this.loadMedicalArchive(filtered);
     },
@@ -672,8 +860,6 @@ const Doctor = {
     viewFullFile: async function(patient_id) {
         const existing = document.getElementById('historyModal');
         if (existing) existing.remove();
-
-        // جلب السجل الطبي من السيرفر إذا لم يكن محملاً
         let patient = DoctorData.data_patients.find(p => p.id_pat == patient_id);
         if (!patient) {
             const response = await Core.apiCall('doctor/medical_archive', 'GET');
@@ -684,7 +870,7 @@ const Doctor = {
         }
         if (!patient) { Core.showAlert('لم يتم العثور على الملف الطبي', 'warning'); return; }
 
-        const cards = patient.medical_file.map((v, idx) => {
+        const cards = patient.medical_file.map((v) => {
             const ticketBadge = v.ticket_serial
                 ? `<span class="badge bg-info bg-opacity-10 text-info"><i class="bi bi-ticket-perforated ms-1"></i> T-${v.ticket_serial} (${v.ticket_type === 'morning' ? 'صباحي' : 'مسائي'})</span>`
                 : '';
@@ -730,8 +916,9 @@ const Doctor = {
         new bootstrap.Modal(document.getElementById('historyModal')).show();
     }
 };
+
 initDoctorModule();
-// --- دالة التهيئة التي تعمل فوراً عند الحقن الديناميكي ---
+
 async function initDoctorModule() {
     const response = await Core.apiCall('auth/me', 'GET');
     if(response && response.success) {
@@ -739,12 +926,17 @@ async function initDoctorModule() {
         Core.renderProfile(DoctorData.currentUser);
     }
 
-    // === الإضافة الجديدة: جلب الخدمات من السيرفر ===
+    // جلب الخدمات
     const servicesResponse = await Core.apiCall('doctor/services_list', 'GET');
     if (servicesResponse && servicesResponse.success) {
-        DoctorData.availableServices = servicesResponse.data; // استبدال البيانات الوهمية بالحقيقية
+        DoctorData.availableServices = servicesResponse.data;
     }
-    // ===========================================
+
+    // جلب إعدادات الترويسة (تخزين محلي - الترويسة ديناميكية ويعدّلها الأدمن)
+    const headerResponse = await Core.apiCall('settings/header', 'GET');
+    if (headerResponse && headerResponse.success) {
+        DoctorData.headerSettings = headerResponse.data;
+    }
 
     const doctorLinks = [
         { title: "حالة جديدة", icon: "bi-person-plus", url: "javascript:void(0)", action: "Doctor.viewNewCase()", active: true },

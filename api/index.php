@@ -102,6 +102,8 @@ $routes = [
     'doctor/sent_orders' => ['methods' => ['GET'], 'handler' => fn () => $doctorHandler('getSentOrders', false)],
     'doctor/services_list' => ['methods' => ['GET'], 'handler' => fn () => $doctorHandler('getServicesList', false)],
     'doctor/medical_archive' => ['methods' => ['GET'], 'handler' => fn () => $doctorHandler('getMedicalArchive', false)],
+    'doctor/visit_close_data' => ['methods' => ['POST'], 'handler' => fn () => $doctorHandler('getVisitCloseData')],
+    // مسار قديم (موقوف) - يعيد 410 Gone لأي عميل لم يحدّث
     'doctor/create_ticket' => ['methods' => ['POST'], 'handler' => fn () => $doctorHandler('createTicket')],
 
     'accounting/pending' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('getPendingInvoices', false)],
@@ -141,6 +143,17 @@ $routes = [
         $model = new NotificationModel($db->getConnection());
         $model->markAllRead($userData['job']);
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    }],
+
+    // إعدادات الترويسة - متاح لأي مستخدم مسجل دخوله لاستخدامها في نماذج الطباعة
+    'settings/header' => ['methods' => ['GET'], 'handler' => function (): void {
+        AuthMiddleware::checkAccess();
+        $db = new Database();
+        $service = new SettingsService($db->getConnection());
+        echo json_encode([
+            'success' => true,
+            'data'    => $service->getHeader(),
+        ], JSON_UNESCAPED_UNICODE);
     }],
 
     'realtime/config' => ['methods' => ['GET'], 'handler' => function (): void {
