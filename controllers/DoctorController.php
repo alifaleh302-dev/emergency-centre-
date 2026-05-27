@@ -203,6 +203,34 @@ class DoctorController extends BaseController
                 throw new InvalidArgumentException('الزيارة غير موجودة.');
             }
 
+            // ✅ Self-healing: إن لم تكن للزيارة تذكرة (زيارات قديمة قبل التحديث،
+            // أو حالات شذوذ سابقة)، نُصدر تذكرة تلقائياً الآن لضمان ظهور رقم التذكرة
+            // في النموذج وفي السجل الطبي لاحقاً. القيد UNIQUE على visit_id
+            // يمنع التكرار في حالات السباق.
+            if (empty($payload['ticket_serial'])) {
+                try {
+                    $ticketModel = new ExaminationTicketModel($this->conn, $this->driver);
+                    if (!$ticketModel->hasTicket($visitId)) {
+                        $initialNotes = (string) ($payload['initial_notes'] ?? '');
+                        $issued = $ticketModel->autoIssue($visitId, $initialNotes);
+                        $payload['ticket_serial'] = $issued['serial_number'];
+                        $payload['ticket_type']   = $issued['ticket_type'];
+                        $payload['ticket_amount'] = $issued['amount'];
+                    } else {
+                        // وُجدت تذكرة بعد إعادة التحقق - أعد التحميل
+                        $existing = $ticketModel->getByVisitId($visitId);
+                        if ($existing) {
+                            $payload['ticket_serial'] = $existing['serial_number'];
+                            $payload['ticket_type']   = $existing['ticket_type'];
+                            $payload['ticket_amount'] = $existing['amount'];
+                        }
+                    }
+                } catch (Throwable $issueExc) {
+                    // لا نُفشل النموذج كاملاً بسبب فشل إصدار التذكرة - نكتفي بترك الحقول فارغة
+                    error_log('[getVisitCloseData] auto-issue ticket failed for visit ' . $visitId . ': ' . $issueExc->getMessage());
+                }
+            }
+
             // إضافة اسم الطبيب المعالج + إعدادات الترويسة لتغني العميل عن طلب إضافي
             $payload['attending_doctor'] = $this->fetchDoctorFullName();
             $payload['gender_ar']        = ($payload['gender'] === 'Male') ? 'ذكر' : 'أنثى';

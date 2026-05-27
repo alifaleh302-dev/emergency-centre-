@@ -320,11 +320,16 @@ class DoctorModel
             ? "STRING_AGG(sm.service_name, '، ' ORDER BY sm.service_name)"
             : "GROUP_CONCAT(sm.service_name SEPARATOR '، ')";
 
-        $sql = "SELECT {$this->formatDate('v.created_at')} AS date_visit,
+        $sql = "SELECT v.visit_id,
+                       {$this->formatDate('v.created_at')} AS date_visit,
                        v.type_case, v.diagnosis, v.notes,
+                       v.final_notes,
+                       v.clinic_name,
+                       v.closed_by_name,
                        et.notes AS ticket_notes,
                        et.serial_number AS ticket_serial,
                        et.ticket_type,
+                       et.amount AS ticket_amount,
                        (SELECT {$aggregate}
                         FROM Invoices i
                         JOIN Invoice_Details id ON i.invoice_id = id.invoice_id
