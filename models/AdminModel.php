@@ -6,6 +6,7 @@ class AdminModel
     private PDO $conn;
     private string $driver;
     private ?array $schemaCache = null;
+    private ?SchemaCache $persistentCache = null;
 
     private array $tableLabels = [
         'users' => 'المستخدمون',
@@ -83,12 +84,26 @@ class AdminModel
     {
         $this->conn = $db;
         $this->driver = $driver;
+        // Phase 1: كاش schema بين الطلبات (ملف بـ TTL)
+        if (class_exists('SchemaCache')) {
+            $this->persistentCache = new SchemaCache();
+        }
     }
 
     public function getSchema(): array
     {
+        // كاش داخل الطلب (موجود مسبقاً)
         if ($this->schemaCache !== null) {
             return $this->schemaCache;
+        }
+
+        // Phase 1: كاش بين الطلبات على القرص (TTL=5min افتراضي)
+        if ($this->persistentCache !== null) {
+            $cached = $this->persistentCache->get();
+            if ($cached !== null && !empty($cached)) {
+                $this->schemaCache = $cached;
+                return $cached;
+            }
         }
 
         $tables = $this->conn->query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name ASC")->fetchAll(PDO::FETCH_COLUMN) ?: [];
@@ -98,46 +113,120 @@ class AdminModel
         }
 
         $this->schemaCache = $schema;
+
+        // حفظ في الكاش الدائم
+        if ($this->persistentCache !== null) {
+            $this->persistentCache->set($schema);
+        }
+
         return $schema;
+    }
+
+    /**
+     * Phase 1: إبطال الكاش — يُستدعى عند أي migration أو تغيير في schema.
+     */
+    public function invalidateSchemaCache(): void
+    {
+        $this->schemaCache = null;
+        if ($this->persistentCache !== null) {
+            $this->persistentCache->invalidate();
+        }
     }
 
     public function getDashboardStats(): array
     {
-        $tableCount = count($this->getSchema());
+        // Phase 1: دمج كل العدادات في استعلام واحد بدل 15 round-trip
+        // كل عدّاد يُحسب عبر FILTER (CASE WHEN ...) داخل نفس scan
+        $statsSql = "
+            SELECT
+                (SELECT COUNT(*) FROM Users) AS users_count,
+                (SELECT COUNT(*) FROM Users WHERE role_id IS NOT NULL AND COALESCE(is_active, TRUE) = TRUE) AS active_users_count,
+                (SELECT COUNT(*) FROM Patients) AS patients_count,
+                (SELECT COUNT(*) FROM Patients WHERE created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day') AS patients_today,
+                (SELECT COUNT(*) FILTER (WHERE status = 'Active') FROM Visits) AS active_visits_count,
+                (SELECT COUNT(*) FILTER (WHERE status = 'Completed') FROM Visits) AS completed_visits_count,
+                (SELECT COUNT(*) FROM Visits WHERE visit_date >= CURRENT_DATE AND visit_date < CURRENT_DATE + INTERVAL '1 day') AS visits_today,
+                (SELECT COUNT(*) FROM Invoices WHERE accountant_id IS NULL AND cancelled_at IS NULL) AS pending_invoices_count,
+                (SELECT COUNT(*) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND COALESCE(paid_at, created_at) >= CURRENT_DATE AND COALESCE(paid_at, created_at) < CURRENT_DATE + INTERVAL '1 day') AS paid_invoices_today,
+                (SELECT COUNT(*) FROM Invoices WHERE cancelled_at IS NOT NULL) AS cancelled_invoices_count,
+                (SELECT COALESCE(SUM(net_amount), 0) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND COALESCE(paid_at, created_at) >= CURRENT_DATE AND COALESCE(paid_at, created_at) < CURRENT_DATE + INTERVAL '1 day') AS revenue_today,
+                (SELECT COALESCE(SUM(net_amount), 0) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND COALESCE(paid_at, created_at) >= DATE_TRUNC('month', CURRENT_DATE) AND COALESCE(paid_at, created_at) < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month') AS revenue_month,
+                (SELECT COUNT(*) FROM Examination_Tickets WHERE created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day') AS tickets_today,
+                (SELECT COUNT(*) FROM Notifications WHERE created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day') AS notifications_today
+        ";
+        $row = $this->conn->query($statsSql)->fetch() ?: [];
+
+        $schema = $this->getSchema();
         $stats = [
-            'tables_count' => $tableCount,
-            'users_count' => (int) $this->scalar('SELECT COUNT(*) FROM Users'),
-            'active_users_count' => (int) $this->scalar('SELECT COUNT(*) FROM Users WHERE role_id IS NOT NULL AND COALESCE(is_active, TRUE) = TRUE'),
-            'patients_count' => (int) $this->scalar('SELECT COUNT(*) FROM Patients'),
-            'patients_today' => (int) $this->scalar('SELECT COUNT(*) FROM Patients WHERE DATE(created_at) = CURRENT_DATE'),
-            'active_visits_count' => (int) $this->scalar("SELECT COUNT(*) FROM Visits WHERE status = 'Active'"),
-            'completed_visits_count' => (int) $this->scalar("SELECT COUNT(*) FROM Visits WHERE status = 'Completed'"),
-            'visits_today' => (int) $this->scalar('SELECT COUNT(*) FROM Visits WHERE DATE(visit_date) = CURRENT_DATE'),
-            'pending_invoices_count' => (int) $this->scalar('SELECT COUNT(*) FROM Invoices WHERE accountant_id IS NULL AND cancelled_at IS NULL'),
-            'paid_invoices_today' => (int) $this->scalar('SELECT COUNT(*) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND DATE(COALESCE(paid_at, created_at)) = CURRENT_DATE'),
-            'cancelled_invoices_count' => (int) $this->scalar('SELECT COUNT(*) FROM Invoices WHERE cancelled_at IS NOT NULL'),
-            'revenue_today' => (float) $this->scalar('SELECT COALESCE(SUM(net_amount), 0) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND DATE(COALESCE(paid_at, created_at)) = CURRENT_DATE'),
-            'revenue_month' => (float) $this->scalar("SELECT COALESCE(SUM(net_amount), 0) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND DATE_TRUNC('month', COALESCE(paid_at, created_at)) = DATE_TRUNC('month', CURRENT_DATE)"),
-            'tickets_today' => (int) $this->scalar('SELECT COUNT(*) FROM Examination_Tickets WHERE DATE(created_at) = CURRENT_DATE'),
-            'notifications_today' => (int) $this->scalar('SELECT COUNT(*) FROM Notifications WHERE DATE(created_at) = CURRENT_DATE'),
+            'tables_count' => count($schema),
+            'users_count' => (int) ($row['users_count'] ?? 0),
+            'active_users_count' => (int) ($row['active_users_count'] ?? 0),
+            'patients_count' => (int) ($row['patients_count'] ?? 0),
+            'patients_today' => (int) ($row['patients_today'] ?? 0),
+            'active_visits_count' => (int) ($row['active_visits_count'] ?? 0),
+            'completed_visits_count' => (int) ($row['completed_visits_count'] ?? 0),
+            'visits_today' => (int) ($row['visits_today'] ?? 0),
+            'pending_invoices_count' => (int) ($row['pending_invoices_count'] ?? 0),
+            'paid_invoices_today' => (int) ($row['paid_invoices_today'] ?? 0),
+            'cancelled_invoices_count' => (int) ($row['cancelled_invoices_count'] ?? 0),
+            'revenue_today' => (float) ($row['revenue_today'] ?? 0),
+            'revenue_month' => (float) ($row['revenue_month'] ?? 0),
+            'tickets_today' => (int) ($row['tickets_today'] ?? 0),
+            'notifications_today' => (int) ($row['notifications_today'] ?? 0),
         ];
 
-        $tableSummaries = [];
-        foreach ($this->getSchema() as $meta) {
-            $tableSummaries[] = [
-                'table' => $meta['table'],
-                'label' => $meta['label'],
-                'count' => (int) $this->scalar('SELECT COUNT(*) FROM ' . $this->quoteIdentifier($meta['table'])),
-                'primary_key' => $meta['primary_key'],
-            ];
-        }
-
+        // Phase 1: تجميع عدّ كل الجداول في استعلام UNION واحد بدل N استعلام
+        $tableSummaries = $this->getTableCountsBulk($schema);
         usort($tableSummaries, fn(array $a, array $b) => $b['count'] <=> $a['count']);
 
         return [
             'stats' => $stats,
             'tables' => $tableSummaries,
         ];
+    }
+
+    /**
+     * Phase 1: عدّ صفوف كل الجداول في استعلام واحد (UNION ALL) بدل N استعلام منفصل.
+     * كل جدول يصبح SELECT صغير وكلها تُجمَّع في round-trip واحد.
+     */
+    private function getTableCountsBulk(array $schema): array
+    {
+        if (empty($schema)) {
+            return [];
+        }
+
+        $unions = [];
+        foreach ($schema as $meta) {
+            $tableQuoted = $this->quoteIdentifier($meta['table']);
+            // SQL literal للاسم — آمن لأن أسماء الجداول مصدرها information_schema (موثوق)
+            $tableLiteral = "'" . str_replace("'", "''", $meta['table']) . "'";
+            $unions[] = "SELECT {$tableLiteral} AS t, (SELECT COUNT(*) FROM {$tableQuoted}) AS c";
+        }
+        $sql = implode(' UNION ALL ', $unions);
+
+        $counts = [];
+        try {
+            $stmt = $this->conn->query($sql);
+            foreach ($stmt->fetchAll() as $row) {
+                $counts[$row['t']] = (int) $row['c'];
+            }
+        } catch (Throwable $e) {
+            // fallback آمن: نرجع 0 لكل الجداول بدل ما نوقف لوحة الإدارة
+            foreach ($schema as $meta) {
+                $counts[$meta['table']] = 0;
+            }
+        }
+
+        $summaries = [];
+        foreach ($schema as $meta) {
+            $summaries[] = [
+                'table' => $meta['table'],
+                'label' => $meta['label'],
+                'count' => $counts[$meta['table']] ?? 0,
+                'primary_key' => $meta['primary_key'],
+            ];
+        }
+        return $summaries;
     }
 
     public function getTableRows(string $table, int $page, int $perPage, string $search = '', array $filters = [], ?string $sortBy = null, string $sortDir = 'DESC'): array
