@@ -36,7 +36,11 @@ class AccountingModel
 
     public function getInvoiceDetails(int $invoiceId): array
     {
-        $sql = "SELECT sm.service_name AS name, id.service_price_at_time AS price
+        $sql = "SELECT sm.service_name           AS name,
+                       id.service_price_at_time  AS price,
+                       id.quantity               AS quantity,
+                       sm.ministry_share         AS ministry_share_master,
+                       id.ministry_share_at_time AS ministry_share
                 FROM Invoice_Details id
                 JOIN Services_Master sm ON id.service_id = sm.service_id
                 WHERE id.invoice_id = :invoice_id";
@@ -119,6 +123,16 @@ class AccountingModel
                     ':invoice_id'      => $invoiceId,
                 ]);
 
+                // -----------------------------------------------------------
+                // حصة الوزارة لكل خدمة (Ministry Share per Service)
+                // تُحسب وتُخزَّن فقط عندما يكون السند من نوع A (كاش كامل).
+                // المصدر: services_master.ministry_share × invoice_details.quantity
+                // سندات C (الإعفاء الكلي) لا تستحق فيها الوزارة شيئاً، فنُبقي 0.
+                // -----------------------------------------------------------
+                if ($docTypeName === 'A') {
+                    $this->applyMinistryShare($invoiceId);
+                }
+
                 $this->conn->commit();
                 return [$docTypeName => $newSerial];
             }
@@ -177,6 +191,15 @@ class AccountingModel
             $linkAtoB = $this->conn->prepare('UPDATE Invoices SET related_invoice_id = :rid WHERE invoice_id = :id');
             $linkAtoB->execute([':rid' => $invoiceBId, ':id' => $invoiceId]);
 
+            // -----------------------------------------------------------
+            // حصة الوزارة لكل خدمة في حالة الإعفاء الجزئي:
+            //   تُخزَّن على تفاصيل سند A الأصلية فقط (التي تحمل قائمة الخدمات).
+            //   سند B الجديد لا يملك صفوف invoice_details فلا يحتاج معالجة.
+            //   حصة الوزارة ثابتة لكل خدمة بحسب services_master ولا تتأثر
+            //   بانخفاض total على سند A الناتج عن الإعفاء.
+            // -----------------------------------------------------------
+            $this->applyMinistryShare($invoiceId);
+
             $this->conn->commit();
             return [
                 'A' => $serialA,
@@ -199,6 +222,24 @@ class AccountingModel
      * @param string $serialDocName السجل الذي يحمل العداد (A أو B)
      * @param int[]  $matchingDocTypeIds أنواع السندات المشتركة في العداد (مثلاً B+C)
      */
+    /**
+     * يحدّث ministry_share_at_time لكل سطر في invoice_details تابع
+     * للفاتورة المحددة عبر جلب القيمة من services_master.ministry_share
+     * وضربها بـ quantity.
+     *
+     * تُستدعى فقط عندما يصير السند من نوع A (كاش أو جزئي-A).
+     */
+    private function applyMinistryShare(int $invoiceId): void
+    {
+        $sql = "UPDATE Invoice_Details id
+                SET ministry_share_at_time = sm.ministry_share * id.quantity
+                FROM Services_Master sm
+                WHERE id.service_id = sm.service_id
+                  AND id.invoice_id = :invoice_id";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':invoice_id' => $invoiceId]);
+    }
+
     private function allocateSerial(string $serialDocName, array $matchingDocTypeIds): int
     {
         $lockStmt = $this->conn->prepare('SELECT doc_type_id, current_serial FROM Document_Types WHERE doc_name = :serial_doc FOR UPDATE');
