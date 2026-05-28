@@ -79,6 +79,26 @@ $adminHandler = function (string $methodName, bool $passData = true) use ($data)
     $controller->{$methodName}();
 };
 
+// ----------------------------------------------------------------------------
+// Finance Hub Handler (M4)
+// ----------------------------------------------------------------------------
+// المركز المالي والسندي الشامل متاح للمحاسب (يرى حركاته فقط)
+// والمدير (يرى الكل) — الـ scope يُطبَّق داخل FinanceController.
+$financeHandler = function (string $methodName, bool $passData = true) use ($data): void {
+    $userData = AuthMiddleware::checkAccess(['أمين صندوق', 'مدير النظام']);
+    $controller = new FinanceController(
+        (string) $userData['user_id'],
+        (string) $userData['job']
+    );
+
+    if ($passData) {
+        $controller->{$methodName}($data);
+        return;
+    }
+
+    $controller->{$methodName}();
+};
+
 $routes = [
     'auth/login' => ['methods' => ['POST'], 'handler' => fn () => (new AuthController())->login($data)],
     'auth/me' => ['methods' => ['GET'], 'handler' => function (): void {
@@ -129,6 +149,17 @@ $routes = [
     'admin/audit_log'        => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('getAuditLog')],
     'admin/reports/revenue'  => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('reportRevenue')],
     'admin/reports/doctors'  => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('reportDoctors')],
+
+    // ------------------------------------------------------------------------
+    // Finance Hub (M4) — 7 endpoints مشتركة بين المحاسب والمدير
+    // ------------------------------------------------------------------------
+    'finance/overview'           => ['methods' => ['POST'], 'handler' => fn () => $financeHandler('getOverview')],
+    'finance/transactions'       => ['methods' => ['POST'], 'handler' => fn () => $financeHandler('getTransactions')],
+    'finance/transaction_detail' => ['methods' => ['POST'], 'handler' => fn () => $financeHandler('getTransactionDetail')],
+    'finance/export'             => ['methods' => ['POST'], 'handler' => fn () => $financeHandler('export')],
+    'finance/filter_options'     => ['methods' => ['GET'],  'handler' => fn () => $financeHandler('getFilterOptions', false)],
+    'finance/ministry_report'    => ['methods' => ['POST'], 'handler' => fn () => $financeHandler('getMinistryReport')],
+    'finance/print_voucher'      => ['methods' => ['POST'], 'handler' => fn () => $financeHandler('printVoucher')],
 
     'notifications/unread' => ['methods' => ['GET'], 'handler' => function (): void {
         $userData = AuthMiddleware::checkAccess();
