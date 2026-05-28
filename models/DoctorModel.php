@@ -322,11 +322,80 @@ class DoctorModel
 
     public function getServiceDetailsById(int $serviceId): ?array
     {
-        $stmt = $this->conn->prepare('SELECT service_id, total_price FROM Services_Master WHERE service_id = :service_id LIMIT 1');
+        // 🆕 نُضيف department_code للسماح بمعرفة هل الخدمة تخصّ المختبر
+        // وذلك حتى يُولّد النظام تلقائياً مستند المختبر (Laboratory Document).
+        $sql = "SELECT sm.service_id, sm.total_price, sc.department, d.department_code
+                FROM Services_Master sm
+                LEFT JOIN service_categories sc ON sc.category_id = sm.category_id
+                LEFT JOIN departments d ON d.department_id = sc.department_id
+                WHERE sm.service_id = :service_id
+                LIMIT 1";
+        $stmt = $this->conn->prepare($sql);
         $stmt->execute([':service_id' => $serviceId]);
         $service = $stmt->fetch();
 
         return $service ?: null;
+    }
+
+    /**
+     * 🧪 ينشئ مستند مختبر (استمارة فحص) تلقائياً مرتبطاً بالزيارة والفاتورة
+     * من نوع doc_type=L مع تسلسل خاص به. مفتاح المستند يتبع نفس
+     * نمط تأمين التسلسل المستخدم في AccountingModel::processPayment
+     * (قفل سجل document_types ثم MAX(serial_number) لتفادي السباق).
+     *
+     * يُعاد lab_doc_id الجديد، وإن لم يكن هناك خدمات مختبر يُعاد null.
+     */
+    public function createLaboratoryDocument(int $visitId, int $invoiceId, int $servicesCount, int $issuedBy, ?string $notes = null): ?int
+    {
+        if ($servicesCount <= 0) {
+            return null;
+        }
+
+        // 1) قفل سجل نوع المستند L والحصول على current_serial
+        $lockStmt = $this->conn->prepare(
+            "SELECT doc_type_id, current_serial FROM document_types WHERE doc_name = 'L' FOR UPDATE"
+        );
+        $lockStmt->execute();
+        $docRow = $lockStmt->fetch();
+        if (!$docRow) {
+            throw new RuntimeException('نوع مستند المختبر (L) غير معرّف في قاعدة البيانات.');
+        }
+
+        $docTypeId = (int) $docRow['doc_type_id'];
+
+        // 2) الحصول على أعلى تسلسل فعلي في laboratory_documents لنفس النوع
+        $maxStmt = $this->conn->prepare(
+            'SELECT COALESCE(MAX(serial_number), 0) FROM laboratory_documents WHERE doc_type_id = :doc_type_id'
+        );
+        $maxStmt->execute([':doc_type_id' => $docTypeId]);
+        $actualMax = (int) $maxStmt->fetchColumn();
+
+        $newSerial = max((int) $docRow['current_serial'], $actualMax) + 1;
+
+        // 3) تحديث العداد في document_types
+        $updateSerialStmt = $this->conn->prepare(
+            'UPDATE document_types SET current_serial = :current_serial WHERE doc_type_id = :doc_type_id'
+        );
+        $updateSerialStmt->execute([
+            ':current_serial' => $newSerial,
+            ':doc_type_id' => $docTypeId,
+        ]);
+
+        // 4) إدراج صف جديد في laboratory_documents
+        $insertSql = "INSERT INTO laboratory_documents
+                        (visit_id, invoice_id, serial_number, doc_type_id, doc_category, services_count, notes, issued_by)
+                     VALUES
+                        (:visit_id, :invoice_id, :serial_number, :doc_type_id, 'laboratory', :services_count, :notes, :issued_by)";
+
+        return $this->insertAndGetId($insertSql, [
+            ':visit_id'       => $visitId,
+            ':invoice_id'     => $invoiceId,
+            ':serial_number'  => $newSerial,
+            ':doc_type_id'    => $docTypeId,
+            ':services_count' => $servicesCount,
+            ':notes'          => $notes,
+            ':issued_by'      => $issuedBy,
+        ], 'lab_doc_id');
     }
 
     public function getMedicalArchive(): array

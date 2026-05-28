@@ -364,6 +364,7 @@ class DoctorController extends BaseController
             $this->conn->beginTransaction();
             $invoiceId = $this->model->createPendingInvoice($visitId);
             $totalInvoicePrice = 0.0;
+            $laboratoryServicesCount = 0; // 🧪 عدّ عدد خدمات المختبر في هذا الطلب
 
             foreach ($allOrderIds as $serviceId) {
                 $service = $this->model->getServiceDetailsById($serviceId);
@@ -374,6 +375,13 @@ class DoctorController extends BaseController
                 $price = round((float) $service['total_price'], 2);
                 $this->model->addInvoiceDetail($invoiceId, (int) $service['service_id'], $price);
                 $totalInvoicePrice += $price;
+
+                // 🧪 إذا كانت الخدمة تتبع قسم المختبر
+                $deptCode = isset($service['department_code']) ? (string) $service['department_code'] : '';
+                $deptName = isset($service['department']) ? (string) $service['department'] : '';
+                if (strcasecmp($deptCode, 'Laboratory') === 0 || strcasecmp($deptName, 'Laboratory') === 0) {
+                    $laboratoryServicesCount++;
+                }
             }
 
             if ($totalInvoicePrice <= 0) {
@@ -381,6 +389,21 @@ class DoctorController extends BaseController
             }
 
             $this->model->updateInvoiceTotal($invoiceId, $totalInvoicePrice);
+
+            // 🧪 أتمتة مستندات المختبر: عند وجود أي خدمة مختبر في الطلب،
+            // أنشئ مستنداً جديداً (استمارة فحص) وصنّفه برمجياً من نوع laboratory.
+            $labDocId = null;
+            $labDocSerial = null;
+            if ($laboratoryServicesCount > 0) {
+                $labDocId = $this->model->createLaboratoryDocument(
+                    $visitId,
+                    $invoiceId,
+                    $laboratoryServicesCount,
+                    $this->doctor_id,
+                    null
+                );
+            }
+
             $this->conn->commit();
 
             // إشعار للمحاسب بوجود فاتورة جديدة
@@ -389,7 +412,19 @@ class DoctorController extends BaseController
                 $notif->create('أمين صندوق', 'فاتورة جديدة بانتظار التحصيل', 'إجمالي: ' . $totalInvoicePrice . ' ريال', 'new_invoice', $invoiceId);
             } catch (Throwable $e) {} // لا نوقف العملية بسبب الإشعار
 
-            $this->success(null, 'تم إرسال الطلبات وحفظها بنجاح');
+            // 🧪 إشعار لفني المختبر عند إصدار مستند مختبر جديد
+            if ($labDocId !== null) {
+                try {
+                    $notif = $notif ?? new NotificationModel($this->conn);
+                    $notif->create('فني مختبر', 'استمارة فحص جديدة', 'عدد الفحوصات: ' . $laboratoryServicesCount, 'new_lab_document', $labDocId);
+                } catch (Throwable $e) {}
+            }
+
+            $this->success([
+                'invoice_id' => $invoiceId,
+                'lab_document_id' => $labDocId,
+                'laboratory_services_count' => $laboratoryServicesCount,
+            ], 'تم إرسال الطلبات وحفظها بنجاح');
         } catch (InvalidArgumentException $exception) {
             if ($this->conn->inTransaction()) {
                 $this->conn->rollBack();

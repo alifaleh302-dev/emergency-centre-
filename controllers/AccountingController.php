@@ -72,7 +72,7 @@ class AccountingController extends BaseController
             $total = round((float) $pendingInvoice['total'], 2);
             $this->validatePaymentBreakdown($docType, $total, $netAmount, $exemptionValue);
 
-            $serialNumber = $this->model->processPayment(
+            $result = $this->model->processPayment(
                 $invoiceId,
                 $netAmount,
                 $exemptionValue,
@@ -84,14 +84,34 @@ class AccountingController extends BaseController
             try {
                 $notif = new NotificationModel($this->conn);
                 $typeName = match($docType) { 'A' => 'كاش', 'B' => 'إعفاء جزئي', 'C' => 'إعفاء كلي', default => $docType };
-                $notif->create('طبيب عام', 'تم تحصيل فاتورة (' . $typeName . ')', 'سند رقم: ' . $serialNumber, 'invoice_paid', $invoiceId);
+                if ($docType === 'B' && isset($result['A'], $result['B'])) {
+                    $msg = 'سند كاش رقم: ' . $result['A'] . ' + سند إعفاء رقم: ' . $result['B'];
+                } else {
+                    $singleSerial = $result[$docType] ?? array_values($result)[0] ?? null;
+                    $msg = 'سند رقم: ' . $singleSerial;
+                }
+                $notif->create('طبيب عام', 'تم تحصيل فاتورة (' . $typeName . ')', $msg, 'invoice_paid', $invoiceId);
             } catch (Throwable $e) {}
 
-            $this->respond([
+            // توليد استجابة متوافقة مع الواجهة الأمامية:
+            //   - serial_number يبقى لتوافق العملاء القدامى (للدفع الكامل/الإعفاء الكلي)
+            //   - serials مصفوفة توضح جميع السندات المولدة (واحد أو اثنان في حالة الجزئي)
+            $response = [
                 'success' => true,
                 'message' => 'تم السداد بنجاح',
-                'serial_number' => $serialNumber,
-            ]);
+                'serials' => array_intersect_key($result, array_flip(['A', 'B', 'C'])),
+            ];
+            if ($docType === 'B' && isset($result['A'], $result['B'])) {
+                $response['serial_number'] = $result['A']; // رقم سند الكاش للعرض الرئيسي
+                $response['cash_serial']      = $result['A'];
+                $response['exempt_serial']    = $result['B'];
+                $response['invoice_id_A']     = $result['invoice_id_A'] ?? null;
+                $response['invoice_id_B']     = $result['invoice_id_B'] ?? null;
+                $response['message']          = 'تم السداد بنجاح — توليد سندين: كاش (A) + إعفاء (B) مترابطين';
+            } else {
+                $response['serial_number'] = $result[$docType] ?? array_values($result)[0] ?? null;
+            }
+            $this->respond($response);
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage(), 422);
         } catch (Throwable $exception) {
@@ -117,30 +137,54 @@ class AccountingController extends BaseController
             $formattedReceipts = [];
             foreach ($receipts as $receipt) {
                 $typeName = '';
+                $docName = $receipt['doc_name'];
+                $hasRelated = !empty($receipt['related_invoice_id']);
+                $netAmount = (float) $receipt['net_amount'];
+                $exemptVal = (float) $receipt['exemption_value'];
 
-                if ($receipt['doc_name'] === 'A') {
+                if ($docName === 'A' && !$hasRelated) {
+                    // سند كاش مستقل (دفع كامل)
                     $typeName = 'كاش';
-                    $stats['total_cash'] += (float) $receipt['net_amount'];
+                    $stats['total_cash'] += $netAmount;
                     $stats['count_cash']++;
-                    $stats['total_payments'] += (float) $receipt['net_amount'];
-                } elseif ($receipt['doc_name'] === 'C' || (float) $receipt['net_amount'] === 0.0) {
-                    $typeName = 'إعفاء كلي';
-                    $stats['total_full_exemption'] += (float) $receipt['exemption_value'];
-                    $stats['count_full_exemption']++;
-                } else {
+                    $stats['total_payments'] += $netAmount;
+                } elseif ($docName === 'A' && $hasRelated) {
+                    // سند كاش مرتبط بإعفاء جزئي (الشق النقدي)
+                    $typeName = 'كاش (إعفاء جزئي)';
+                    $stats['total_partial_exemption'] += 0.0; // مبلغ الإعفاء يعدّ مع سند B
+                    // لا نعدّه في count_partial_exemption حتى لا يكرر مع B
+                    $stats['total_cash'] += $netAmount;
+                    $stats['count_cash']++;
+                    $stats['total_payments'] += $netAmount;
+                } elseif ($docName === 'B' && $hasRelated) {
+                    // سند إعفاء مرتبط بسند كاش (الشق المعفى) - النموذج الجديد
                     $typeName = 'إعفاء جزئي';
-                    $stats['total_partial_exemption'] += (float) $receipt['exemption_value'];
+                    $stats['total_partial_exemption'] += $exemptVal;
                     $stats['count_partial_exemption']++;
-                    $stats['total_payments'] += (float) $receipt['net_amount'];
+                } elseif ($docName === 'C' || $netAmount === 0.0) {
+                    // إعفاء كلي
+                    $typeName = 'إعفاء كلي';
+                    $stats['total_full_exemption'] += $exemptVal;
+                    $stats['count_full_exemption']++;
+                } elseif ($docName === 'B') {
+                    // إعفاء جزئي بالنموذج القديم (سند واحد B فيه net + exemption) - للتوافق
+                    $typeName = 'إعفاء جزئي (قديم)';
+                    $stats['total_partial_exemption'] += $exemptVal;
+                    $stats['count_partial_exemption']++;
+                    $stats['total_cash'] += $netAmount;
+                    $stats['total_payments'] += $netAmount;
                 }
 
                 $formattedReceipts[] = [
                     'Invoice_id' => $receipt['invoice_id'],
                     'name' => $receipt['name'],
-                    'amount' => $receipt['net_amount'],
+                    'amount' => $docName === 'B' && $hasRelated ? $exemptVal : $netAmount,
                     'time' => $receipt['time'],
                     'cashier' => $receipt['cashier'],
                     'type' => $typeName,
+                    'doc_name' => $docName,
+                    'serial_number' => $receipt['serial_number'] ?? null,
+                    'related_invoice_id' => $receipt['related_invoice_id'] ?? null,
                 ];
             }
 

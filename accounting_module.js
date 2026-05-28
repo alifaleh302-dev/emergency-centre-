@@ -209,11 +209,12 @@ const Accountant = {
         } 
         else if (paid > 0 && paid < total) {
             const exemption = total - paid;
-            feedback.innerHTML = `<span class="text-warning text-dark"><i class="bi bi-info-circle ms-1"></i>سند إعفاء جزئي (الخصم: ${exemption} ريال)</span>`;
+            feedback.innerHTML = `<span class="text-warning text-dark"><i class="bi bi-info-circle ms-1"></i>إعفاء جزئي: سيُولّد سندان (A كاش + B إعفاء) مترابطان — الخصم: ${exemption} ريال</span>`;
             btnConfirm.disabled = false;
             feedback.setAttribute('data-doctype', 'B');
             feedback.setAttribute('data-exemption', exemption);
-            serialDisplay.innerText = serials['B']; // إظهار تسلسل الإعفاء
+            // إظهار تسلسل سندي A و B في وقت واحد حتى يعرف أمين الصندوق أرقام السندين القادمين
+            serialDisplay.innerText = `A:${serials['A']} + B:${serials['B']}`;
             serialDisplay.className = "fw-bold fs-5 text-warning";
         } 
         else if (paid === 0) {
@@ -244,10 +245,19 @@ const Accountant = {
 
         if (response && response.success) {
             bootstrap.Modal.getInstance(document.getElementById('paymentModal')).hide();
-            
-            // إظهار تنبيه برقم السند المولد
-            Core.showAlert(`تم السداد! رقم السند: ${response.serial_number}`, 'success');
-            
+
+            // إظهار تنبيه بالسندات المولدة
+            //   - الإعفاء الجزئي (B): سندان (A + B) مترابطان
+            //   - باقي الحالات: سند واحد
+            if (docType === 'B' && response.cash_serial && response.exempt_serial) {
+                Core.showAlert(
+                    `تم السداد! سند كاش (A) رقم: ${response.cash_serial} + سند إعفاء (B) رقم: ${response.exempt_serial}`,
+                    'success'
+                );
+            } else {
+                Core.showAlert(`تم السداد! رقم السند: ${response.serial_number}`, 'success');
+            }
+
             // تحديث الجدول لإخفاء الفاتورة المسددة
             this.loadPendingInvoices();
         } else {
