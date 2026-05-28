@@ -7,14 +7,14 @@ class AccountingController extends BaseController
 {
     private PDO $conn;
     private AccountingModel $model;
-    private string $cashier_id;
+    private int $cashier_id;
 
-    public function __construct(string $cashier_id)
+    public function __construct(int|string $cashier_id)
     {
         $database = new Database();
         $this->conn = $database->getConnection();
         $this->model = new AccountingModel($this->conn, $database->getDriver());
-        $this->cashier_id = $cashier_id;
+        $this->cashier_id = (int) $cashier_id;
     }
 
     public function getPendingInvoices(): void
@@ -95,6 +95,7 @@ class AccountingController extends BaseController
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage(), 422);
         } catch (Throwable $exception) {
+            error_log('accounting/pay_invoice: ' . $exception->getMessage());
             $this->error('تعذر تنفيذ عملية السداد حالياً.', 500);
         }
     }
