@@ -1348,3 +1348,444 @@ window.FinanceUtils = FinanceUtils;
 window.FinanceState = FinanceState;
 
 console.log('[Finance Hub M5.1] ✅ الموديول جاهز. للاختبار: Finance.viewHub()');
+
+/* =========================================================================
+ * 10. امتداد M5.2.1 — Column Manager + Saved Views
+ * ========================================================================= */
+(function () {
+    const FINANCE_COLUMNS_STORAGE_KEY = 'finance_hub_columns_v1';
+    const FINANCE_VIEWS_STORAGE_KEY = 'finance_hub_saved_views_v1';
+    const FINANCE_LOCKED_COLUMNS = ['select', 'actions'];
+
+    function injectFinanceM521Styles() {
+        if (document.getElementById('finance-hub-m521-styles')) return;
+        const style = document.createElement('style');
+        style.id = 'finance-hub-m521-styles';
+        style.textContent = `
+            .fh-modal-list { display:flex; flex-direction:column; gap:10px; }
+            .fh-col-row, .fh-view-row {
+                display:flex; align-items:center; justify-content:space-between; gap:12px;
+                border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; background:#fff;
+            }
+            .fh-col-row-left, .fh-view-row-left { display:flex; align-items:center; gap:10px; min-width:0; }
+            .fh-col-row-title, .fh-view-row-title { font-weight:700; color:#1e293b; }
+            .fh-col-row-sub, .fh-view-row-sub { font-size:.78rem; color:#64748b; }
+            .fh-col-row-right, .fh-view-row-right { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+            .fh-badge-lock { background:#dbeafe; color:#1d4ed8; border-radius:999px; padding:3px 9px; font-size:.72rem; font-weight:700; }
+            .fh-view-empty {
+                border:1px dashed #cbd5e1; border-radius:14px; padding:24px; text-align:center; color:#64748b;
+                background:linear-gradient(180deg,#f8fafc 0%,#fff 100%);
+            }
+            .fh-view-empty i { font-size:2rem; display:block; margin-bottom:8px; opacity:.55; }
+            .fh-modal-section-title { font-weight:800; color:#334155; margin-bottom:10px; }
+            [data-theme="dark"] .fh-col-row,
+            [data-theme="dark"] .fh-view-row { background:#1f2937; border-color:#374151; }
+            [data-theme="dark"] .fh-col-row-title,
+            [data-theme="dark"] .fh-view-row-title,
+            [data-theme="dark"] .fh-modal-section-title { color:#e2e8f0; }
+            [data-theme="dark"] .fh-col-row-sub,
+            [data-theme="dark"] .fh-view-row-sub,
+            [data-theme="dark"] .fh-view-empty { color:#94a3b8; }
+            [data-theme="dark"] .fh-view-empty { background:#111827; border-color:#374151; }
+            [data-theme="dark"] .fh-badge-lock { background:rgba(59,130,246,.18); color:#93c5fd; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function safeJsonParse(value, fallback) {
+        try {
+            return value ? JSON.parse(value) : fallback;
+        } catch (e) {
+            return fallback;
+        }
+    }
+
+    function cloneDeep(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+
+    function normalizeColumns(rawColumns) {
+        const rawMap = new Map(Array.isArray(rawColumns)
+            ? rawColumns.filter(Boolean).map(col => [String(col.key), col])
+            : []);
+
+        return FINANCE_COLUMN_CATALOG.map((catalogCol, index) => {
+            const stored = rawMap.get(catalogCol.key) || {};
+            const lockedVisible = FINANCE_LOCKED_COLUMNS.includes(catalogCol.key);
+            return {
+                ...catalogCol,
+                visible: lockedVisible ? true : Boolean(stored.visible ?? catalogCol.default),
+                order: Number.isFinite(Number(stored.order)) ? Number(stored.order) : index,
+                lockedVisible,
+            };
+        }).sort((a, b) => a.order - b.order).map((col, order) => ({ ...col, order }));
+    }
+
+    function getBootstrapModalInstance(modalEl) {
+        if (!modalEl) return null;
+        if (window.bootstrap && window.bootstrap.Modal) {
+            return window.bootstrap.Modal.getOrCreateInstance(modalEl);
+        }
+        return {
+            show() { modalEl.style.display = 'block'; modalEl.classList.add('show'); modalEl.removeAttribute('aria-hidden'); },
+            hide() { modalEl.classList.remove('show'); modalEl.style.display = 'none'; modalEl.setAttribute('aria-hidden', 'true'); },
+        };
+    }
+
+    Object.assign(Finance, {
+        viewHub() {
+            injectFinanceStyles();
+            injectFinanceM521Styles();
+            Core.navigateTo('viewFinanceHub', async () => {
+                const main = document.getElementById('mainContent');
+                main.innerHTML = `
+                    <div class="container-fluid fh-page animate-in" id="finance-hub-root">
+                        <div class="fh-header">
+                            <h2><i class="bi bi-bank2"></i> المركز المالي والسندي الشامل</h2>
+                            <div class="fh-header-actions">
+                                <button class="btn btn-sm btn-outline-secondary" onclick="Finance.openSavedViews()">
+                                    <i class="bi bi-collection"></i> العروض المحفوظة
+                                </button>
+                                <button class="btn btn-sm btn-outline-primary" onclick="Finance.openColumnManager()">
+                                    <i class="bi bi-layout-three-columns"></i> إدارة الأعمدة
+                                </button>
+                                <button class="btn btn-sm btn-primary" onclick="Finance.refreshAll()">
+                                    <i class="bi bi-arrow-clockwise"></i> تحديث
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="fh-kpis" class="fh-kpi-grid">${Finance._kpiSkeleton()}</div>
+
+                        <div id="fh-charts" class="fh-charts-grid">
+                            <div class="fh-chart-card"><h6>إيرادات آخر 30 يوم</h6><div class="fh-chart-wrapper"><canvas id="fh-chart-revenue30"></canvas></div></div>
+                            <div class="fh-chart-card"><h6>توزيع أنواع الحركات</h6><div class="fh-chart-wrapper"><canvas id="fh-chart-typedist"></canvas></div></div>
+                            <div class="fh-chart-card"><h6>أعلى 10 خدمات</h6><div class="fh-chart-wrapper"><canvas id="fh-chart-topservices"></canvas></div></div>
+                            <div class="fh-chart-card"><h6>أداء المحاسبين</h6><div class="fh-chart-wrapper"><canvas id="fh-chart-accountants"></canvas></div></div>
+                        </div>
+
+                        <div id="fh-filters-container"></div>
+                        <div id="fh-grid-container"></div>
+                    </div>
+                `;
+
+                if (!FinanceState.options.doc_types || !FinanceState.options.doc_types.length) {
+                    await Finance.loadFilterOptions();
+                }
+                Finance._initColumns();
+                Finance.renderFiltersPanel();
+                Finance.renderGridShell();
+
+                await Promise.all([
+                    Finance.loadOverview(),
+                    Finance.loadTransactions(),
+                ]);
+            });
+        },
+
+        _initColumns() {
+            const stored = safeJsonParse(localStorage.getItem(FINANCE_COLUMNS_STORAGE_KEY), null);
+            FinanceState.columns = normalizeColumns(stored);
+        },
+
+        _visibleColumns() {
+            return (FinanceState.columns || [])
+                .slice()
+                .sort((a, b) => a.order - b.order)
+                .filter(col => col.lockedVisible ? true : Boolean(col.visible));
+        },
+
+        _persistColumns() {
+            localStorage.setItem(FINANCE_COLUMNS_STORAGE_KEY, JSON.stringify(FinanceState.columns || []));
+        },
+
+        renderGridShell() {
+            const container = document.getElementById('fh-grid-container');
+            if (!container) return;
+            container.innerHTML = `
+                <div class="fh-grid-card">
+                    <div class="fh-grid-toolbar">
+                        <h5><i class="bi bi-table"></i> سجل الحركات الموحّد</h5>
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <span id="fh-selected-info" class="text-muted small"></span>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="Finance.saveCurrentView()">
+                                <i class="bi bi-bookmark-plus"></i> حفظ العرض الحالي
+                            </button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="Finance.openColumnManager()">
+                                <i class="bi bi-layout-three-columns"></i> الأعمدة
+                            </button>
+                            <select class="form-select form-select-sm" style="width:auto;" id="fh-per-page"
+                                    onchange="Finance.changePerPage(Number(this.value))">
+                                <option value="25"  ${FinanceState.perPage===25?'selected':''}>25</option>
+                                <option value="50"  ${FinanceState.perPage===50?'selected':''}>50</option>
+                                <option value="100" ${FinanceState.perPage===100?'selected':''}>100</option>
+                                <option value="200" ${FinanceState.perPage===200?'selected':''}>200</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="fh-grid-scroll" id="fh-grid-scroll">
+                        <div class="fh-grid-state"><i class="bi bi-hourglass-split"></i> جاري تحميل البيانات...</div>
+                    </div>
+                    <div class="fh-pagination" id="fh-pagination" style="display:none;"></div>
+                </div>
+            `;
+        },
+
+        _ensureModal(modalId, title, dialogClass = 'modal-lg') {
+            let modal = document.getElementById(modalId);
+            if (!modal) {
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = `
+                    <div class="modal fade" id="${modalId}" tabindex="-1" aria-hidden="true">
+                        <div class="modal-dialog ${dialogClass} modal-dialog-scrollable">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">${title}</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                </div>
+                                <div class="modal-body"></div>
+                                <div class="modal-footer"></div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                modal = wrapper.firstElementChild;
+                document.body.appendChild(modal);
+            }
+            modal.querySelector('.modal-title').innerHTML = title;
+            return modal;
+        },
+
+        openColumnManager() {
+            injectFinanceM521Styles();
+            const modal = Finance._ensureModal('fh-column-manager-modal', '<i class="bi bi-layout-three-columns"></i> إدارة الأعمدة');
+            const body = modal.querySelector('.modal-body');
+            const footer = modal.querySelector('.modal-footer');
+            const columns = (FinanceState.columns || []).slice().sort((a, b) => a.order - b.order);
+
+            body.innerHTML = `
+                <div class="fh-modal-section-title">ترتيب وإظهار الأعمدة</div>
+                <div class="text-muted small mb-3">يمكنك إظهار/إخفاء الأعمدة غير المقفلة، وتحريك ترتيبها للأعلى أو للأسفل. عمودا التحديد والإجراءات ثابتان دائماً.</div>
+                <div class="fh-modal-list">
+                    ${columns.map((col, index) => `
+                        <div class="fh-col-row">
+                            <div class="fh-col-row-left">
+                                <input class="form-check-input" type="checkbox"
+                                       ${col.lockedVisible ? 'checked disabled' : (col.visible ? 'checked' : '')}
+                                       onchange="Finance.toggleColumnVisibility('${FinanceUtils.esc(col.key)}', this.checked)">
+                                <div>
+                                    <div class="fh-col-row-title">${FinanceUtils.esc(col.label || col.key)}</div>
+                                    <div class="fh-col-row-sub">${FinanceUtils.esc(col.key)}${col.sortable ? ' • قابل للفرز' : ''}</div>
+                                </div>
+                            </div>
+                            <div class="fh-col-row-right">
+                                ${col.lockedVisible ? '<span class="fh-badge-lock">مقفول</span>' : ''}
+                                <button class="btn btn-sm btn-outline-secondary" ${index===0?'disabled':''} onclick="Finance.moveColumn('${FinanceUtils.esc(col.key)}', -1)"><i class="bi bi-arrow-up"></i></button>
+                                <button class="btn btn-sm btn-outline-secondary" ${index===columns.length-1?'disabled':''} onclick="Finance.moveColumn('${FinanceUtils.esc(col.key)}', 1)"><i class="bi bi-arrow-down"></i></button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+
+            footer.innerHTML = `
+                <button type="button" class="btn btn-outline-secondary" onclick="Finance.resetColumnsDefault()">
+                    <i class="bi bi-arrow-counterclockwise"></i> إعادة الافتراضي
+                </button>
+                <button type="button" class="btn btn-primary" onclick="Finance.applyColumnManager()">
+                    <i class="bi bi-check2-circle"></i> تطبيق
+                </button>
+            `;
+
+            getBootstrapModalInstance(modal).show();
+        },
+
+        toggleColumnVisibility(columnKey, checked) {
+            FinanceState.columns = (FinanceState.columns || []).map(col => {
+                if (col.key !== columnKey) return col;
+                if (col.lockedVisible) return { ...col, visible: true };
+                return { ...col, visible: Boolean(checked) };
+            });
+        },
+
+        moveColumn(columnKey, direction) {
+            const ordered = (FinanceState.columns || []).slice().sort((a, b) => a.order - b.order);
+            const index = ordered.findIndex(col => col.key === columnKey);
+            if (index === -1) return;
+            const target = index + Number(direction || 0);
+            if (target < 0 || target >= ordered.length) return;
+            const temp = ordered[index];
+            ordered[index] = ordered[target];
+            ordered[target] = temp;
+            FinanceState.columns = ordered.map((col, order) => ({ ...col, order }));
+            Finance.openColumnManager();
+        },
+
+        applyColumnManager() {
+            Finance._persistColumns();
+            Finance.renderGridBody();
+            Core.showAlert('تم حفظ إعدادات الأعمدة.', 'success');
+            const modal = document.getElementById('fh-column-manager-modal');
+            getBootstrapModalInstance(modal).hide();
+        },
+
+        resetColumnsDefault() {
+            localStorage.removeItem(FINANCE_COLUMNS_STORAGE_KEY);
+            FinanceState.columns = normalizeColumns(null);
+            Finance.renderGridBody();
+            Finance.openColumnManager();
+            Core.showAlert('تمت استعادة الأعمدة الافتراضية.', 'info');
+        },
+
+        _getSavedViews() {
+            const views = safeJsonParse(localStorage.getItem(FINANCE_VIEWS_STORAGE_KEY), []);
+            return Array.isArray(views) ? views : [];
+        },
+
+        _setSavedViews(views) {
+            localStorage.setItem(FINANCE_VIEWS_STORAGE_KEY, JSON.stringify(Array.isArray(views) ? views : []));
+        },
+
+        _captureCurrentView(name, existingId = null) {
+            return {
+                id: existingId || `view_${Date.now()}`,
+                name: String(name || '').trim(),
+                created_at: new Date().toISOString(),
+                filters: cloneDeep(FinanceState.filters),
+                sortBy: FinanceState.sortBy,
+                sortDir: FinanceState.sortDir,
+                perPage: FinanceState.perPage,
+                columns: cloneDeep(FinanceState.columns || []),
+            };
+        },
+
+        openSavedViews() {
+            injectFinanceM521Styles();
+            const modal = Finance._ensureModal('fh-saved-views-modal', '<i class="bi bi-collection"></i> العروض المحفوظة');
+            const body = modal.querySelector('.modal-body');
+            const footer = modal.querySelector('.modal-footer');
+            const views = Finance._getSavedViews().sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+
+            body.innerHTML = views.length ? `
+                <div class="fh-modal-section-title">قائمة العروض المحفوظة</div>
+                <div class="fh-modal-list">
+                    ${views.map(view => `
+                        <div class="fh-view-row">
+                            <div class="fh-view-row-left">
+                                <div>
+                                    <div class="fh-view-row-title">${FinanceUtils.esc(view.name || 'بدون اسم')}</div>
+                                    <div class="fh-view-row-sub">
+                                        ${FinanceUtils.esc((view.filters?.period || 'custom'))} • ${FinanceUtils.fmtDateTime(view.created_at)}
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="fh-view-row-right">
+                                <button class="btn btn-sm btn-outline-secondary" onclick="Finance.updateSavedView('${FinanceUtils.esc(view.id)}')">
+                                    <i class="bi bi-arrow-repeat"></i> تحديث
+                                </button>
+                                <button class="btn btn-sm btn-outline-primary" onclick="Finance.applySavedView('${FinanceUtils.esc(view.id)}')">
+                                    <i class="bi bi-box-arrow-in-down"></i> تحميل
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" onclick="Finance.deleteSavedView('${FinanceUtils.esc(view.id)}')">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : `
+                <div class="fh-view-empty">
+                    <i class="bi bi-collection"></i>
+                    لا توجد عروض محفوظة بعد.<br>
+                    احفظ الفلاتر والأعمدة الحالية ليتم استرجاعها لاحقاً بضغطة واحدة.
+                </div>
+            `;
+
+            footer.innerHTML = `
+                <button type="button" class="btn btn-primary" onclick="Finance.saveCurrentView()">
+                    <i class="bi bi-bookmark-plus"></i> حفظ العرض الحالي
+                </button>
+            `;
+
+            getBootstrapModalInstance(modal).show();
+        },
+
+        saveCurrentView() {
+            const suggestedName = `عرض ${FinanceUtils.fmtDateTime(new Date().toISOString())}`;
+            const name = window.prompt('اكتب اسماً لهذا العرض المحفوظ:', suggestedName);
+            if (!name || !String(name).trim()) return;
+
+            const views = Finance._getSavedViews();
+            const existing = views.find(view => String(view.name || '').trim() === String(name).trim());
+            const shouldOverwrite = existing ? window.confirm('يوجد عرض بنفس الاسم. هل تريد استبداله؟') : true;
+            if (!shouldOverwrite) return;
+
+            const nextView = Finance._captureCurrentView(name, existing?.id || null);
+            const nextViews = existing
+                ? views.map(view => view.id === existing.id ? nextView : view)
+                : [nextView, ...views];
+
+            Finance._setSavedViews(nextViews);
+            Core.showAlert('تم حفظ العرض الحالي.', 'success');
+
+            const modal = document.getElementById('fh-saved-views-modal');
+            if (modal && modal.classList.contains('show')) {
+                Finance.openSavedViews();
+            }
+        },
+
+        async applySavedView(viewId) {
+            const view = Finance._getSavedViews().find(item => item.id === viewId);
+            if (!view) {
+                Core.showAlert('العرض المطلوب غير موجود.', 'warning');
+                return;
+            }
+
+            FinanceState.filters = { ...FinanceState.filters, ...(view.filters || {}) };
+            FinanceState.sortBy = view.sortBy || 'txn_timestamp';
+            FinanceState.sortDir = view.sortDir || 'DESC';
+            FinanceState.perPage = Number(view.perPage || 50);
+            FinanceState.page = 1;
+            FinanceState.selectedIds.clear();
+            FinanceState.columns = normalizeColumns(view.columns || null);
+            Finance._persistColumns();
+
+            Finance.renderFiltersPanel();
+            Finance.renderGridShell();
+            const modal = document.getElementById('fh-saved-views-modal');
+            getBootstrapModalInstance(modal).hide();
+
+            await Promise.all([
+                Finance.loadOverview(),
+                Finance.loadTransactions(),
+            ]);
+            Core.showAlert(`تم تحميل العرض: ${view.name}`, 'success');
+        },
+
+        updateSavedView(viewId) {
+            const views = Finance._getSavedViews();
+            const current = views.find(item => item.id === viewId);
+            if (!current) {
+                Core.showAlert('العرض المطلوب غير موجود.', 'warning');
+                return;
+            }
+            const updated = Finance._captureCurrentView(current.name, current.id);
+            Finance._setSavedViews(views.map(view => view.id === viewId ? updated : view));
+            Core.showAlert('تم تحديث العرض المحفوظ بالحالة الحالية.', 'success');
+            Finance.openSavedViews();
+        },
+
+        deleteSavedView(viewId) {
+            const views = Finance._getSavedViews();
+            const current = views.find(item => item.id === viewId);
+            if (!current) return;
+            const confirmed = window.confirm(`هل تريد حذف العرض "${current.name}"؟`);
+            if (!confirmed) return;
+            Finance._setSavedViews(views.filter(view => view.id !== viewId));
+            Core.showAlert('تم حذف العرض المحفوظ.', 'info');
+            Finance.openSavedViews();
+        },
+    });
+})();
+
+console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved Views.');
