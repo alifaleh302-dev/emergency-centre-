@@ -206,14 +206,101 @@ const Core = {
         return content;
     },
 
+    // -----------------------------------------------------------------
+    // 🛡️ حماية النقر المزدوج / الطلبات المتكررة (Double-submit guard)
+    // -----------------------------------------------------------------
+    // _inflightRequests: خريطة (key -> Promise) للطلبات الكتابية الجارية حالياً.
+    // أي طلب POST/PUT/DELETE له نفس المفتاح (المسار + جسم البيانات) أثناء كون
+    // الطلب الأصلي ما زال قيد التنفيذ سيُعاد له نفس الـ Promise، فلا يصل لقاعدة
+    // البيانات مرتين ولا تُسجَّل عملية مكررة.
+    _inflightRequests: {},
+
+    _buildRequestKey: function(method, path, data) {
+        try {
+            return method.toUpperCase() + '::' + String(path) + '::' + (data ? JSON.stringify(data) : '');
+        } catch (e) {
+            return method.toUpperCase() + '::' + String(path) + '::__nokey__';
+        }
+    },
+
+    /**
+     * يعطّل زر/عنصر إجراء أثناء تنفيذ دالة غير متزامنة ويعيد تفعيله بعد الانتهاء.
+     * يحمي من نقر المستخدم مرتين على نفس زر الحفظ/الإرسال قبل وصول استجابة السيرفر.
+     *
+     * Usage: <button onclick="Core.guard(this, () => Doctor.saveNewPatient())">حفظ</button>
+     * أو بدون event: Core.guard(buttonElement, asyncFn)
+     */
+    guard: async function(buttonOrEvent, asyncFn) {
+        let btn = null;
+        if (buttonOrEvent && typeof buttonOrEvent === 'object') {
+            if (buttonOrEvent.currentTarget) btn = buttonOrEvent.currentTarget;
+            else if (buttonOrEvent.target) btn = buttonOrEvent.target;
+            else if (buttonOrEvent.nodeType === 1) btn = buttonOrEvent;
+        }
+
+        if (btn && btn.disabled) {
+            return null; // الزر معطّل أصلاً => تجاهل النقرة الإضافية
+        }
+
+        const originalHTML = btn ? btn.innerHTML : null;
+        const originalCursor = btn ? btn.style.cursor : null;
+        if (btn) {
+            btn.disabled = true;
+            btn.dataset._busy = '1';
+            btn.style.cursor = 'progress';
+            btn.innerHTML = `<span class="spinner-border spinner-border-sm ms-1" role="status" aria-hidden="true"></span> جارٍ المعالجة...`;
+        }
+
+        try {
+            return await asyncFn();
+        } catch (err) {
+            console.error('[Core.guard] error:', err);
+            this.showAlert('حدث خطأ غير متوقع أثناء تنفيذ العملية.', 'error');
+            return null;
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                delete btn.dataset._busy;
+                btn.style.cursor = originalCursor || '';
+                btn.innerHTML = originalHTML;
+            }
+        }
+    },
+
     apiCall: async function(path, method = 'GET', data = null) {
+        const methodUpper = String(method).toUpperCase();
+        const isWrite = (methodUpper === 'POST' || methodUpper === 'PUT' || methodUpper === 'DELETE' || methodUpper === 'PATCH');
+
+        // 🛡️ حماية مركزية ضد الطلبات الكتابية المتكررة المتزامنة:
+        // إن كان نفس الطلب (نفس المسار + نفس البيانات) ما زال جارياً => أعد نفس الـ Promise.
+        if (isWrite) {
+            const reqKey = this._buildRequestKey(methodUpper, path, data);
+            if (this._inflightRequests[reqKey]) {
+                console.warn('[apiCall] ⚠️ تم تجاهل طلب مكرر متزامن:', methodUpper, path);
+                return this._inflightRequests[reqKey];
+            }
+            const pending = this._doApiCall(path, methodUpper, data);
+            this._inflightRequests[reqKey] = pending;
+            try {
+                return await pending;
+            } finally {
+                // نُحرر القفل بعد انتهاء الطلب (بنجاح أو بفشل) بفارق صغير
+                // كي نمنع نقرتين متلاحقتين خلال ميلي ثانية.
+                setTimeout(() => { delete this._inflightRequests[reqKey]; }, 300);
+            }
+        }
+
+        return this._doApiCall(path, methodUpper, data);
+    },
+
+    _doApiCall: async function(path, method, data) {
         try {
             const token = localStorage.getItem('jwt_token');
             const headers = { 'Content-Type': 'application/json' };
             if (token) headers['Authorization'] = 'Bearer ' + token;
 
             const options = { method, headers };
-            if (data && (method === 'POST' || method === 'PUT')) {
+            if (data && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
                 options.body = JSON.stringify(data);
             }
 

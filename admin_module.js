@@ -797,7 +797,7 @@ const Admin = {
                         </div>
                         <div class="modal-footer">
                             <button class="btn btn-secondary rounded-pill px-4" data-bs-dismiss="modal">إلغاء</button>
-                            <button class="btn btn-primary rounded-pill px-4" onclick="Admin.saveRecord('${tableName}', ${id || 'null'})">حفظ</button>
+                            <button class="btn btn-primary rounded-pill px-4" onclick="Core.guard(this, () => Admin.saveRecord('${tableName}', ${id || 'null'}))">حفظ</button>
                         </div>
                     </div>
                 </div>

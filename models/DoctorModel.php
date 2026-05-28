@@ -15,8 +15,13 @@ class DoctorModel
     public function searchPatient(string $queryStr): array
     {
         $keywords = preg_split('/\s+/', trim($queryStr));
+        // 🔎 نجلب أيضاً معلومة وجود زيارة نشطة للمريض (active_visit_id) لتعرض الواجهة حالة واضحة
+        // تمنع الطبيب من محاولة فتح زيارة جديدة لمريض لديه زيارة لم تغلق بعد.
         $sql = "SELECT p.patient_id, p.full_name, p.place1, p.place2,
-                       (SELECT COUNT(*) FROM Visits v WHERE v.patient_id = p.patient_id AND v.status = 'Completed') AS visit_num
+                       (SELECT COUNT(*) FROM Visits v WHERE v.patient_id = p.patient_id AND v.status = 'Completed') AS visit_num,
+                       (SELECT v2.visit_id FROM Visits v2 WHERE v2.patient_id = p.patient_id AND v2.status = 'Active' LIMIT 1) AS active_visit_id,
+                       (SELECT u.full_name FROM Visits v3 JOIN users u ON u.user_id = v3.doctor_id
+                          WHERE v3.patient_id = p.patient_id AND v3.status = 'Active' LIMIT 1) AS active_visit_doctor
                 FROM Patients p
                 WHERE 1 = 1";
         $params = [];
@@ -31,7 +36,15 @@ class DoctorModel
 
         $stmt = $this->conn->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        $rows = $stmt->fetchAll();
+
+        // تطبيع الأعمدة لتأكيد وجود علم واضح has_active_visit
+        foreach ($rows as &$row) {
+            $row['has_active_visit'] = !empty($row['active_visit_id']);
+            $row['active_visit_id']  = $row['active_visit_id'] !== null ? (int) $row['active_visit_id'] : null;
+        }
+        unset($row);
+        return $rows;
     }
 
     public function createPatient(string $name, string $gender, string $birthDate, string $place1, string $place2): int

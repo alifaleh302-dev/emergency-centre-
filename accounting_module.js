@@ -172,7 +172,7 @@ const Accountant = {
                         </div>
                     </div>
                     <div class="modal-footer border-0 bg-white">
-                        <button class="btn btn-success px-5 fw-bold shadow-sm w-100 py-2" id="btnConfirmPayment" onclick="Accountant.processPayment('${inv.Invoice_id}')">تأكيد السداد والطباعة</button>
+                        <button class="btn btn-success px-5 fw-bold shadow-sm w-100 py-2" id="btnConfirmPayment" onclick="Core.guard(this, () => Accountant.processPayment('${inv.Invoice_id}'))">تأكيد السداد والطباعة</button>
                     </div>
                 </div>
             </div>

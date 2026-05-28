@@ -95,15 +95,34 @@ const Doctor = {
                     return highlighted;
                 };
 
-                const rows = results.map(p => [
-                    `<span class="fw-bold">${highlightText(p.full_name)}</span>`,
-                    `${p.place1} / ${p.place2}`,
-                    `<span class="badge bg-light text-dark border">زيارات سابقة: ${p.visit_num}</span>`
-                ]);
+                const rows = results.map(p => {
+                    // 🚨 لو لدى المريض زيارة نشطة نُظهر شارة تحذيرية واضحة بالإضافة لعدد الزيارات السابقة.
+                    let infoBadges = `<span class="badge bg-light text-dark border">زيارات سابقة: ${p.visit_num}</span>`;
+                    if (p.has_active_visit) {
+                        const doctorName = p.active_visit_doctor ? ` (د. ${this._escapeHtml(p.active_visit_doctor)})` : '';
+                        infoBadges += ` <span class="badge bg-danger ms-1" title="يوجد لدى المريض زيارة مفتوحة - يجب إغلاقها أولاً"><i class="bi bi-exclamation-triangle-fill ms-1"></i> زيارة مفتوحة${doctorName}</span>`;
+                    }
+                    return [
+                        `<span class="fw-bold">${highlightText(p.full_name)}</span>`,
+                        `${p.place1} / ${p.place2}`,
+                        infoBadges
+                    ];
+                });
 
                 resultArea.innerHTML = `<div class="card stat-card p-0 border-0 shadow-sm" id="patientTableContainer"></div>`;
                 Core.renderTable('patientTableContainer', headers, rows, (row, index) => {
                     const p = results[index];
+                    // 🚫 إن كانت هناك زيارة نشطة - نعطل زر فتح زيارة ونجبر الطبيب على إغلاق السابقة أولاً
+                    if (p.has_active_visit) {
+                        const visitFormatted = 'VIS-' + p.active_visit_id;
+                        return `
+                            <button class="btn btn-outline-danger btn-sm fw-bold px-3 shadow-sm" disabled title="لا يمكن فتح زيارة جديدة - الزيارة السابقة ما زالت مفتوحة">
+                                <i class="bi bi-lock-fill ms-1"></i> زيارة مفتوحة
+                            </button>
+                            <button class="btn btn-success btn-sm fw-bold px-3 shadow-sm ms-1" onclick="Doctor.openCloseVisitModal('${visitFormatted}')">
+                                <i class="bi bi-check2 ms-1"></i> إغلاق الزيارة السابقة
+                            </button>`;
+                    }
                     return `
                         <button class="btn btn-primary btn-sm fw-bold px-3 shadow-sm" onclick="Doctor.openVisitModal('${p.patient_id}', '${(p.full_name || '').replace(/'/g, "\\'")}')">
                             <i class="bi bi-door-open ms-1"></i> فتح زيارة
@@ -157,7 +176,7 @@ const Doctor = {
                     </div>
                     <div class="modal-footer border-0 flex-wrap gap-2">
                         <button type="button" class="btn btn-outline-secondary fw-bold" data-bs-dismiss="modal">إلغاء</button>
-                        <button class="btn btn-warning px-4 fw-bold shadow-sm" onclick="Doctor.saveNewPatient()">حفظ وفتح الزيارة</button>
+                        <button class="btn btn-warning px-4 fw-bold shadow-sm" onclick="Core.guard(this, () => Doctor.saveNewPatient())">حفظ وفتح الزيارة</button>
                     </div>
                 </div>
             </div>
@@ -213,7 +232,7 @@ const Doctor = {
                         </div>
                     </div>
                     <div class="modal-footer border-0">
-                        <button class="btn btn-primary px-5 fw-bold shadow-sm" onclick="Doctor.saveExistingPatientVisit('${id_pat}')">حفظ وفتح الزيارة</button>
+                        <button class="btn btn-primary px-5 fw-bold shadow-sm" onclick="Core.guard(this, () => Doctor.saveExistingPatientVisit('${id_pat}'))">حفظ وفتح الزيارة</button>
                     </div>
                 </div>
             </div>
@@ -485,7 +504,7 @@ const Doctor = {
                             <button type="button" class="btn btn-info text-white fw-bold cv-action-btn" onclick="Doctor.printCloseVisit()">
                                 <i class="bi bi-printer-fill ms-1"></i> طباعة
                             </button>
-                            <button type="button" class="btn btn-success fw-bold shadow-sm cv-action-btn" onclick="Doctor.saveCloseVisit('${visitId}')">
+                            <button type="button" class="btn btn-success fw-bold shadow-sm cv-action-btn" onclick="Core.guard(this, () => Doctor.saveCloseVisit('${visitId}'))">
                                 <i class="bi bi-check2-circle ms-1"></i> حفظ وإغلاق الزيارة
                             </button>
                         </div>
@@ -1141,7 +1160,7 @@ const Doctor = {
                     </div>
                     <div class="modal-footer border-0 bg-white">
                         <button class="btn btn-light px-4 fw-bold" data-bs-dismiss="modal">إلغاء</button>
-                        <button class="btn btn-primary px-5 fw-bold shadow-sm" onclick="Doctor.sendOrders('${id_vis}')">إرسال الطلبات للأقسام</button>
+                        <button class="btn btn-primary px-5 fw-bold shadow-sm" onclick="Core.guard(this, () => Doctor.sendOrders('${id_vis}'))">إرسال الطلبات للأقسام</button>
                     </div>
                 </div>
             </div>
