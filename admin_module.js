@@ -70,6 +70,31 @@ const Admin = {
     },
 
     // =================================================================
+    //   🏦 Finance Hub (M6 integration)
+    // =================================================================
+    openFinanceHub: async function() {
+        try {
+            AdminData.currentView = 'finance_hub';
+            AdminData.currentTable = null;
+            this.renderSidebar();
+            this.destroyCharts();
+
+            // تحميل موديول Finance Hub ديناميكياً (أول مرة فقط)
+            if (typeof window.Finance === 'undefined' || typeof Finance.viewHub !== 'function') {
+                await Core.loadExternalScript('finance_module.js', 'finance-hub-module');
+            }
+            if (typeof window.Finance === 'undefined' || typeof Finance.viewHub !== 'function') {
+                Core.showAlert('تعذر تحميل وحدة المركز المالي.', 'error');
+                return;
+            }
+            Finance.viewHub();
+        } catch (err) {
+            console.error('openFinanceHub error:', err);
+            Core.showAlert('حدث خطأ أثناء فتح المركز المالي.', 'error');
+        }
+    },
+
+    // =================================================================
     //   Sidebar
     // =================================================================
     renderSidebar: function() {
@@ -99,6 +124,8 @@ const Admin = {
             { title: 'الخدمات', icon: 'bi-bandaid', url: 'javascript:void(0)',
               action: `Admin.openTable('services_master')`, active: AdminData.currentView === 'table' && AdminData.currentTable === 'services_master' },
             // قسم: أدوات الإدارة
+            { title: 'المركز المالي والسندي', icon: 'bi-bank2', url: 'javascript:void(0)',
+              action: 'Admin.openFinanceHub()', active: AdminData.currentView === 'finance_hub' },
             { title: 'التقارير المتقدمة', icon: 'bi-graph-up-arrow', url: 'javascript:void(0)',
               action: 'Admin.viewReports()', active: AdminData.currentView === 'reports' },
             { title: 'بث إشعار', icon: 'bi-megaphone', url: 'javascript:void(0)',

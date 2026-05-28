@@ -662,9 +662,27 @@ const Accountant = {
         
         // تحميل الملف
         XLSX.writeFile(wb, fileName);
+    },
+
+    // =================================================================
+    //   🏦 Finance Hub (M6 integration)
+    // =================================================================
+    openFinanceHub: async function() {
+        try {
+            if (typeof window.Finance === 'undefined' || typeof Finance.viewHub !== 'function') {
+                await Core.loadExternalScript('finance_module.js', 'finance-hub-module');
+            }
+            if (typeof window.Finance === 'undefined' || typeof Finance.viewHub !== 'function') {
+                Core.showAlert('تعذر تحميل وحدة المركز المالي.', 'error');
+                return;
+            }
+            Finance.viewHub();
+        } catch (err) {
+            console.error('openFinanceHub error:', err);
+            Core.showAlert('حدث خطأ أثناء فتح المركز المالي.', 'error');
+        }
     }
 
-  
 };
 loading()
 // --- التهيئة عند تحميل الموديول ---
@@ -679,7 +697,8 @@ loading()
     const accountingLinks = [
         { title: "الفواتير المستحقة", icon: "bi-receipt-cutoff", url: "javascript:void(0)", action: "Accountant.viewPendingInvoices()", active: true },
         { title: "الخزينة اليومية", icon: "bi-safe", url: "javascript:void(0)", action: "Accountant.viewTreasury('receipts')" },
-        { title: "الإيرادات", icon: "bi-graph-up-arrow", url: "javascript:void(0)", action: "Accountant.viewRevenues('years')" }
+        { title: "الإيرادات", icon: "bi-graph-up-arrow", url: "javascript:void(0)", action: "Accountant.viewRevenues('years')" },
+        { title: "المركز المالي والسندي", icon: "bi-bank2", url: "javascript:void(0)", action: "Accountant.openFinanceHub()" }
     ];
     Core.renderSidebar(accountingLinks);
     await Core.initRealtime(AccountantData.currentUser);
