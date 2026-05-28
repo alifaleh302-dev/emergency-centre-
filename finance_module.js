@@ -1789,3 +1789,952 @@ console.log('[Finance Hub M5.1] ✅ الموديول جاهز. للاختبار:
 })();
 
 console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved Views.');
+
+/* =========================================================================
+ * 11. امتداد M5.2.2 — XLSX Export + Print Templates + Ministry Report
+ * =========================================================================
+ * الاعتمادات: XLSX (SheetJS) محمَّلة في index.html (xlsx.full.min.js).
+ * الـ APIs المستهلكة في هذا الجزء:
+ *   - POST /api/finance/export          (تجهيز payload بأربع أوراق)
+ *   - POST /api/finance/print_voucher   (تجهيز payload سند مفرد)
+ *   - POST /api/finance/ministry_report (تقرير حصة الوزارة التفصيلي)
+ * ========================================================================= */
+(function () {
+    function injectFinanceM522Styles() {
+        if (document.getElementById('finance-hub-m522-styles')) return;
+        const style = document.createElement('style');
+        style.id = 'finance-hub-m522-styles';
+        style.textContent = `
+            .fh-export-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin-top:10px; }
+            .fh-export-option {
+                border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; background:#fff;
+                display:flex; align-items:center; gap:10px; cursor:pointer;
+            }
+            .fh-export-option input { width:18px; height:18px; }
+            .fh-export-option-title { font-weight:700; color:#1e293b; }
+            .fh-export-option-sub { font-size:.75rem; color:#64748b; }
+            [data-theme="dark"] .fh-export-option { background:#1f2937; border-color:#374151; }
+            [data-theme="dark"] .fh-export-option-title { color:#e2e8f0; }
+            [data-theme="dark"] .fh-export-option-sub { color:#94a3b8; }
+
+            .fh-ministry-summary {
+                display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:16px;
+            }
+            .fh-ministry-summary-card {
+                background:linear-gradient(135deg,#eef2ff 0%,#fff 100%);
+                border:1px solid #c7d2fe; border-radius:14px; padding:12px 14px;
+            }
+            .fh-ministry-summary-card .label { font-size:.78rem; color:#4338ca; font-weight:700; margin-bottom:4px; }
+            .fh-ministry-summary-card .value { font-size:1.25rem; font-weight:800; color:#1e1b4b; }
+            [data-theme="dark"] .fh-ministry-summary-card {
+                background:linear-gradient(135deg,#1e293b 0%,#0f172a 100%); border-color:#334155;
+            }
+            [data-theme="dark"] .fh-ministry-summary-card .label { color:#93c5fd; }
+            [data-theme="dark"] .fh-ministry-summary-card .value { color:#e2e8f0; }
+
+            .fh-mini-table { width:100%; font-size:.85rem; border-collapse:collapse; margin-bottom:14px; }
+            .fh-mini-table th, .fh-mini-table td { padding:7px 9px; border-bottom:1px solid #e5e7eb; text-align:right; }
+            .fh-mini-table th { background:#f1f5f9; color:#475569; font-weight:700; }
+            .fh-mini-table tfoot td { background:#f8fafc; font-weight:800; }
+            [data-theme="dark"] .fh-mini-table th { background:#1f2937; color:#cbd5e1; }
+            [data-theme="dark"] .fh-mini-table td, [data-theme="dark"] .fh-mini-table th { border-color:#374151; }
+            [data-theme="dark"] .fh-mini-table tfoot td { background:#0f172a; }
+
+            /* --- Print stylesheet (يُحقن داخل نافذة الطباعة) --- */
+            .fh-print-page {
+                font-family: 'Cairo','Segoe UI',Tahoma,Arial,sans-serif;
+                direction:rtl; color:#1f2937; padding:20px 26px;
+            }
+            .fh-print-header { text-align:center; border-bottom:2px solid #2b4196; padding-bottom:10px; margin-bottom:14px; }
+            .fh-print-header h1 { font-size:1.05rem; margin:0; color:#1f2937; }
+            .fh-print-header h2 { font-size:.95rem; margin:2px 0; color:#2b4196; }
+            .fh-print-header .sub { font-size:.78rem; color:#475569; }
+            .fh-print-title { text-align:center; font-size:1.05rem; font-weight:800; color:#2b4196; margin:12px 0; padding:6px; border:2px solid #2b4196; border-radius:8px; }
+            .fh-print-grid { display:grid; grid-template-columns:130px 1fr 130px 1fr; gap:6px 10px; font-size:.85rem; margin:10px 0; }
+            .fh-print-grid .label { color:#475569; font-weight:700; }
+            .fh-print-grid .value { color:#1f2937; }
+            .fh-print-services { width:100%; border-collapse:collapse; margin:10px 0; font-size:.82rem; }
+            .fh-print-services th, .fh-print-services td { border:1px solid #cbd5e1; padding:5px 7px; }
+            .fh-print-services th { background:#eef2ff; color:#1e1b4b; }
+            .fh-print-totals { display:grid; grid-template-columns:repeat(2,1fr); gap:4px 14px; font-size:.88rem; margin-top:10px; padding:8px; background:#f8fafc; border-radius:8px; }
+            .fh-print-totals .label { color:#475569; font-weight:700; }
+            .fh-print-totals .value { color:#1f2937; font-weight:700; }
+            .fh-print-totals .grand .value { color:#065f46; font-size:1rem; }
+            .fh-print-footer { margin-top:18px; padding-top:8px; border-top:1px solid #cbd5e1; font-size:.78rem; color:#475569; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+            .fh-print-sign-row { display:flex; justify-content:space-between; margin-top:30px; font-size:.85rem; }
+            .fh-print-sign-row .sign-block { text-align:center; width:30%; }
+            .fh-print-sign-row .sign-block .line { border-top:1px solid #475569; padding-top:4px; margin-top:30px; }
+            .fh-print-watermark-cancelled {
+                position:fixed; top:50%; left:50%; transform:translate(-50%,-50%) rotate(-25deg);
+                font-size:6rem; font-weight:900; color:rgba(220,38,38,0.18); pointer-events:none; z-index:0;
+            }
+            @media print {
+                body { background:#fff; }
+                .fh-print-page-break { page-break-after: always; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function getBootstrapModalInstance(modalEl) {
+        if (!modalEl) return null;
+        if (window.bootstrap && window.bootstrap.Modal) {
+            return window.bootstrap.Modal.getOrCreateInstance(modalEl);
+        }
+        return {
+            show() { modalEl.style.display = 'block'; modalEl.classList.add('show'); modalEl.removeAttribute('aria-hidden'); },
+            hide() { modalEl.classList.remove('show'); modalEl.style.display = 'none'; modalEl.setAttribute('aria-hidden', 'true'); },
+        };
+    }
+
+    function fmtMoney(v) { return FinanceUtils.fmtMoney(v); }
+    function fmtNum(v) { return FinanceUtils.fmtNumber(v); }
+    function fmtDT(v) { return FinanceUtils.fmtDateTime(v); }
+    function esc(v) { return FinanceUtils.esc(v); }
+    function statusLabelAr(s) { return FinanceUtils.statusLabel(s); }
+
+    function periodLabelAr(period) {
+        const m = {
+            today: 'اليوم', week: 'الأسبوع', month: 'الشهر', year: 'السنة', custom: 'فترة مخصصة',
+        };
+        return m[period] || (period || '—');
+    }
+
+    function buildFiltersDescription(filters) {
+        if (!filters || typeof filters !== 'object') return 'بدون فلاتر';
+        const parts = [];
+        if (filters.period) parts.push(`الفترة: ${periodLabelAr(filters.period)}`);
+        if (filters.from) parts.push(`من: ${fmtDT(filters.from)}`);
+        if (filters.to)   parts.push(`إلى: ${fmtDT(filters.to)}`);
+        if (Array.isArray(filters.doc_codes) && filters.doc_codes.length) parts.push(`أنواع: ${filters.doc_codes.join('،')}`);
+        if (Array.isArray(filters.statuses)  && filters.statuses.length)  parts.push(`حالات: ${filters.statuses.map(statusLabelAr).join('،')}`);
+        if (filters.amount_min != null) parts.push(`أدنى مبلغ: ${fmtMoney(filters.amount_min)}`);
+        if (filters.amount_max != null) parts.push(`أعلى مبلغ: ${fmtMoney(filters.amount_max)}`);
+        if (filters.has_ministry_share) parts.push('حصة وزارة فقط');
+        if (filters.query) parts.push(`بحث: "${filters.query}"`);
+        return parts.length ? parts.join(' • ') : 'بدون فلاتر';
+    }
+
+    /* =========================================================================
+     * 11.1  XLSX Export — أربع أوراق منسّقة
+     * ========================================================================= */
+    Object.assign(Finance, {
+
+        openExportDialog() {
+            injectFinanceM522Styles();
+            const modal = Finance._ensureModal('fh-export-modal', '<i class="bi bi-file-earmark-excel-fill"></i> تصدير إلى Excel', 'modal-md');
+            const body = modal.querySelector('.modal-body');
+            const footer = modal.querySelector('.modal-footer');
+
+            body.innerHTML = `
+                <div class="text-muted small mb-2">
+                    اختر الأوراق التي تريد تضمينها في الملف. سيتم تطبيق نفس الفلاتر الحالية على البيانات المُصدَّرة.
+                </div>
+                <div class="fh-export-options">
+                    <label class="fh-export-option">
+                        <input type="checkbox" id="fh-sheet-summary" checked>
+                        <div>
+                            <div class="fh-export-option-title">ملخّص</div>
+                            <div class="fh-export-option-sub">الإجماليات والأعداد العامة</div>
+                        </div>
+                    </label>
+                    <label class="fh-export-option">
+                        <input type="checkbox" id="fh-sheet-transactions" checked>
+                        <div>
+                            <div class="fh-export-option-title">الحركات</div>
+                            <div class="fh-export-option-sub">جدول السجلات المفصّل</div>
+                        </div>
+                    </label>
+                    <label class="fh-export-option">
+                        <input type="checkbox" id="fh-sheet-pivot" checked>
+                        <div>
+                            <div class="fh-export-option-title">تحليلات</div>
+                            <div class="fh-export-option-sub">توزيع الأنواع + أعلى الخدمات + المحاسبون</div>
+                        </div>
+                    </label>
+                    <label class="fh-export-option">
+                        <input type="checkbox" id="fh-sheet-ministry" checked>
+                        <div>
+                            <div class="fh-export-option-title">حصة الوزارة</div>
+                            <div class="fh-export-option-sub">التفصيل من الخدمات والتذاكر</div>
+                        </div>
+                    </label>
+                </div>
+                <div class="alert alert-light mt-3 small" style="border:1px dashed #c7d2fe;">
+                    <i class="bi bi-info-circle"></i>
+                    يُحدّ الخادم حالياً عدد الصفوف المسموح بتصديرها (الافتراضي 10,000 صف). في حال تجاوز هذا الحد، يُرجى تضييق الفلاتر.
+                </div>
+            `;
+
+            footer.innerHTML = `
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إلغاء</button>
+                <button type="button" class="btn btn-success" id="fh-export-confirm">
+                    <i class="bi bi-download"></i> تصدير الملف
+                </button>
+            `;
+
+            footer.querySelector('#fh-export-confirm').onclick = () => {
+                const sheets = [];
+                if (document.getElementById('fh-sheet-summary').checked)      sheets.push('summary');
+                if (document.getElementById('fh-sheet-transactions').checked) sheets.push('transactions');
+                if (document.getElementById('fh-sheet-pivot').checked)        sheets.push('pivot');
+                if (document.getElementById('fh-sheet-ministry').checked)     sheets.push('ministry');
+                if (!sheets.length) {
+                    Core.showAlert('اختر ورقة واحدة على الأقل.', 'warning');
+                    return;
+                }
+                getBootstrapModalInstance(modal).hide();
+                Finance.exportXlsx(sheets);
+            };
+
+            getBootstrapModalInstance(modal).show();
+        },
+
+        async exportXlsx(sheets) {
+            if (typeof XLSX === 'undefined') {
+                Core.showAlert('مكتبة XLSX غير محمّلة. أعِد تحميل الصفحة وحاول مجدداً.', 'error');
+                return;
+            }
+            const includeSheets = Array.isArray(sheets) && sheets.length
+                ? sheets
+                : ['summary', 'transactions', 'pivot', 'ministry'];
+
+            try {
+                Core.showAlert('جاري تجهيز الملف...', 'info');
+                const payload = {
+                    ...FinanceUtils.cleanFilters(),
+                    sort_by: FinanceState.sortBy,
+                    sort_dir: FinanceState.sortDir,
+                    format: 'xlsx',
+                    include_sheets: includeSheets,
+                };
+                const res = await Core.apiCall('finance/export', 'POST', payload);
+                if (!res || !res.success || !res.data) {
+                    Core.showAlert(res?.message || 'تعذر تجهيز ملف التصدير.', 'error');
+                    return;
+                }
+                const data = res.data;
+                const wb = XLSX.utils.book_new();
+                const meta = data.meta || {};
+
+                // Sheet 1: Summary
+                if (data.sheets && data.sheets.summary) {
+                    const s = data.sheets.summary.rows?.[0] || {};
+                    const rows = [
+                        ['تقرير المركز المالي والسندي الشامل'],
+                        [],
+                        ['تاريخ التوليد', fmtDT(meta.generated_at)],
+                        ['أُعد بواسطة', meta.generated_by || '—'],
+                        ['الدور', meta.generated_by_role || '—'],
+                        ['نطاق البيانات', (meta.scope?.mode === 'all') ? 'كل المركز' : 'سجلاتي فقط'],
+                        ['الفلاتر المطبقة', buildFiltersDescription(meta.filters)],
+                        ['عدد السجلات', s.total_rows ?? 0],
+                        [],
+                        ['الإجماليات'],
+                        ['إجمالي المبالغ', s.total_amount ?? 0],
+                        ['إجمالي الكاش', s.cash_amount ?? 0],
+                        ['إجمالي الإعفاءات', s.exempt_amount ?? 0],
+                        ['حصة الوزارة', s.ministry_share ?? 0],
+                        ['حصة المركز', s.center_share ?? 0],
+                        [],
+                        ['الأعداد حسب النوع'],
+                        ['كاش (A)', s.count_cash ?? 0],
+                        ['إعفاء جزئي (B)', s.count_partial ?? 0],
+                        ['إعفاء كلي (C)', s.count_full ?? 0],
+                        ['تذاكر (T)', s.count_tickets ?? 0],
+                        ['ملغاة', s.count_cancelled ?? 0],
+                    ];
+                    const ws = XLSX.utils.aoa_to_sheet(rows);
+                    ws['!cols'] = [{ wch: 32 }, { wch: 36 }];
+                    if (ws['!merges']) ws['!merges'].push({ s:{r:0,c:0}, e:{r:0,c:1} });
+                    else ws['!merges'] = [{ s:{r:0,c:0}, e:{r:0,c:1} }];
+                    XLSX.utils.book_append_sheet(wb, ws, 'الملخص');
+                }
+
+                // Sheet 2: Transactions
+                if (data.sheets && data.sheets.transactions) {
+                    const t = data.sheets.transactions;
+                    const cols = t.columns || [];
+                    const header = cols.map(c => c.label);
+                    const aoa = [header];
+                    (t.rows || []).forEach(r => {
+                        aoa.push(cols.map(c => {
+                            const key = c.key;
+                            const val = r[key];
+                            if (key === 'status')        return statusLabelAr(val);
+                            if (key === 'txn_timestamp') return fmtDT(val);
+                            if (['total','cash_amount','exempt_amount','center_share','ministry_share'].includes(key)) {
+                                return Number(val || 0);
+                            }
+                            return val ?? '';
+                        }));
+                    });
+                    // إجماليات الصفحة
+                    const pt = t.page_total || {};
+                    const totalRow = cols.map(c => {
+                        if (c.key === 'patient_name') return `الإجماليات (${(t.rows||[]).length} سجل)`;
+                        if (['total','cash_amount','exempt_amount','center_share','ministry_share'].includes(c.key)) {
+                            return Number(pt[c.key] || 0);
+                        }
+                        return '';
+                    });
+                    aoa.push(totalRow);
+
+                    const ws = XLSX.utils.aoa_to_sheet(aoa);
+                    ws['!cols'] = cols.map(() => ({ wch: 18 }));
+                    XLSX.utils.book_append_sheet(wb, ws, 'الحركات');
+                }
+
+                // Sheet 3: Pivot (analytics)
+                if (data.sheets && data.sheets.pivot) {
+                    const p = data.sheets.pivot;
+                    const aoa = [];
+                    aoa.push(['توزيع أنواع الحركات']);
+                    aoa.push(['النوع', 'الكود', 'المبلغ', 'العدد']);
+                    (p.type_distribution || []).forEach(row => {
+                        aoa.push([row.label || '—', row.code || '—', Number(row.value || 0), Number(row.count || 0)]);
+                    });
+                    aoa.push([]);
+
+                    aoa.push(['أعلى 10 خدمات']);
+                    aoa.push(['الخدمة', 'الإيراد', 'عدد المرات']);
+                    (p.top_services || []).forEach(row => {
+                        aoa.push([row.name || '—', Number(row.revenue || 0), Number(row.count || 0)]);
+                    });
+                    aoa.push([]);
+
+                    aoa.push(['أداء المحاسبين']);
+                    aoa.push(['المحاسب', 'الإيراد', 'عدد الحركات']);
+                    (p.accountants_performance || []).forEach(row => {
+                        aoa.push([row.name || '—', Number(row.revenue || 0), Number(row.count || 0)]);
+                    });
+
+                    const ws = XLSX.utils.aoa_to_sheet(aoa);
+                    ws['!cols'] = [{ wch: 36 }, { wch: 18 }, { wch: 18 }, { wch: 14 }];
+                    XLSX.utils.book_append_sheet(wb, ws, 'التحليلات');
+                }
+
+                // Sheet 4: Ministry Share
+                if (data.sheets && data.sheets.ministry) {
+                    const m = data.sheets.ministry.report || {};
+                    const aoa = [];
+                    aoa.push(['تقرير حصة الوزارة']);
+                    aoa.push([]);
+                    aoa.push(['الإجماليات']);
+                    aoa.push(['من الخدمات', Number(m.totals?.from_services || 0)]);
+                    aoa.push(['من التذاكر',  Number(m.totals?.from_tickets || 0)]);
+                    aoa.push(['الإجمالي',    Number(m.totals?.grand_total || 0)]);
+                    aoa.push([]);
+
+                    aoa.push(['تفصيل الخدمات']);
+                    aoa.push(['الخدمة', 'القسم', 'التصنيف', 'عدد الحركات', 'حصة الوزارة', 'إجمالي الإيراد']);
+                    (m.by_service || m.services || []).forEach(row => {
+                        aoa.push([
+                            row.service_name || row.name || '—',
+                            row.department_name || '—',
+                            row.category_name || '—',
+                            Number(row.transactions || row.count || 0),
+                            Number(row.ministry_share || 0),
+                            Number(row.total_revenue || row.revenue || 0),
+                        ]);
+                    });
+                    aoa.push([]);
+
+                    aoa.push(['تفصيل التذاكر']);
+                    aoa.push(['الوردية', 'عدد التذاكر', 'حصة الوحدة', 'إجمالي حصة الوزارة', 'إجمالي الإيراد']);
+                    (m.by_ticket || m.tickets || []).forEach(row => {
+                        const shiftLabel = (row.shift === 'morning' || row.ticket_type === 'morning') ? 'صباحي' :
+                                           (row.shift === 'evening' || row.ticket_type === 'evening') ? 'مسائي' :
+                                           (row.ticket_type_label || row.label || '—');
+                        aoa.push([
+                            shiftLabel,
+                            Number(row.count || row.tickets_count || 0),
+                            Number(row.unit_share || row.per_ticket_share || 0),
+                            Number(row.ministry_share || 0),
+                            Number(row.total_revenue || row.revenue || 0),
+                        ]);
+                    });
+
+                    const ws = XLSX.utils.aoa_to_sheet(aoa);
+                    ws['!cols'] = [{ wch: 32 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 18 }];
+                    XLSX.utils.book_append_sheet(wb, ws, 'حصة الوزارة');
+                }
+
+                if (!wb.SheetNames.length) {
+                    Core.showAlert('لا توجد أوراق صالحة لإنشاء الملف.', 'warning');
+                    return;
+                }
+
+                const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+                const filename = `Finance_Hub_${stamp}.xlsx`;
+                XLSX.writeFile(wb, filename);
+                Core.showAlert(`تم تجهيز الملف: ${filename}`, 'success');
+            } catch (e) {
+                console.error('exportXlsx:', e);
+                Core.showAlert('حدث خطأ أثناء تجهيز ملف Excel.', 'error');
+            }
+        },
+    });
+
+    /* =========================================================================
+     * 11.2  Print Templates — سند مفرد + طباعة دفعة محددة
+     * ========================================================================= */
+    Object.assign(Finance, {
+
+        async printTransaction(txnId) {
+            if (!txnId) return;
+            try {
+                Core.showAlert('جاري تجهيز السند للطباعة...', 'info');
+                const res = await Core.apiCall('finance/print_voucher', 'POST', { txn_id: txnId });
+                if (!res || !res.success || !res.data) {
+                    Core.showAlert(res?.message || 'تعذر تجهيز السند.', 'error');
+                    return;
+                }
+                Finance._openPrintWindow([res.data], 'سند مالي');
+            } catch (e) {
+                console.error('printTransaction:', e);
+                Core.showAlert('حدث خطأ أثناء تجهيز السند.', 'error');
+            }
+        },
+
+        async printSelected() {
+            const ids = Array.from(FinanceState.selectedIds);
+            if (!ids.length) {
+                Core.showAlert('حدّد سند واحد على الأقل لإجراء الطباعة.', 'warning');
+                return;
+            }
+            if (ids.length > 50) {
+                if (!window.confirm(`تم تحديد ${ids.length} سنداً. هل تريد متابعة الطباعة على دفعة كبيرة؟`)) {
+                    return;
+                }
+            }
+
+            try {
+                Core.showAlert(`جاري تجهيز ${ids.length} سند(ات) للطباعة...`, 'info');
+                const results = [];
+                for (const txnId of ids) {
+                    try {
+                        const res = await Core.apiCall('finance/print_voucher', 'POST', { txn_id: txnId });
+                        if (res && res.success && res.data) {
+                            results.push(res.data);
+                        }
+                    } catch (innerErr) {
+                        console.warn('failed to fetch voucher', txnId, innerErr);
+                    }
+                }
+                if (!results.length) {
+                    Core.showAlert('تعذر تجهيز أي سند للطباعة.', 'error');
+                    return;
+                }
+                Finance._openPrintWindow(results, `طباعة ${results.length} سند(ات)`);
+            } catch (e) {
+                console.error('printSelected:', e);
+                Core.showAlert('حدث خطأ أثناء طباعة الدفعة.', 'error');
+            }
+        },
+
+        _openPrintWindow(payloads, title) {
+            injectFinanceM522Styles();
+            const printCss = document.getElementById('finance-hub-m522-styles')?.textContent || '';
+            const pagesHtml = payloads.map((p, idx) =>
+                Finance._renderVoucherHtml(p, idx < payloads.length - 1)
+            ).join('');
+
+            const win = window.open('', '_blank', 'width=900,height=1100');
+            if (!win) {
+                Core.showAlert('تم منع فتح نافذة الطباعة. يُرجى السماح للنوافذ المنبثقة لهذا الموقع.', 'warning');
+                return;
+            }
+            win.document.open();
+            win.document.write(`<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <title>${esc(title || 'طباعة')}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>${printCss}</style>
+</head>
+<body>
+    ${pagesHtml}
+    <script>
+        window.addEventListener('load', function () {
+            setTimeout(function () { window.focus(); window.print(); }, 350);
+        });
+    <\/script>
+</body>
+</html>`);
+            win.document.close();
+        },
+
+        _renderVoucherHtml(payload, hasNext) {
+            const header = payload.header || {};
+            const meta = payload.print_meta || {};
+            const voucher = payload.voucher || {};
+            const source = voucher.source_type === 'ticket' ? 'ticket' : 'invoice';
+
+            const head = `
+                <div class="fh-print-header">
+                    <h1>${esc(header.country || '')}</h1>
+                    <h2>${esc(header.ministry || '')}</h2>
+                    <div class="sub">${esc(header.office || '')}</div>
+                    <div class="sub">${esc(header.directorate || '')}</div>
+                    <div class="sub"><strong>${esc(header.center || '')}</strong> — ${esc(header.admin || '')}</div>
+                </div>
+            `;
+
+            const footer = `
+                <div class="fh-print-sign-row">
+                    <div class="sign-block"><div class="line">المحاسب</div></div>
+                    <div class="sign-block"><div class="line">المراجع</div></div>
+                    <div class="sign-block"><div class="line">الإدارة</div></div>
+                </div>
+                <div class="fh-print-footer">
+                    <div>${esc(header.footer_note || '')}</div>
+                    <div>
+                        طُبع بواسطة: <strong>${esc(meta.printed_by || '—')}</strong>
+                        — ${esc(meta.printed_by_role || '')}
+                        — ${fmtDT(meta.printed_at)}
+                    </div>
+                </div>
+            `;
+
+            const titleAr = source === 'ticket' ? 'سند تذكرة معاينة' : 'سند مالي';
+            const body = source === 'ticket'
+                ? Finance._renderTicketVoucherBody(voucher, meta)
+                : Finance._renderInvoiceVoucherBody(voucher, meta);
+
+            const cancelled = (voucher.invoice?.status === 'cancelled') || (voucher.ticket?.status === 'cancelled');
+            const watermark = cancelled ? `<div class="fh-print-watermark-cancelled">ملغى</div>` : '';
+
+            return `
+                <div class="fh-print-page ${hasNext ? 'fh-print-page-break' : ''}">
+                    ${watermark}
+                    ${head}
+                    <div class="fh-print-title">${esc(titleAr)}</div>
+                    ${body}
+                    ${footer}
+                </div>
+            `;
+        },
+
+        _renderInvoiceVoucherBody(voucher, meta) {
+            const inv = voucher.invoice || {};
+            const services = voucher.services || [];
+            const totals = voucher.totals || {};
+            const currency = meta.currency_label || 'ريال';
+
+            const servicesHtml = services.length ? `
+                <table class="fh-print-services">
+                    <thead>
+                        <tr>
+                            <th>#</th><th>الخدمة</th><th>القسم</th>
+                            <th>السعر</th><th>الكمية</th>
+                            <th>حصة الوزارة</th><th>حصة المركز</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${services.map((s, i) => `
+                            <tr>
+                                <td>${i + 1}</td>
+                                <td>${esc(s.service_name || '—')}</td>
+                                <td>${esc(s.department_name || '—')}</td>
+                                <td>${fmtMoney(s.price)}</td>
+                                <td>${fmtNum(s.quantity)}</td>
+                                <td>${fmtMoney(s.ministry_share)}</td>
+                                <td>${fmtMoney(s.center_share)}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            ` : '';
+
+            return `
+                <div class="fh-print-grid">
+                    <div class="label">كود السند:</div><div class="value"><strong>${esc(inv.doc_code || '—')}</strong></div>
+                    <div class="label">الرقم التسلسلي:</div><div class="value"><strong>${esc(inv.serial_number || '—')}</strong></div>
+
+                    <div class="label">اسم المريض:</div><div class="value">${esc(inv.patient_name || '—')}</div>
+                    <div class="label">الزيارة:</div><div class="value">#${esc(inv.visit_id || '—')}</div>
+
+                    <div class="label">الجنس:</div><div class="value">${esc(inv.gender || '—')}</div>
+                    <div class="label">الهاتف:</div><div class="value">${esc(inv.patient_phone || '—')}</div>
+
+                    <div class="label">المحاسب:</div><div class="value">${esc(inv.accountant_name || '—')}</div>
+                    <div class="label">الطبيب:</div><div class="value">${esc(inv.doctor_name || '—')}</div>
+
+                    <div class="label">تاريخ الإصدار:</div><div class="value">${fmtDT(inv.created_at)}</div>
+                    <div class="label">تاريخ السداد:</div><div class="value">${fmtDT(inv.paid_at)}</div>
+
+                    <div class="label">نوع الحالة:</div><div class="value">${esc(inv.case_type_name || '—')}</div>
+                    <div class="label">التشخيص:</div><div class="value">${esc(inv.diagnosis || '—')}</div>
+                </div>
+
+                ${servicesHtml}
+
+                <div class="fh-print-totals">
+                    <div class="label">الإجمالي:</div><div class="value">${fmtMoney(totals.total)} ${esc(currency)}</div>
+                    <div class="label">الكاش:</div><div class="value">${fmtMoney(totals.cash)} ${esc(currency)}</div>
+                    <div class="label">الإعفاء:</div><div class="value">${fmtMoney(totals.exempt)} ${esc(currency)}</div>
+                    <div class="label">حصة الوزارة:</div><div class="value">${fmtMoney(totals.ministry_share)} ${esc(currency)}</div>
+                    <div class="label grand">حصة المركز:</div><div class="value">${fmtMoney(totals.center_share)} ${esc(currency)}</div>
+                </div>
+
+                ${inv.cancelled_at ? `
+                    <div style="margin-top:10px;padding:8px;border:1px dashed #dc2626;border-radius:8px;color:#991b1b;font-size:.82rem;">
+                        <strong>تم إلغاء هذا السند في:</strong> ${fmtDT(inv.cancelled_at)}<br>
+                        <strong>السبب:</strong> ${esc(inv.cancel_reason || '—')}
+                    </div>
+                ` : ''}
+            `;
+        },
+
+        _renderTicketVoucherBody(voucher, meta) {
+            const t = voucher.ticket || {};
+            const totals = voucher.totals || {};
+            const currency = meta.currency_label || 'ريال';
+            const typeLabel = t.ticket_type === 'morning' ? 'صباحي' : 'مسائي';
+
+            return `
+                <div class="fh-print-grid">
+                    <div class="label">نوع التذكرة:</div><div class="value"><strong>${typeLabel}</strong></div>
+                    <div class="label">الرقم التسلسلي:</div><div class="value"><strong>${esc(t.serial_number || '—')}</strong></div>
+
+                    <div class="label">اسم المريض:</div><div class="value">${esc(t.patient_name || '—')}</div>
+                    <div class="label">الزيارة:</div><div class="value">#${esc(t.visit_id || '—')}</div>
+
+                    <div class="label">الجنس:</div><div class="value">${esc(t.gender || '—')}</div>
+                    <div class="label">المُصدِر:</div><div class="value">${esc(t.issued_by_name || '—')}</div>
+
+                    <div class="label">الطبيب:</div><div class="value">${esc(t.doctor_name || '—')}</div>
+                    <div class="label">تاريخ الإصدار:</div><div class="value">${fmtDT(t.created_at)}</div>
+
+                    ${t.notes ? `<div class="label">ملاحظات:</div><div class="value" style="grid-column: span 3;">${esc(t.notes)}</div>` : ''}
+                </div>
+
+                <div class="fh-print-totals" style="margin-top:18px;">
+                    <div class="label">المبلغ:</div><div class="value">${fmtMoney(t.amount || totals.total)} ${esc(currency)}</div>
+                    <div class="label">حصة الوزارة:</div><div class="value">${fmtMoney(totals.ministry_share)} ${esc(currency)}</div>
+                    <div class="label grand">حصة المركز:</div><div class="value">${fmtMoney(totals.center_share)} ${esc(currency)}</div>
+                </div>
+            `;
+        },
+    });
+
+    /* =========================================================================
+     * 11.3  Ministry Report Modal — تقرير حصة الوزارة التفصيلي
+     * ========================================================================= */
+    Object.assign(Finance, {
+
+        async openMinistryReport() {
+            injectFinanceM522Styles();
+            const modal = Finance._ensureModal('fh-ministry-report-modal',
+                '<i class="bi bi-buildings"></i> تقرير حصة الوزارة', 'modal-xl');
+            const body = modal.querySelector('.modal-body');
+            const footer = modal.querySelector('.modal-footer');
+
+            body.innerHTML = `<div class="fh-grid-state"><i class="bi bi-hourglass-split"></i> جاري تحميل التقرير...</div>`;
+            footer.innerHTML = `
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إغلاق</button>
+                <button type="button" class="btn btn-success" id="fh-ministry-export-btn" disabled>
+                    <i class="bi bi-file-earmark-excel"></i> تصدير حصة الوزارة فقط
+                </button>
+                <button type="button" class="btn btn-primary" id="fh-ministry-print-btn" disabled>
+                    <i class="bi bi-printer"></i> طباعة
+                </button>
+            `;
+            getBootstrapModalInstance(modal).show();
+
+            try {
+                const res = await Core.apiCall('finance/ministry_report', 'POST', FinanceUtils.cleanFilters());
+                if (!res || !res.success || !res.data) {
+                    body.innerHTML = `<div class="fh-grid-state"><i class="bi bi-exclamation-triangle"></i> ${esc(res?.message || 'تعذر جلب التقرير')}</div>`;
+                    return;
+                }
+                const report = res.data.report || {};
+                const filtersDesc = buildFiltersDescription(res.data.applied_filters);
+                const currency = res.data.currency_label || 'ريال';
+                FinanceState._lastMinistryReport = { report, filtersDesc, currency };
+
+                body.innerHTML = Finance._renderMinistryReportHtml(report, filtersDesc, currency);
+
+                footer.querySelector('#fh-ministry-export-btn').disabled = false;
+                footer.querySelector('#fh-ministry-print-btn').disabled = false;
+                footer.querySelector('#fh-ministry-export-btn').onclick = () => Finance.exportXlsx(['ministry']);
+                footer.querySelector('#fh-ministry-print-btn').onclick  = () => Finance._printMinistryReport();
+            } catch (e) {
+                console.error('openMinistryReport:', e);
+                body.innerHTML = `<div class="fh-grid-state"><i class="bi bi-exclamation-triangle"></i> خطأ في الاتصال</div>`;
+            }
+        },
+
+        _renderMinistryReportHtml(report, filtersDesc, currency) {
+            const totals = report.totals || {};
+            const services = report.by_service || report.services || [];
+            const tickets = report.by_ticket || report.tickets || [];
+
+            const summaryCards = `
+                <div class="fh-ministry-summary">
+                    <div class="fh-ministry-summary-card">
+                        <div class="label">من الخدمات</div>
+                        <div class="value">${fmtMoney(totals.from_services)}</div>
+                    </div>
+                    <div class="fh-ministry-summary-card">
+                        <div class="label">من التذاكر</div>
+                        <div class="value">${fmtMoney(totals.from_tickets)}</div>
+                    </div>
+                    <div class="fh-ministry-summary-card">
+                        <div class="label">الإجمالي الكلي</div>
+                        <div class="value" style="color:#065f46;">${fmtMoney(totals.grand_total)} ${esc(currency)}</div>
+                    </div>
+                </div>
+            `;
+
+            const servicesRows = services.length ? services.map(s => `
+                <tr>
+                    <td>${esc(s.service_name || s.name || '—')}</td>
+                    <td>${esc(s.department_name || '—')}</td>
+                    <td>${esc(s.category_name || '—')}</td>
+                    <td>${fmtNum(s.transactions || s.count || 0)}</td>
+                    <td>${fmtMoney(s.ministry_share)}</td>
+                    <td>${fmtMoney(s.total_revenue || s.revenue)}</td>
+                </tr>
+            `).join('') : `<tr><td colspan="6" class="text-muted text-center">لا توجد بيانات</td></tr>`;
+
+            const servicesTotal = services.reduce((acc, s) => {
+                acc.share += Number(s.ministry_share || 0);
+                acc.rev   += Number(s.total_revenue || s.revenue || 0);
+                acc.count += Number(s.transactions || s.count || 0);
+                return acc;
+            }, { share: 0, rev: 0, count: 0 });
+
+            const ticketsRows = tickets.length ? tickets.map(t => {
+                const shift = (t.shift === 'morning' || t.ticket_type === 'morning') ? 'صباحي'
+                            : (t.shift === 'evening' || t.ticket_type === 'evening') ? 'مسائي'
+                            : (t.ticket_type_label || t.label || '—');
+                return `
+                    <tr>
+                        <td>${esc(shift)}</td>
+                        <td>${fmtNum(t.count || t.tickets_count || 0)}</td>
+                        <td>${fmtMoney(t.unit_share || t.per_ticket_share)}</td>
+                        <td>${fmtMoney(t.ministry_share)}</td>
+                        <td>${fmtMoney(t.total_revenue || t.revenue)}</td>
+                    </tr>
+                `;
+            }).join('') : `<tr><td colspan="5" class="text-muted text-center">لا توجد بيانات</td></tr>`;
+
+            const ticketsTotal = tickets.reduce((acc, t) => {
+                acc.share += Number(t.ministry_share || 0);
+                acc.rev   += Number(t.total_revenue || t.revenue || 0);
+                acc.count += Number(t.count || t.tickets_count || 0);
+                return acc;
+            }, { share: 0, rev: 0, count: 0 });
+
+            return `
+                <div class="text-muted small mb-2">
+                    <i class="bi bi-funnel"></i> الفلاتر: ${esc(filtersDesc)}
+                </div>
+
+                ${summaryCards}
+
+                <h6 class="fh-modal-section-title" style="margin-top:8px;">
+                    <i class="bi bi-clipboard-data"></i> حصة الوزارة من الخدمات
+                </h6>
+                <table class="fh-mini-table">
+                    <thead>
+                        <tr>
+                            <th>الخدمة</th><th>القسم</th><th>التصنيف</th>
+                            <th>عدد الحركات</th><th>حصة الوزارة</th><th>إجمالي الإيراد</th>
+                        </tr>
+                    </thead>
+                    <tbody>${servicesRows}</tbody>
+                    <tfoot>
+                        <tr>
+                            <td colspan="3">الإجماليات</td>
+                            <td>${fmtNum(servicesTotal.count)}</td>
+                            <td>${fmtMoney(servicesTotal.share)}</td>
+                            <td>${fmtMoney(servicesTotal.rev)}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+
+                <h6 class="fh-modal-section-title" style="margin-top:14px;">
+                    <i class="bi bi-ticket-perforated"></i> حصة الوزارة من التذاكر
+                </h6>
+                <table class="fh-mini-table">
+                    <thead>
+                        <tr>
+                            <th>الوردية</th><th>عدد التذاكر</th><th>حصة الوحدة</th>
+                            <th>حصة الوزارة</th><th>إجمالي الإيراد</th>
+                        </tr>
+                    </thead>
+                    <tbody>${ticketsRows}</tbody>
+                    <tfoot>
+                        <tr>
+                            <td>الإجماليات</td>
+                            <td>${fmtNum(ticketsTotal.count)}</td>
+                            <td>—</td>
+                            <td>${fmtMoney(ticketsTotal.share)}</td>
+                            <td>${fmtMoney(ticketsTotal.rev)}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            `;
+        },
+
+        _printMinistryReport() {
+            const cached = FinanceState._lastMinistryReport;
+            if (!cached) {
+                Core.showAlert('أعد فتح التقرير ثم اضغط طباعة.', 'warning');
+                return;
+            }
+            const win = window.open('', '_blank', 'width=900,height=1100');
+            if (!win) {
+                Core.showAlert('تم منع فتح نافذة الطباعة. يُرجى السماح للنوافذ المنبثقة لهذا الموقع.', 'warning');
+                return;
+            }
+            const css = document.getElementById('finance-hub-m522-styles')?.textContent || '';
+            const html = Finance._renderMinistryReportHtml(cached.report, cached.filtersDesc, cached.currency);
+            win.document.open();
+            win.document.write(`<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <title>تقرير حصة الوزارة</title>
+    <style>
+        ${css}
+        body { font-family: Cairo,'Segoe UI',Tahoma,Arial,sans-serif; padding:20px; }
+        h2 { color:#2b4196; }
+    </style>
+</head>
+<body>
+    <h2 style="text-align:center;">تقرير حصة الوزارة</h2>
+    ${html}
+    <script>
+        window.addEventListener('load', function () {
+            setTimeout(function () { window.focus(); window.print(); }, 350);
+        });
+    <\/script>
+</body>
+</html>`);
+            win.document.close();
+        },
+    });
+
+    /* =========================================================================
+     * 11.4  تكامل M5.2.2 مع شريط أدوات الجدول + خلية الإجراءات
+     * ========================================================================= */
+    const _originalRenderGridShell = Finance.renderGridShell;
+    Finance.renderGridShell = function () {
+        const container = document.getElementById('fh-grid-container');
+        if (!container) return;
+        container.innerHTML = `
+            <div class="fh-grid-card">
+                <div class="fh-grid-toolbar">
+                    <h5><i class="bi bi-table"></i> سجل الحركات الموحّد</h5>
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <span id="fh-selected-info" class="text-muted small"></span>
+                        <button class="btn btn-sm btn-outline-success" onclick="Finance.openExportDialog()">
+                            <i class="bi bi-file-earmark-excel"></i> تصدير XLSX
+                        </button>
+                        <button class="btn btn-sm btn-outline-dark" onclick="Finance.printSelected()" title="طباعة السندات المحددة">
+                            <i class="bi bi-printer"></i> طباعة المحدد
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="Finance.saveCurrentView()">
+                            <i class="bi bi-bookmark-plus"></i> حفظ العرض
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary" onclick="Finance.openColumnManager()">
+                            <i class="bi bi-layout-three-columns"></i> الأعمدة
+                        </button>
+                        <select class="form-select form-select-sm" style="width:auto;" id="fh-per-page"
+                                onchange="Finance.changePerPage(Number(this.value))">
+                            <option value="25"  ${FinanceState.perPage===25?'selected':''}>25</option>
+                            <option value="50"  ${FinanceState.perPage===50?'selected':''}>50</option>
+                            <option value="100" ${FinanceState.perPage===100?'selected':''}>100</option>
+                            <option value="200" ${FinanceState.perPage===200?'selected':''}>200</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="fh-grid-scroll" id="fh-grid-scroll">
+                    <div class="fh-grid-state"><i class="bi bi-hourglass-split"></i> جاري تحميل البيانات...</div>
+                </div>
+                <div class="fh-pagination" id="fh-pagination" style="display:none;"></div>
+            </div>
+        `;
+    };
+
+    // اعتراض خلية الإجراءات لإضافة زر الطباعة المفردة
+    const _originalRenderCell = Finance._renderCell;
+    Finance._renderCell = function (r, col, selected) {
+        if (col.key === 'actions') {
+            return `<td>
+                <button class="fh-action-btn" title="عرض التفاصيل" onclick="Finance.openDetail('${esc(r.txn_id)}')">
+                    <i class="bi bi-eye-fill"></i>
+                </button>
+                <button class="fh-action-btn" title="طباعة السند" onclick="Finance.printTransaction('${esc(r.txn_id)}')">
+                    <i class="bi bi-printer"></i>
+                </button>
+            </td>`;
+        }
+        return _originalRenderCell.call(this, r, col, selected);
+    };
+
+    // إضافة زر تقرير الوزارة في الترويسة دون كسر M5.2.1
+    const _originalViewHub = Finance.viewHub;
+    Finance.viewHub = function () {
+        injectFinanceStyles();
+        injectFinanceM522Styles();
+        Core.navigateTo('viewFinanceHub', async () => {
+            const main = document.getElementById('mainContent');
+            main.innerHTML = `
+                <div class="container-fluid fh-page animate-in" id="finance-hub-root">
+                    <div class="fh-header">
+                        <h2><i class="bi bi-bank2"></i> المركز المالي والسندي الشامل</h2>
+                        <div class="fh-header-actions">
+                            <button class="btn btn-sm btn-outline-info" onclick="Finance.openMinistryReport()">
+                                <i class="bi bi-buildings"></i> تقرير حصة الوزارة
+                            </button>
+                            <button class="btn btn-sm btn-outline-success" onclick="Finance.openExportDialog()">
+                                <i class="bi bi-file-earmark-excel"></i> تصدير
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="Finance.openSavedViews()">
+                                <i class="bi bi-collection"></i> العروض المحفوظة
+                            </button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="Finance.openColumnManager()">
+                                <i class="bi bi-layout-three-columns"></i> إدارة الأعمدة
+                            </button>
+                            <button class="btn btn-sm btn-primary" onclick="Finance.refreshAll()">
+                                <i class="bi bi-arrow-clockwise"></i> تحديث
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="fh-kpis" class="fh-kpi-grid">${Finance._kpiSkeleton()}</div>
+
+                    <div id="fh-charts" class="fh-charts-grid">
+                        <div class="fh-chart-card"><h6>إيرادات آخر 30 يوم</h6><div class="fh-chart-wrapper"><canvas id="fh-chart-revenue30"></canvas></div></div>
+                        <div class="fh-chart-card"><h6>توزيع أنواع الحركات</h6><div class="fh-chart-wrapper"><canvas id="fh-chart-typedist"></canvas></div></div>
+                        <div class="fh-chart-card"><h6>أعلى 10 خدمات</h6><div class="fh-chart-wrapper"><canvas id="fh-chart-topservices"></canvas></div></div>
+                        <div class="fh-chart-card"><h6>أداء المحاسبين</h6><div class="fh-chart-wrapper"><canvas id="fh-chart-accountants"></canvas></div></div>
+                    </div>
+
+                    <div id="fh-filters-container"></div>
+                    <div id="fh-grid-container"></div>
+                </div>
+            `;
+
+            if (!FinanceState.options.doc_types || !FinanceState.options.doc_types.length) {
+                await Finance.loadFilterOptions();
+            }
+            Finance._initColumns();
+            Finance.renderFiltersPanel();
+            Finance.renderGridShell();
+
+            await Promise.all([
+                Finance.loadOverview(),
+                Finance.loadTransactions(),
+            ]);
+        });
+    };
+})();
+
+console.log('[Finance Hub M5.2.2] ✅ تمت إضافة XLSX Export + Print Templates + Ministry Report Modal.');
