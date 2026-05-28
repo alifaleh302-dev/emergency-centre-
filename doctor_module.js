@@ -352,10 +352,6 @@ const Doctor = {
         const ticketTypeAr = data.ticket_type === 'morning' ? 'صباحية' : (data.ticket_type === 'evening' ? 'مسائية' : '');
         const ticketTypeColor = data.ticket_type === 'morning' ? '#f59e0b' : (data.ticket_type === 'evening' ? '#6366f1' : '#6c757d');
 
-        const logoHTML = h.logo_url
-            ? `<img src="${safe(h.logo_url)}" alt="logo" class="ticket-logo-img">`
-            : `<div class="ticket-logo-placeholder"><i class="bi bi-hospital"></i></div>`;
-
         const modalHTML = `
         <div class="modal fade" id="closeVisitModal" tabindex="-1" aria-modal="true">
             <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable modal-fullscreen-lg-down">
@@ -375,32 +371,21 @@ const Doctor = {
                     <div class="modal-body p-0 bg-light">
                         <div id="printableTicket" class="cv-print-wrapper">
                             <div class="ticket-paper">
-                                <div class="ticket-header">
-                                    <div class="ticket-header-side ticket-header-left">
-                                        <div class="ticket-number-box">
-                                            <span class="ticket-number-label">رقم التذكرة</span>
-                                            <span class="ticket-number-value">T-${safe(ticketSerial)}</span>
+                                <div class="ticket-header ticket-header-compact">
+                                    <div class="ticket-meta-row">
+                                        <div class="ticket-date-line">
+                                            <span class="dl-label">التاريخ:</span>
+                                            <span class="ticket-date-value">${safe(hijriStr || dateStr)}</span>
+                                            <span class="hijri-suffix">هـ</span>
                                         </div>
-                                        <div class="ticket-date-line"><span class="dl-label">التاريخ:</span><span class="ticket-date-value">${safe(hijriStr || dateStr)}</span><span class="hijri-suffix">هـ</span></div>
-                                        <div class="ticket-date-line"><span class="dl-label">الموافق:</span><span class="ticket-date-value">${safe(dateStr)}</span><span class="hijri-suffix">م</span></div>
+                                        <div class="ticket-date-line">
+                                            <span class="dl-label">الموافق:</span>
+                                            <span class="ticket-date-value">${safe(dateStr)}</span>
+                                            <span class="hijri-suffix">م</span>
+                                        </div>
                                         ${ticketTypeAr ? `<div class="ticket-period-badge" style="border-color:${ticketTypeColor}; color:${ticketTypeColor};">
                                             <i class="bi bi-${data.ticket_type === 'morning' ? 'sun' : 'moon-stars'} ms-1"></i>فترة ${safe(ticketTypeAr)}
                                         </div>` : ''}
-                                    </div>
-
-                                    <div class="ticket-header-center">
-                                        ${logoHTML}
-                                        <div class="ticket-title-box">${safe(h.form_title || 'تذكرة معاينة')}</div>
-                                        <div class="ticket-header-subtitle d-print-none">تنسيق موحد ومختصر لبيانات الإغلاق الطبي</div>
-                                    </div>
-
-                                    <div class="ticket-header-side ticket-header-right">
-                                        <div class="org-line org-main">${safe(h.country)}</div>
-                                        <div class="org-line">${safe(h.ministry)}</div>
-                                        <div class="org-line">${safe(h.office)}</div>
-                                        <div class="org-line">${safe(h.directorate)}</div>
-                                        <div class="org-line org-strong">${safe(h.center)}</div>
-                                        <div class="org-line">${safe(h.admin)}</div>
                                     </div>
                                 </div>
 
@@ -412,23 +397,28 @@ const Doctor = {
                                         <span>بيانات المريض</span>
                                     </div>
                                     <div class="ticket-grid">
-                                        <div class="ticket-field-card field-span-6">
+                                        <div class="ticket-field-card field-span-12">
                                             <span class="ticket-label">اسم المريض</span>
                                             <span class="ticket-value">${safe(data.patient_name || '—')}</span>
                                         </div>
-                                        <div class="ticket-field-card field-span-3">
-                                            <span class="ticket-label">العمر</span>
-                                            <span class="ticket-value">${safe(data.age || '—')}</span>
-                                        </div>
-                                        <div class="ticket-field-card field-span-3">
-                                            <span class="ticket-label">الجنس</span>
-                                            <span class="ticket-value">${safe(data.gender_ar || '—')}</span>
+                                        <div class="ticket-field-card field-span-6 ticket-field-compact">
+                                            <div class="ticket-field-inline">
+                                                <div class="ticket-mini-field">
+                                                    <span class="ticket-label">العمر</span>
+                                                    <span class="ticket-value">${safe(data.age || '—')}</span>
+                                                </div>
+                                                <span class="ticket-mini-divider"></span>
+                                                <div class="ticket-mini-field">
+                                                    <span class="ticket-label">الجنس</span>
+                                                    <span class="ticket-value">${safe(data.gender_ar || '—')}</span>
+                                                </div>
+                                            </div>
                                         </div>
                                         <div class="ticket-field-card field-span-6">
                                             <span class="ticket-label">نوع الحالة</span>
                                             <span class="ticket-value">${safe(data.type_case || '—')}</span>
                                         </div>
-                                        <div class="ticket-field-card field-span-6">
+                                        <div class="ticket-field-card field-span-12">
                                             <span class="ticket-label">العيادة</span>
                                             <input type="text" id="cv_clinic" class="ticket-input d-print-none" placeholder="اختياري">
                                             <span class="ticket-value d-none d-print-inline" id="cv_clinic_print">&nbsp;</span>
@@ -468,10 +458,6 @@ const Doctor = {
                                         <div class="ticket-footer-line">
                                             <span class="ticket-label">الطبيب المعالج:</span>
                                             <span class="ticket-value">${safe(data.attending_doctor || '—')}</span>
-                                        </div>
-                                        <div class="ticket-footer-line">
-                                            <span class="ticket-label">التوقيع:</span>
-                                            <span class="ticket-signature">................................</span>
                                         </div>
                                     </div>
                                     <div class="ticket-footer-meta d-print-none">
@@ -554,73 +540,22 @@ const Doctor = {
             z-index: 1;
         }
         #closeVisitModal .ticket-header {
-            display: grid;
-            grid-template-columns: minmax(220px, 1fr) auto minmax(260px, 1.2fr);
-            gap: 20px;
-            align-items: start;
-            margin-bottom: 18px;
+            margin-bottom: 14px;
         }
-        #closeVisitModal .ticket-header-side { font-size: 0.88rem; line-height: 1.8; }
-        #closeVisitModal .ticket-header-left  { text-align: left; direction: ltr; }
-        #closeVisitModal .ticket-header-right { text-align: right; }
-        #closeVisitModal .ticket-header-center {
-            text-align: center;
+        #closeVisitModal .ticket-header-compact { margin-bottom: 10px; }
+        #closeVisitModal .ticket-meta-row {
             display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-        }
-        #closeVisitModal .ticket-header-subtitle {
-            font-size: 0.84rem;
-            color: #64748b;
-            font-weight: 600;
-        }
-        #closeVisitModal .org-line { color: #334155; }
-        #closeVisitModal .org-main { font-weight: 800; font-size: 1.04rem; color: #0f172a; }
-        #closeVisitModal .org-strong { font-weight: 700; color: #198754; }
-        #closeVisitModal .ticket-logo-img {
-            height: 82px;
-            width: auto;
-            object-fit: contain;
-            filter: drop-shadow(0 4px 10px rgba(15, 23, 42, 0.08));
-        }
-        #closeVisitModal .ticket-logo-placeholder {
-            width: 86px;
-            height: 86px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 40px;
-            color: #198754;
-            background: rgba(25, 135, 84, 0.08);
-            border-radius: 24px;
-        }
-        #closeVisitModal .ticket-number-box {
-            border: 1px solid #d0dbe8;
-            border-radius: 16px;
-            padding: 10px 16px;
-            display: inline-flex;
-            gap: 12px;
-            align-items: center;
-            font-weight: 700;
-            background: #ffffff;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
-        }
-        #closeVisitModal .ticket-number-label { color: #64748b; font-size: 0.82rem; }
-        #closeVisitModal .ticket-number-value {
-            color: #c0392b;
-            font-weight: 800;
-            font-family: 'Courier New', 'Cairo', monospace;
-            letter-spacing: 1.4px;
-            font-size: 1.05rem;
-        }
-        #closeVisitModal .ticket-date-line {
-            display: flex;
-            gap: 6px;
+            flex-wrap: wrap;
             align-items: center;
             justify-content: flex-start;
-            margin-top: 8px;
+            gap: 10px 18px;
+            direction: rtl;
+        }
+        #closeVisitModal .ticket-date-line {
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+            margin-top: 0;
             direction: rtl;
         }
         #closeVisitModal .dl-label { font-weight: 700; color: #475569; min-width: 60px; }
@@ -636,23 +571,14 @@ const Doctor = {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            margin-top: 10px;
+            margin-top: 0;
+            margin-inline-start: auto;
             border: 1px solid;
             border-radius: 999px;
             padding: 5px 12px;
             font-size: 0.8rem;
             font-weight: 800;
             background: #fff;
-        }
-        #closeVisitModal .ticket-title-box {
-            background: linear-gradient(135deg, #198754 0%, #0f766e 100%);
-            color: #fff;
-            border-radius: 999px;
-            padding: 8px 22px;
-            font-weight: 800;
-            font-size: 1.12rem;
-            letter-spacing: 0.3px;
-            box-shadow: 0 10px 24px rgba(25, 135, 84, 0.22);
         }
         #closeVisitModal .ticket-divider {
             border: none;
@@ -709,6 +635,27 @@ const Doctor = {
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
         }
         #closeVisitModal .field-span-3 { grid-column: span 3; }
+        #closeVisitModal .ticket-field-compact { padding: 10px 14px; min-height: auto; }
+        #closeVisitModal .ticket-field-inline {
+            display: flex;
+            align-items: stretch;
+            gap: 14px;
+            flex-wrap: nowrap;
+        }
+        #closeVisitModal .ticket-mini-field {
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        #closeVisitModal .ticket-mini-field .ticket-label { font-size: 0.78rem; }
+        #closeVisitModal .ticket-mini-field .ticket-value { font-size: 0.9rem; min-height: 20px; }
+        #closeVisitModal .ticket-mini-divider {
+            width: 1px;
+            background: #e2e8f0;
+            align-self: stretch;
+        }
         #closeVisitModal .field-span-4 { grid-column: span 4; }
         #closeVisitModal .field-span-6 { grid-column: span 6; }
         #closeVisitModal .field-span-12 { grid-column: span 12; }
@@ -826,11 +773,6 @@ const Doctor = {
             margin-bottom: 8px;
             flex-wrap: wrap;
         }
-        #closeVisitModal .ticket-signature {
-            letter-spacing: 3px;
-            color: #64748b;
-            font-family: 'Courier New', monospace;
-        }
         #closeVisitModal .ticket-footer-meta {
             display: flex;
             align-items: center;
@@ -880,15 +822,8 @@ const Doctor = {
             #closeVisitModal .modal-content { border-radius: 0; min-height: 100vh; }
             #closeVisitModal .cv-print-wrapper { padding: 16px; }
             #closeVisitModal .ticket-paper { padding: 20px 18px; border-radius: 0; max-width: 100%; }
-            #closeVisitModal .ticket-header {
-                grid-template-columns: 1fr;
-                gap: 16px;
-                text-align: center;
-            }
-            #closeVisitModal .ticket-header-left,
-            #closeVisitModal .ticket-header-right { text-align: center; direction: rtl; }
-            #closeVisitModal .ticket-date-line { justify-content: center; }
-            #closeVisitModal .ticket-number-box { justify-content: center; }
+            #closeVisitModal .ticket-meta-row { justify-content: center; gap: 8px 14px; }
+            #closeVisitModal .ticket-period-badge { margin-inline-start: 0; }
             #closeVisitModal .field-span-3,
             #closeVisitModal .field-span-4,
             #closeVisitModal .field-span-6 { grid-column: span 6; }
@@ -905,8 +840,6 @@ const Doctor = {
         @media (max-width: 575.98px) {
             #closeVisitModal .cv-print-wrapper { padding: 10px; }
             #closeVisitModal .ticket-paper { padding: 14px 12px; }
-            #closeVisitModal .ticket-title-box { font-size: 0.98rem; padding: 8px 16px; }
-            #closeVisitModal .ticket-header-subtitle { font-size: 0.78rem; }
             #closeVisitModal .ticket-section { padding: 14px; border-radius: 18px; }
             #closeVisitModal .ticket-grid { grid-template-columns: 1fr; gap: 10px; }
             #closeVisitModal .field-span-3,
@@ -919,9 +852,16 @@ const Doctor = {
                 border-radius: 16px;
                 gap: 6px;
             }
+            #closeVisitModal .ticket-field-compact { padding: 10px 12px; }
+            #closeVisitModal .ticket-field-inline { gap: 10px; }
+            #closeVisitModal .ticket-mini-field .ticket-label { font-size: 0.72rem; }
+            #closeVisitModal .ticket-mini-field .ticket-value { font-size: 0.85rem; }
             #closeVisitModal .ticket-label { font-size: 0.78rem; }
             #closeVisitModal .ticket-value { font-size: 0.9rem; }
             #closeVisitModal .ticket-input { padding: 9px 10px; border-radius: 12px; }
+            #closeVisitModal .ticket-date-value { min-width: 76px; padding: 0 4px; font-size: 0.84rem; }
+            #closeVisitModal .dl-label { min-width: 0; font-size: 0.82rem; }
+            #closeVisitModal .ticket-period-badge { font-size: 0.72rem; padding: 3px 9px; }
             #closeVisitModal .ticket-notes-head { margin-bottom: 8px; }
             #closeVisitModal .ticket-notes-shell {
                 grid-template-columns: 1fr;
@@ -930,8 +870,8 @@ const Doctor = {
             #closeVisitModal .ticket-rx-label {
                 min-width: auto;
                 width: 100%;
-                height: 48px;
-                font-size: 1.45rem;
+                height: 44px;
+                font-size: 1.35rem;
                 border-radius: 14px;
             }
             #closeVisitModal .ticket-textarea {
@@ -942,19 +882,34 @@ const Doctor = {
             }
             #closeVisitModal .modal-footer {
                 padding: 10px 12px 14px;
-                gap: 8px !important;
+                gap: 6px !important;
             }
-            #closeVisitModal .modal-footer small { width: 100%; font-size: 0.76rem; }
+            #closeVisitModal .modal-footer small { width: 100%; font-size: 0.72rem; }
             #closeVisitModal .modal-footer > .d-flex {
                 width: 100%;
-                flex-direction: column;
+                flex-wrap: nowrap;
+                gap: 6px;
             }
+            /* تصغير أزرار الإلغاء والطباعة على الجوال */
             #closeVisitModal .cv-action-btn {
-                width: 100%;
+                flex: 1 1 auto;
                 min-width: 0;
-                padding: 9px 12px;
-                font-size: 0.86rem;
+                padding: 7px 8px;
+                font-size: 0.78rem;
+                border-radius: 10px;
             }
+            #closeVisitModal .btn-outline-secondary.cv-action-btn,
+            #closeVisitModal .btn-info.cv-action-btn {
+                flex: 0 0 auto;
+                font-size: 0.74rem;
+                padding: 6px 10px;
+            }
+            #closeVisitModal .btn-success.cv-action-btn {
+                flex: 1 1 auto;
+                font-size: 0.82rem;
+                padding: 8px 10px;
+            }
+            #closeVisitModal .cv-action-btn i { font-size: 0.85rem; }
         }
 
         @media print {
@@ -980,7 +935,6 @@ const Doctor = {
                 background: #fff !important;
             }
             #closeVisitModal .ticket-paper::before,
-            #closeVisitModal .ticket-header-subtitle,
             #closeVisitModal .ticket-footer-meta { display: none !important; }
             #closeVisitModal .ticket-input,
             #closeVisitModal .ticket-textarea { display: none !important; }
@@ -992,8 +946,6 @@ const Doctor = {
             #closeVisitModal .ticket-notes-print,
             #closeVisitModal .ticket-value,
             #closeVisitModal .ticket-label,
-            #closeVisitModal .org-line,
-            #closeVisitModal .ticket-number-value,
             #closeVisitModal .ticket-date-value {
                 color: #000 !important;
                 background: #fff !important;
@@ -1005,19 +957,12 @@ const Doctor = {
                 border-color: #000 !important;
                 border-radius: 0 !important;
             }
-            #closeVisitModal .ticket-title-box {
-                background: #fff !important;
-                color: #000 !important;
-                border: 1px solid #000 !important;
-                box-shadow: none !important;
-            }
             #closeVisitModal .ticket-divider,
             #closeVisitModal .ticket-footer,
             #closeVisitModal .ticket-footer-note {
                 border-color: #000 !important;
             }
-            #closeVisitModal .ticket-section-title i,
-            #closeVisitModal .ticket-logo-placeholder { background: #fff !important; color: #000 !important; }
+            #closeVisitModal .ticket-section-title i { background: #fff !important; color: #000 !important; }
             #closeVisitModal .ticket-period-badge {
                 color: #000 !important;
                 border-color: #000 !important;
