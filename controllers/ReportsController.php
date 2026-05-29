@@ -27,43 +27,36 @@ class ReportsController extends BaseController
     public function getDailyInfo(): void
     {
         try {
-            // التحقق من الجلسة
             $user = $this->requireAuth();
-            if (!$user) return;
+            if (!$user) {
+                return;
+            }
 
-            // التاريخ المطلوب
             $date = $_GET['date'] ?? date('Y-m-d');
             if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
                 $date = date('Y-m-d');
             }
 
-            // إعدادات الفترة الصباحية
             $shiftSettings = $this->model->getShiftSettings();
             $mStart = $shiftSettings['morning_start'];
             $mEnd   = $shiftSettings['morning_end'];
 
-            // إعدادات الترويسة
             $headerSettings = $this->model->getHeaderSettings();
+            $invoiceData    = $this->model->getInvoiceData($date, $mStart, $mEnd);
+            $ticketData     = $this->model->getTicketData($date);
+            $serialRanges   = $this->model->getSerialRanges($date);
 
-            // بيانات الفواتير والخدمات
-            $invoiceData = $this->model->getInvoiceData($date, $mStart, $mEnd);
-
-            // بيانات التذاكر
-            $ticketData = $this->model->getTicketData($date);
-
-            // نطاقات الأرقام التسلسلية
-            $serialRanges = $this->model->getSerialRanges($date);
-
-            // دمج بيانات التذاكر في البنية الرئيسية
             foreach (['morning', 'evening'] as $shift) {
-                $invoiceData[$shift]['visitors']['tickets'] = (float)$ticketData[$shift]['count'];
-                $invoiceData[$shift]['visitors']['total']  += (float)$ticketData[$shift]['count'];
-                // مبالغ التذاكر تُحسب في قسم مشاركة المجتمع
-                $invoiceData[$shift]['center']['tickets']  += (float)$ticketData[$shift]['amount'];
-                $invoiceData[$shift]['center']['total']    += (float)$ticketData[$shift]['amount'];
+                $invoiceData[$shift]['visitors']['tickets'] = (float) $ticketData[$shift]['count'];
+                $invoiceData[$shift]['visitors']['total']  += (float) $ticketData[$shift]['count'];
+
+                $invoiceData[$shift]['center']['tickets']  += (float) $ticketData[$shift]['center_amount'];
+                $invoiceData[$shift]['center']['total']    += (float) $ticketData[$shift]['center_amount'];
+
+                $invoiceData[$shift]['ministry']['tickets'] += (float) $ticketData[$shift]['ministry_amount'];
+                $invoiceData[$shift]['ministry']['total']   += (float) $ticketData[$shift]['ministry_amount'];
             }
 
-            // حساب المجاميع الإجمالية (ج)
             $totals = $this->computeTotals($invoiceData);
 
             $this->success([
@@ -85,15 +78,19 @@ class ReportsController extends BaseController
     private function computeTotals(array $data): array
     {
         $sections = ['visitors', 'center', 'ministry', 'exempt'];
-        $result   = [];
+        $result = [];
+
         foreach ($sections as $sec) {
             $result[$sec] = [];
             $mData = $data['morning'][$sec] ?? [];
             $eData = $data['evening'][$sec] ?? [];
-            foreach (array_keys($mData) as $col) {
-                $result[$sec][$col] = ($mData[$col] ?? 0.0) + ($eData[$col] ?? 0.0);
+
+            $keys = array_unique(array_merge(array_keys($mData), array_keys($eData)));
+            foreach ($keys as $col) {
+                $result[$sec][$col] = (float) ($mData[$col] ?? 0.0) + (float) ($eData[$col] ?? 0.0);
             }
         }
+
         return $result;
     }
 
@@ -104,14 +101,14 @@ class ReportsController extends BaseController
             $this->error('غير مصرح.', 401);
             return null;
         }
-        // التحقق من الجلسة عبر AuthController منطق مشابه
+
         return ['authenticated' => true];
     }
 
     private function getBearerToken(): ?string
     {
         $headers = getallheaders();
-        $auth    = $headers['Authorization'] ?? $headers['authorization'] ?? '';
+        $auth = $headers['Authorization'] ?? $headers['authorization'] ?? '';
         if (preg_match('/Bearer\s+(.+)/i', $auth, $m)) {
             return $m[1];
         }
