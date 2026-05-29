@@ -92,20 +92,39 @@ const FinanceState = {
  * ========================================================================= */
 const FINANCE_COLUMN_CATALOG = [
     { key: 'select',         label: '',                width: '40px',  default: true, sortable: false },
-    { key: 'txn_type_label', label: 'نوع الحركة',       width: '120px', default: true, sortable: false },
-    { key: 'doc_code',       label: 'كود',             width: '60px',  default: true, sortable: false },
+    { key: 'txn_type_label', label: 'نوع الحركة',       width: '120px', default: true, sortable: true,  sortField: 'txn_type_label' },
+    { key: 'doc_code',       label: 'كود',             width: '60px',  default: true, sortable: true,  sortField: 'doc_code' },
     { key: 'serial_number',  label: 'التسلسل',          width: '90px',  default: true, sortable: true,  sortField: 'serial_number' },
     { key: 'patient_name',   label: 'المريض',           width: '180px', default: true, sortable: true,  sortField: 'patient_name' },
     { key: 'total',          label: 'الإجمالي',         width: '110px', default: true, sortable: true,  sortField: 'total', numeric: true },
     { key: 'cash_amount',    label: 'الكاش',            width: '110px', default: true, sortable: true,  sortField: 'cash_amount', numeric: true },
     { key: 'exempt_amount',  label: 'الإعفاء',          width: '110px', default: true, sortable: true,  sortField: 'exempt_amount', numeric: true },
-    { key: 'center_share',   label: 'المشاركة',       width: '120px', default: true, sortable: false, numeric: true },
-    { key: 'ministry_share', label: 'المشتركة',      width: '120px', default: true, sortable: false, numeric: true },
-    { key: 'accountant_name',label: 'المحاسب',          width: '140px', default: false, sortable: false },
-    { key: 'doctor_name',    label: 'الطبيب',           width: '140px', default: false, sortable: false },
+    { key: 'center_share',   label: 'المشاركة',         width: '120px', default: true, sortable: true,  sortField: 'center_share', numeric: true },
+    { key: 'ministry_share', label: 'المشتركة',         width: '120px', default: true, sortable: true,  sortField: 'ministry_share', numeric: true },
+    { key: 'accountant_name',label: 'المحاسب',          width: '140px', default: false, sortable: true,  sortField: 'accountant_name' },
+    { key: 'doctor_name',    label: 'الطبيب',           width: '140px', default: false, sortable: true,  sortField: 'doctor_name' },
     { key: 'txn_timestamp',  label: 'التاريخ والوقت',   width: '160px', default: true, sortable: true,  sortField: 'txn_timestamp' },
-    { key: 'status',         label: 'الحالة',           width: '100px', default: true, sortable: false },
+    { key: 'status',         label: 'الحالة',           width: '100px', default: true, sortable: true,  sortField: 'status' },
     { key: 'actions',        label: 'إجراءات',          width: '90px',  default: true, sortable: false },
+];
+
+const FINANCE_SORT_OPTIONS = [
+    { value: 'txn_timestamp',  label: 'التاريخ والوقت' },
+    { value: 'txn_id',         label: 'رقم الحركة' },
+    { value: 'source_id',      label: 'الرقم الداخلي للسند' },
+    { value: 'visit_id',       label: 'رقم الزيارة' },
+    { value: 'serial_number',  label: 'الرقم التسلسلي' },
+    { value: 'patient_name',   label: 'اسم المريض' },
+    { value: 'txn_type_label', label: 'نوع الحركة' },
+    { value: 'doc_code',       label: 'كود السند' },
+    { value: 'status',         label: 'الحالة' },
+    { value: 'total',          label: 'الإجمالي' },
+    { value: 'cash_amount',    label: 'الكاش' },
+    { value: 'exempt_amount',  label: 'الإعفاء' },
+    { value: 'center_share',   label: 'المشاركة' },
+    { value: 'ministry_share', label: 'المشتركة' },
+    { value: 'accountant_name',label: 'المحاسب' },
+    { value: 'doctor_name',    label: 'الطبيب' },
 ];
 
 /* =========================================================================
@@ -577,7 +596,7 @@ const Finance = {
             FinanceState.charts.topServices = new Chart(c3, {
                 type: 'bar',
                 data: {
-                    labels: ts.map(s => s.name),
+                    labels: ts.map(s => s.service_name || s.name || '—'),
                     datasets: [{
                         label: 'الإيراد',
                         data: ts.map(s => Number(s.revenue || 0)),
@@ -605,10 +624,10 @@ const Finance = {
             FinanceState.charts.accountants = new Chart(c4, {
                 type: 'bar',
                 data: {
-                    labels: ap.map(a => a.name),
+                    labels: ap.map(a => a.accountant_name || a.name || '—'),
                     datasets: [{
                         label: 'الإيراد',
-                        data: ap.map(a => Number(a.revenue || 0)),
+                        data: ap.map(a => Number(a.cash_collected ?? a.revenue ?? 0)),
                         backgroundColor: 'rgba(139,92,246,0.7)',
                         borderColor: '#8b5cf6', borderWidth: 1,
                     }],
@@ -617,7 +636,7 @@ const Finance = {
                     responsive: true, maintainAspectRatio: false,
                     plugins: {
                         legend: { display: false },
-                        tooltip: { callbacks: { afterLabel: c => `الحركات: ${FinanceUtils.fmtNumber(ap[c.dataIndex].count)}` } },
+                        tooltip: { callbacks: { afterLabel: c => `الحركات: ${FinanceUtils.fmtNumber(ap[c.dataIndex].txn_count ?? ap[c.dataIndex].count ?? 0)}` } },
                     },
                     scales: {
                         x: { ticks: { color: textColor, font: { size: 10 } }, grid: { display: false } },
@@ -1026,6 +1045,25 @@ Object.assign(Finance, {
         }
     },
 
+    renderSortOptions() {
+        return FINANCE_SORT_OPTIONS.map(opt =>
+            `<option value="${FinanceUtils.esc(opt.value)}" ${FinanceState.sortBy === opt.value ? 'selected' : ''}>${FinanceUtils.esc(opt.label)}</option>`
+        ).join('');
+    },
+
+    setSortField(field) {
+        if (!field) return;
+        FinanceState.sortBy = field;
+        FinanceState.page = 1;
+        Finance.loadTransactions();
+    },
+
+    setSortDirection(direction) {
+        FinanceState.sortDir = String(direction || '').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+        FinanceState.page = 1;
+        Finance.loadTransactions();
+    },
+
     sortBy(field) {
         if (FinanceState.sortBy === field) {
             FinanceState.sortDir = FinanceState.sortDir === 'ASC' ? 'DESC' : 'ASC';
@@ -1034,6 +1072,10 @@ Object.assign(Finance, {
             FinanceState.sortDir = 'DESC';
         }
         FinanceState.page = 1;
+        const sortByEl = document.getElementById('fh-sort-by');
+        const sortDirEl = document.getElementById('fh-sort-dir');
+        if (sortByEl) sortByEl.value = FinanceState.sortBy;
+        if (sortDirEl) sortDirEl.value = FinanceState.sortDir;
         Finance.loadTransactions();
     },
 
@@ -2633,6 +2675,18 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                     <h5><i class="bi bi-table"></i> سجل الحركات الموحّد</h5>
                     <div class="d-flex align-items-center gap-2 flex-wrap">
                         <span id="fh-selected-info" class="text-muted small"></span>
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <span class="text-muted small">Order by</span>
+                            <select class="form-select form-select-sm" style="width:auto;min-width:190px;" id="fh-sort-by"
+                                    onchange="Finance.setSortField(this.value)">
+                                ${Finance.renderSortOptions()}
+                            </select>
+                            <select class="form-select form-select-sm" style="width:auto;" id="fh-sort-dir"
+                                    onchange="Finance.setSortDirection(this.value)">
+                                <option value="DESC" ${FinanceState.sortDir==='DESC'?'selected':''}>تنازلي</option>
+                                <option value="ASC" ${FinanceState.sortDir==='ASC'?'selected':''}>تصاعدي</option>
+                            </select>
+                        </div>
                         <button class="btn btn-sm btn-outline-success" onclick="Finance.openExportDialog()">
                             <i class="bi bi-file-earmark-excel"></i> تصدير XLSX
                         </button>

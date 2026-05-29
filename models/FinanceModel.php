@@ -93,74 +93,388 @@ class FinanceModel
      *
      * @return array { sql: string, params: array }
      */
-    private function buildUnifiedLedgerSql(): array
+    private function hasLineScopedFilters(array $filters): bool
+    {
+        return !empty($filters['service_ids'])
+            || !empty($filters['category_ids'])
+            || !empty($filters['department_ids']);
+    }
+
+    private function buildDetailScopeClause(array $filters, string $detailAlias = 'id', string $serviceAlias = 'sm', string $categoryAlias = 'sc'): array
+    {
+        $conditions = [];
+        $params = [];
+
+        if (!empty($filters['service_ids']) && is_array($filters['service_ids'])) {
+            $ids = array_values(array_filter(array_map('intval', $filters['service_ids']), fn($v) => $v > 0));
+            if (!empty($ids)) {
+                $placeholders = [];
+                foreach ($ids as $i => $id) {
+                    $key = ":flt_srv_scope_$i";
+                    $placeholders[] = $key;
+                    $params[$key] = $id;
+                }
+                $conditions[] = "{$detailAlias}.service_id IN (" . implode(',', $placeholders) . ")";
+            }
+        }
+
+        if (!empty($filters['category_ids']) && is_array($filters['category_ids'])) {
+            $ids = array_values(array_filter(array_map('intval', $filters['category_ids']), fn($v) => $v > 0));
+            if (!empty($ids)) {
+                $placeholders = [];
+                foreach ($ids as $i => $id) {
+                    $key = ":flt_cat_scope_$i";
+                    $placeholders[] = $key;
+                    $params[$key] = $id;
+                }
+                $conditions[] = "{$serviceAlias}.category_id IN (" . implode(',', $placeholders) . ")";
+            }
+        }
+
+        if (!empty($filters['department_ids']) && is_array($filters['department_ids'])) {
+            $ids = array_values(array_filter(array_map('intval', $filters['department_ids']), fn($v) => $v > 0));
+            if (!empty($ids)) {
+                $placeholders = [];
+                foreach ($ids as $i => $id) {
+                    $key = ":flt_dep_scope_$i";
+                    $placeholders[] = $key;
+                    $params[$key] = $id;
+                }
+                $conditions[] = "{$categoryAlias}.department_id IN (" . implode(',', $placeholders) . ")";
+            }
+        }
+
+        return [
+            'sql' => empty($conditions) ? '' : ' AND ' . implode(' AND ', $conditions),
+            'params' => $params,
+        ];
+    }
+
+    private function buildInvoiceReportFilters(
+        array $filters,
+        string $invoiceAlias = 'i',
+        string $visitAlias = 'v',
+        string $patientAlias = 'p',
+        string $detailAlias = 'id',
+        string $serviceAlias = 'sm',
+        string $categoryAlias = 'sc',
+        string $documentAlias = 'dt'
+    ): array {
+        $conditions = [
+            "{$invoiceAlias}.doc_type_id IS NOT NULL",
+            "{$invoiceAlias}.cancelled_at IS NULL",
+        ];
+        $params = [];
+
+        if (!empty($filters['from'])) {
+            $conditions[] = "COALESCE({$invoiceAlias}.paid_at, {$invoiceAlias}.created_at) >= :inv_from";
+            $params[':inv_from'] = $filters['from'];
+        }
+        if (!empty($filters['to'])) {
+            $conditions[] = "COALESCE({$invoiceAlias}.paid_at, {$invoiceAlias}.created_at) <= :inv_to";
+            $params[':inv_to'] = $filters['to'];
+        }
+
+        if (!empty($filters['doc_codes']) && is_array($filters['doc_codes'])) {
+            $codes = array_values(array_filter($filters['doc_codes'], fn($c) => in_array($c, ['A', 'B', 'C'], true)));
+            if (empty($codes)) {
+                $conditions[] = '1 = 0';
+            } else {
+                $placeholders = [];
+                foreach ($codes as $i => $code) {
+                    $key = ":inv_doc_$i";
+                    $placeholders[] = $key;
+                    $params[$key] = $code;
+                }
+                $conditions[] = "{$documentAlias}.doc_name IN (" . implode(',', $placeholders) . ")";
+            }
+        }
+
+        if (!empty($filters['statuses']) && is_array($filters['statuses'])) {
+            $statuses = array_values(array_filter($filters['statuses'], fn($s) => in_array($s, ['paid', 'issued', 'cancelled'], true)));
+            if (!empty($statuses) && !in_array('paid', $statuses, true)) {
+                $conditions[] = '1 = 0';
+            }
+        }
+
+        if (!empty($filters['accountant_ids']) && is_array($filters['accountant_ids'])) {
+            $ids = array_values(array_filter(array_map('intval', $filters['accountant_ids']), fn($v) => $v > 0));
+            if (!empty($ids)) {
+                $placeholders = [];
+                foreach ($ids as $i => $id) {
+                    $key = ":inv_acc_$i";
+                    $placeholders[] = $key;
+                    $params[$key] = $id;
+                }
+                $conditions[] = "{$invoiceAlias}.accountant_id IN (" . implode(',', $placeholders) . ")";
+            }
+        }
+
+        if (!empty($filters['doctor_ids']) && is_array($filters['doctor_ids'])) {
+            $ids = array_values(array_filter(array_map('intval', $filters['doctor_ids']), fn($v) => $v > 0));
+            if (!empty($ids)) {
+                $placeholders = [];
+                foreach ($ids as $i => $id) {
+                    $key = ":inv_doc_id_$i";
+                    $placeholders[] = $key;
+                    $params[$key] = $id;
+                }
+                $conditions[] = "{$visitAlias}.doctor_id IN (" . implode(',', $placeholders) . ")";
+            }
+        }
+
+        $detailScope = $this->buildDetailScopeClause($filters, $detailAlias, $serviceAlias, $categoryAlias);
+        if ($detailScope['sql'] !== '') {
+            $conditions[] = '1 = 1' . $detailScope['sql'];
+            $params = array_merge($params, $detailScope['params']);
+        }
+
+        if (isset($filters['amount_min']) && is_numeric($filters['amount_min'])) {
+            $conditions[] = "{$invoiceAlias}.total >= :inv_amount_min";
+            $params[':inv_amount_min'] = (float) $filters['amount_min'];
+        }
+        if (isset($filters['amount_max']) && is_numeric($filters['amount_max'])) {
+            $conditions[] = "{$invoiceAlias}.total <= :inv_amount_max";
+            $params[':inv_amount_max'] = (float) $filters['amount_max'];
+        }
+        if (!empty($filters['has_ministry_share'])) {
+            $conditions[] = "{$detailAlias}.ministry_share_at_time > 0";
+        }
+
+        if (!empty($filters['query'])) {
+            $q = trim((string) $filters['query']);
+            if ($q !== '') {
+                $like = $this->driver === 'pgsql' ? 'ILIKE' : 'LIKE';
+                $params[':inv_query1'] = '%' . $q . '%';
+                $params[':inv_query2'] = '%' . $q . '%';
+                $params[':inv_query3'] = '%' . $q . '%';
+                $conditions[] = "({$patientAlias}.full_name {$like} :inv_query1 OR CAST({$invoiceAlias}.serial_number AS TEXT) {$like} :inv_query2 OR CAST({$invoiceAlias}.invoice_id AS TEXT) {$like} :inv_query3)";
+            }
+        }
+
+        return [
+            'where_sql' => 'WHERE ' . implode(' AND ', $conditions),
+            'params' => $params,
+        ];
+    }
+
+    /**
+     * يبني SQL الـ UNION ALL لدفتر الحركات الموحّد.
+     * يُعيد جملة SQL كنص + paramters المطلوبة للحقن الديناميكي.
+     *
+     * @return array{sql:string, params:array}
+     */
+    private function buildUnifiedLedgerSql(array $filters = []): array
     {
         $this->loadTicketMinistryShares();
+        $hasLineScope = $this->hasLineScopedFilters($filters);
 
-        // المصدر الأول: فواتير (Invoices)
-        // ml = إجمالي المشتركة المخزنة على مستوى تفاصيل الفاتورة
-        // المشاركة/المشتركة تُحتسب فقط من المبلغ المدفوع فعلياً
-        $invoicesSql = "
-            SELECT
-                'INV-' || i.invoice_id::TEXT          AS txn_id,
-                'invoices'                            AS source_table,
-                i.invoice_id                          AS source_id,
-                CASE dt.doc_name
-                    WHEN 'A' THEN 'cash'
-                    WHEN 'B' THEN 'partial_exempt'
-                    WHEN 'C' THEN 'full_exempt'
-                    ELSE 'other'
-                END                                   AS txn_type,
-                CASE dt.doc_name
-                    WHEN 'A' THEN 'كاش'
-                    WHEN 'B' THEN 'إعفاء جزئي'
-                    WHEN 'C' THEN 'إعفاء كلي'
-                    ELSE dt.doc_name
-                END                                   AS txn_type_label,
-                dt.doc_name                           AS doc_code,
-                i.serial_number                       AS serial_number,
-                p.patient_id                          AS patient_id,
-                p.full_name                           AS patient_name,
-                i.visit_id                            AS visit_id,
-                i.total                               AS total,
-                i.net_amount                          AS cash_amount,
-                i.exemption_value                     AS exempt_amount,
-                CASE
-                    WHEN dt.doc_name = 'A' THEN GREATEST(i.net_amount - LEAST(COALESCE(ml.ministry_share, 0), i.net_amount), 0)
-                    ELSE 0::NUMERIC
-                END                                   AS center_share,
-                CASE
-                    WHEN dt.doc_name = 'A' THEN LEAST(COALESCE(ml.ministry_share, 0), i.net_amount)
-                    ELSE 0::NUMERIC
-                END                                   AS ministry_share,
-                i.accountant_id                       AS accountant_id,
-                u.full_name                           AS accountant_name,
-                v.doctor_id                           AS doctor_id,
-                du.full_name                          AS doctor_name,
-                COALESCE(i.paid_at, i.created_at)     AS txn_timestamp,
-                CASE
-                    WHEN i.cancelled_at IS NOT NULL THEN 'cancelled'
-                    ELSE 'paid'
-                END                                   AS status,
-                i.related_invoice_id                  AS related_id,
-                i.cancel_reason                       AS cancel_reason
-            FROM invoices i
-            JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
-            JOIN visits v          ON i.visit_id    = v.visit_id
-            JOIN patients p        ON v.patient_id  = p.patient_id
-            LEFT JOIN users u      ON i.accountant_id = u.user_id
-            LEFT JOIN users du     ON v.doctor_id    = du.user_id
-            LEFT JOIN LATERAL (
+        if ($hasLineScope) {
+            $detailScope = $this->buildDetailScopeClause($filters, 'sid', 'ssm', 'ssc');
+            $scopedParams = $detailScope['params'];
+            $detailScopeSql = $detailScope['sql'];
+
+            $invoicesSql = "
                 SELECT
-                    SUM(id.ministry_share_at_time) AS ministry_share
-                FROM invoice_details id
-                WHERE id.invoice_id = i.invoice_id
-            ) ml ON TRUE
-            WHERE i.doc_type_id IS NOT NULL
-        ";
+                    'INV-' || i.invoice_id::TEXT          AS txn_id,
+                    'invoices'                            AS source_table,
+                    i.invoice_id                          AS source_id,
+                    CASE dt.doc_name
+                        WHEN 'A' THEN 'cash'
+                        WHEN 'B' THEN 'partial_exempt'
+                        WHEN 'C' THEN 'full_exempt'
+                        ELSE 'other'
+                    END                                   AS txn_type,
+                    CASE dt.doc_name
+                        WHEN 'A' THEN 'كاش'
+                        WHEN 'B' THEN 'إعفاء جزئي'
+                        WHEN 'C' THEN 'إعفاء كلي'
+                        ELSE dt.doc_name
+                    END                                   AS txn_type_label,
+                    dt.doc_name                           AS doc_code,
+                    i.serial_number                       AS serial_number,
+                    p.patient_id                          AS patient_id,
+                    p.full_name                           AS patient_name,
+                    i.visit_id                            AS visit_id,
+                    CASE
+                        WHEN dt.doc_name = 'A' THEN (
+                            COALESCE(
+                                CASE
+                                    WHEN COALESCE(all_totals.raw_ministry_total, 0) > 0
+                                        THEN COALESCE(scoped.matched_raw_ministry, 0) / NULLIF(all_totals.raw_ministry_total, 0)
+                                             * LEAST(COALESCE(all_totals.raw_ministry_total, 0), i.net_amount)
+                                    ELSE 0
+                                END,
+                            0) +
+                            COALESCE(
+                                CASE
+                                    WHEN COALESCE(all_totals.raw_center_total, 0) > 0
+                                        THEN COALESCE(scoped.matched_raw_center, 0) / NULLIF(all_totals.raw_center_total, 0)
+                                             * GREATEST(i.net_amount - LEAST(COALESCE(all_totals.raw_ministry_total, 0), i.net_amount), 0)
+                                    ELSE 0
+                                END,
+                            0)
+                        )
+                        ELSE COALESCE(i.total * COALESCE(scoped.matched_gross_total, 0) / NULLIF(all_totals.gross_total, 0), 0)
+                    END                                   AS total,
+                    CASE
+                        WHEN dt.doc_name = 'A' THEN (
+                            COALESCE(
+                                CASE
+                                    WHEN COALESCE(all_totals.raw_ministry_total, 0) > 0
+                                        THEN COALESCE(scoped.matched_raw_ministry, 0) / NULLIF(all_totals.raw_ministry_total, 0)
+                                             * LEAST(COALESCE(all_totals.raw_ministry_total, 0), i.net_amount)
+                                    ELSE 0
+                                END,
+                            0) +
+                            COALESCE(
+                                CASE
+                                    WHEN COALESCE(all_totals.raw_center_total, 0) > 0
+                                        THEN COALESCE(scoped.matched_raw_center, 0) / NULLIF(all_totals.raw_center_total, 0)
+                                             * GREATEST(i.net_amount - LEAST(COALESCE(all_totals.raw_ministry_total, 0), i.net_amount), 0)
+                                    ELSE 0
+                                END,
+                            0)
+                        )
+                        ELSE 0::NUMERIC
+                    END                                   AS cash_amount,
+                    CASE
+                        WHEN dt.doc_name IN ('B', 'C')
+                            THEN COALESCE(i.exemption_value * COALESCE(scoped.matched_gross_total, 0) / NULLIF(all_totals.gross_total, 0), 0)
+                        ELSE 0::NUMERIC
+                    END                                   AS exempt_amount,
+                    CASE
+                        WHEN dt.doc_name = 'A'
+                            THEN COALESCE(
+                                CASE
+                                    WHEN COALESCE(all_totals.raw_center_total, 0) > 0
+                                        THEN COALESCE(scoped.matched_raw_center, 0) / NULLIF(all_totals.raw_center_total, 0)
+                                             * GREATEST(i.net_amount - LEAST(COALESCE(all_totals.raw_ministry_total, 0), i.net_amount), 0)
+                                    ELSE 0
+                                END,
+                            0)
+                        ELSE 0::NUMERIC
+                    END                                   AS center_share,
+                    CASE
+                        WHEN dt.doc_name = 'A'
+                            THEN COALESCE(
+                                CASE
+                                    WHEN COALESCE(all_totals.raw_ministry_total, 0) > 0
+                                        THEN COALESCE(scoped.matched_raw_ministry, 0) / NULLIF(all_totals.raw_ministry_total, 0)
+                                             * LEAST(COALESCE(all_totals.raw_ministry_total, 0), i.net_amount)
+                                    ELSE 0
+                                END,
+                            0)
+                        ELSE 0::NUMERIC
+                    END                                   AS ministry_share,
+                    i.accountant_id                       AS accountant_id,
+                    u.full_name                           AS accountant_name,
+                    v.doctor_id                           AS doctor_id,
+                    du.full_name                          AS doctor_name,
+                    COALESCE(i.paid_at, i.created_at)     AS txn_timestamp,
+                    CASE
+                        WHEN i.cancelled_at IS NOT NULL THEN 'cancelled'
+                        ELSE 'paid'
+                    END                                   AS status,
+                    i.related_invoice_id                  AS related_id,
+                    i.cancel_reason                       AS cancel_reason
+                FROM invoices i
+                JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
+                JOIN visits v          ON i.visit_id    = v.visit_id
+                JOIN patients p        ON v.patient_id  = p.patient_id
+                LEFT JOIN users u      ON i.accountant_id = u.user_id
+                LEFT JOIN users du     ON v.doctor_id    = du.user_id
+                LEFT JOIN LATERAL (
+                    SELECT CASE
+                        WHEN EXISTS (SELECT 1 FROM invoice_details own WHERE own.invoice_id = i.invoice_id)
+                            THEN i.invoice_id
+                        ELSE i.related_invoice_id
+                    END AS detail_invoice_id
+                ) detail_link ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT
+                        COALESCE(SUM(aid.service_price_at_time * aid.quantity), 0) AS gross_total,
+                        COALESCE(SUM(aid.ministry_share_at_time), 0)                AS raw_ministry_total,
+                        COALESCE(SUM(GREATEST((aid.service_price_at_time * aid.quantity) - aid.ministry_share_at_time, 0)), 0) AS raw_center_total
+                    FROM invoice_details aid
+                    WHERE aid.invoice_id = detail_link.detail_invoice_id
+                ) all_totals ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT
+                        COUNT(*) AS matched_details_count,
+                        COALESCE(SUM(sid.service_price_at_time * sid.quantity), 0) AS matched_gross_total,
+                        COALESCE(SUM(sid.ministry_share_at_time), 0)                AS matched_raw_ministry,
+                        COALESCE(SUM(GREATEST((sid.service_price_at_time * sid.quantity) - sid.ministry_share_at_time, 0)), 0) AS matched_raw_center
+                    FROM invoice_details sid
+                    JOIN services_master ssm ON sid.service_id = ssm.service_id
+                    LEFT JOIN service_categories ssc ON ssm.category_id = ssc.category_id
+                    WHERE sid.invoice_id = detail_link.detail_invoice_id
+                    {$detailScopeSql}
+                ) scoped ON TRUE
+                WHERE i.doc_type_id IS NOT NULL
+                  AND COALESCE(scoped.matched_details_count, 0) > 0
+            ";
+        } else {
+            $scopedParams = [];
+            $invoicesSql = "
+                SELECT
+                    'INV-' || i.invoice_id::TEXT          AS txn_id,
+                    'invoices'                            AS source_table,
+                    i.invoice_id                          AS source_id,
+                    CASE dt.doc_name
+                        WHEN 'A' THEN 'cash'
+                        WHEN 'B' THEN 'partial_exempt'
+                        WHEN 'C' THEN 'full_exempt'
+                        ELSE 'other'
+                    END                                   AS txn_type,
+                    CASE dt.doc_name
+                        WHEN 'A' THEN 'كاش'
+                        WHEN 'B' THEN 'إعفاء جزئي'
+                        WHEN 'C' THEN 'إعفاء كلي'
+                        ELSE dt.doc_name
+                    END                                   AS txn_type_label,
+                    dt.doc_name                           AS doc_code,
+                    i.serial_number                       AS serial_number,
+                    p.patient_id                          AS patient_id,
+                    p.full_name                           AS patient_name,
+                    i.visit_id                            AS visit_id,
+                    i.total                               AS total,
+                    i.net_amount                          AS cash_amount,
+                    i.exemption_value                     AS exempt_amount,
+                    CASE
+                        WHEN dt.doc_name = 'A' THEN GREATEST(i.net_amount - LEAST(COALESCE(ml.ministry_share, 0), i.net_amount), 0)
+                        ELSE 0::NUMERIC
+                    END                                   AS center_share,
+                    CASE
+                        WHEN dt.doc_name = 'A' THEN LEAST(COALESCE(ml.ministry_share, 0), i.net_amount)
+                        ELSE 0::NUMERIC
+                    END                                   AS ministry_share,
+                    i.accountant_id                       AS accountant_id,
+                    u.full_name                           AS accountant_name,
+                    v.doctor_id                           AS doctor_id,
+                    du.full_name                          AS doctor_name,
+                    COALESCE(i.paid_at, i.created_at)     AS txn_timestamp,
+                    CASE
+                        WHEN i.cancelled_at IS NOT NULL THEN 'cancelled'
+                        ELSE 'paid'
+                    END                                   AS status,
+                    i.related_invoice_id                  AS related_id,
+                    i.cancel_reason                       AS cancel_reason
+                FROM invoices i
+                JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
+                JOIN visits v          ON i.visit_id    = v.visit_id
+                JOIN patients p        ON v.patient_id  = p.patient_id
+                LEFT JOIN users u      ON i.accountant_id = u.user_id
+                LEFT JOIN users du     ON v.doctor_id    = du.user_id
+                LEFT JOIN LATERAL (
+                    SELECT SUM(id.ministry_share_at_time) AS ministry_share
+                    FROM invoice_details id
+                    WHERE id.invoice_id = i.invoice_id
+                ) ml ON TRUE
+                WHERE i.doc_type_id IS NOT NULL
+            ";
+        }
 
-        // المصدر الثاني: تذاكر المعاينة (Examination Tickets)
-        // حصة الوزارة من system_settings (محقونة كقيم رقمية parameterized)
         $ticketsSql = "
             SELECT
                 'TKT-' || t.ticket_id::TEXT           AS txn_id,
@@ -210,14 +524,14 @@ class FinanceModel
             LEFT JOIN users du  ON v.doctor_id  = du.user_id
         ";
 
-        $sql = "($invoicesSql) UNION ALL ($ticketsSql)";
+        $sql = "({$invoicesSql}) UNION ALL ({$ticketsSql})";
 
-        $params = [
+        $params = array_merge($scopedParams, [
             ':tk_min_morning'   => $this->ticketMinistryMorning,
             ':tk_min_evening'   => $this->ticketMinistryEvening,
             ':tk_min_morning_2' => $this->ticketMinistryMorning,
             ':tk_min_evening_2' => $this->ticketMinistryEvening,
-        ];
+        ]);
 
         return ['sql' => $sql, 'params' => $params];
     }
@@ -313,62 +627,9 @@ class FinanceModel
             }
         }
 
-        // 6. الخدمات (يتطلب EXISTS subquery — لا join مباشر)
-        if (!empty($filters['service_ids']) && is_array($filters['service_ids'])) {
-            $ids = array_values(array_filter(array_map('intval', $filters['service_ids']), fn($v) => $v > 0));
-            if (!empty($ids)) {
-                $placeholders = [];
-                foreach ($ids as $i => $id) {
-                    $key = ":flt_srv_$i";
-                    $placeholders[] = $key;
-                    $params[$key] = $id;
-                }
-                $conditions[] = "{$alias}.source_table = 'invoices' AND EXISTS (
-                    SELECT 1 FROM invoice_details xid
-                    WHERE xid.invoice_id = {$alias}.source_id
-                      AND xid.service_id IN (" . implode(',', $placeholders) . ")
-                )";
-            }
-        }
-
-        // 7. تصنيفات الخدمات
-        if (!empty($filters['category_ids']) && is_array($filters['category_ids'])) {
-            $ids = array_values(array_filter(array_map('intval', $filters['category_ids']), fn($v) => $v > 0));
-            if (!empty($ids)) {
-                $placeholders = [];
-                foreach ($ids as $i => $id) {
-                    $key = ":flt_cat_$i";
-                    $placeholders[] = $key;
-                    $params[$key] = $id;
-                }
-                $conditions[] = "{$alias}.source_table = 'invoices' AND EXISTS (
-                    SELECT 1 FROM invoice_details xid
-                    JOIN services_master sm ON xid.service_id = sm.service_id
-                    WHERE xid.invoice_id = {$alias}.source_id
-                      AND sm.category_id IN (" . implode(',', $placeholders) . ")
-                )";
-            }
-        }
-
-        // 8. الأقسام
-        if (!empty($filters['department_ids']) && is_array($filters['department_ids'])) {
-            $ids = array_values(array_filter(array_map('intval', $filters['department_ids']), fn($v) => $v > 0));
-            if (!empty($ids)) {
-                $placeholders = [];
-                foreach ($ids as $i => $id) {
-                    $key = ":flt_dep_$i";
-                    $placeholders[] = $key;
-                    $params[$key] = $id;
-                }
-                $conditions[] = "{$alias}.source_table = 'invoices' AND EXISTS (
-                    SELECT 1 FROM invoice_details xid
-                    JOIN services_master sm ON xid.service_id = sm.service_id
-                    JOIN service_categories sc ON sm.category_id = sc.category_id
-                    WHERE xid.invoice_id = {$alias}.source_id
-                      AND sc.department_id IN (" . implode(',', $placeholders) . ")
-                )";
-            }
-        }
+        // 6-8. فلترة الخدمة/التصنيف/القسم أصبحت تُطبّق داخل buildUnifiedLedgerSql
+        // على مستوى تفاصيل الفاتورة نفسها، حتى لا يتم احتساب خدمات غير مطابقة
+        // عند وجود أكثر من خدمة داخل نفس السند، وكذلك لدعم سند B المرتبط.
 
         // 9. نطاق المبلغ
         if (isset($filters['amount_min']) && is_numeric($filters['amount_min'])) {
@@ -423,14 +684,15 @@ class FinanceModel
      */
     public function getTransactions(array $filters, int $page = 1, int $perPage = 50, string $sortBy = 'txn_timestamp', string $sortDir = 'DESC'): array
     {
-        $unified = $this->buildUnifiedLedgerSql();
+        $unified = $this->buildUnifiedLedgerSql($filters);
         $where   = $this->buildWhereClause($filters, 'u');
 
         // التحقق من sortBy للحماية من SQL Injection
         $allowedSorts = [
-            'txn_timestamp', 'serial_number', 'total', 'cash_amount',
-            'exempt_amount', 'ministry_share', 'center_share', 'patient_name',
-            'doc_code', 'txn_type', 'accountant_name', 'doctor_name',
+            'txn_timestamp', 'serial_number', 'source_id', 'visit_id', 'txn_id',
+            'total', 'cash_amount', 'exempt_amount', 'ministry_share', 'center_share',
+            'patient_name', 'doc_code', 'txn_type', 'txn_type_label', 'status',
+            'accountant_name', 'doctor_name',
         ];
         if (!in_array($sortBy, $allowedSorts, true)) {
             $sortBy = 'txn_timestamp';
@@ -511,13 +773,13 @@ class FinanceModel
      */
     public function getTotals(array $filters): array
     {
-        $unified = $this->buildUnifiedLedgerSql();
+        $unified = $this->buildUnifiedLedgerSql($filters);
         $where   = $this->buildWhereClause($filters, 'u');
 
         $sql = "
             WITH unified AS ({$unified['sql']})
             SELECT
-                COUNT(*)                                                AS row_count,
+                COUNT(CASE WHEN u.status <> 'cancelled' THEN 1 END)     AS row_count,
                 COALESCE(SUM(CASE WHEN u.status <> 'cancelled' THEN u.total ELSE 0 END), 0)          AS sum_total,
                 COALESCE(SUM(CASE WHEN u.status <> 'cancelled' THEN u.cash_amount ELSE 0 END), 0)    AS sum_cash,
                 COALESCE(SUM(CASE WHEN u.status <> 'cancelled' THEN u.exempt_amount ELSE 0 END), 0)  AS sum_exempt,
@@ -630,8 +892,9 @@ class FinanceModel
      */
     public function getRevenue30Days(?array $userScope = null): array
     {
-        $unified = $this->buildUnifiedLedgerSql();
-        $scope   = $this->buildWhereClause($userScope ?? [], 'u');
+        $scopeFilters = $userScope ?? [];
+        $unified = $this->buildUnifiedLedgerSql($scopeFilters);
+        $scope   = $this->buildWhereClause($scopeFilters, 'u');
 
         // إذا كان هناك scope filters، نضيف شروطها (نزيل "WHERE " من البداية)
         $extraScopeConditions = $scope['where_sql'] !== ''
@@ -674,7 +937,7 @@ class FinanceModel
     public function getTypeDistribution(?array $filters = null): array
     {
         $filters = $filters ?? [];
-        $unified = $this->buildUnifiedLedgerSql();
+        $unified = $this->buildUnifiedLedgerSql($filters);
         $where   = $this->buildWhereClause($filters, 'u');
 
         // دمج شرط استبعاد الملغاة مع الـ WHERE القائم
@@ -716,19 +979,8 @@ class FinanceModel
      */
     public function getTopServices(?array $filters = null, int $limit = 10): array
     {
-        $where = $this->buildWhereClause($filters ?? [], 'i');
-        // يتطلب فلتر مخصص يعمل على invoices مباشرة
-        $extraWhere = '';
-        $params = [];
-
-        if (!empty($filters['from'])) {
-            $extraWhere .= " AND COALESCE(i.paid_at, i.created_at) >= :from";
-            $params[':from'] = $filters['from'];
-        }
-        if (!empty($filters['to'])) {
-            $extraWhere .= " AND COALESCE(i.paid_at, i.created_at) <= :to";
-            $params[':to'] = $filters['to'];
-        }
+        $activeFilters = $filters ?? [];
+        $reportFilters = $this->buildInvoiceReportFilters($activeFilters, 'i', 'v', 'p', 'id', 'sm', 'sc', 'dt');
 
         $sql = "
             SELECT
@@ -739,18 +991,20 @@ class FinanceModel
                 COALESCE(SUM(id.ministry_share_at_time), 0)                    AS ministry_share
             FROM invoice_details id
             JOIN services_master sm ON id.service_id = sm.service_id
+            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
             JOIN invoices i ON id.invoice_id = i.invoice_id
-            WHERE i.doc_type_id IS NOT NULL
-              AND i.cancelled_at IS NULL
-              {$extraWhere}
+            JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
+            JOIN visits v ON i.visit_id = v.visit_id
+            JOIN patients p ON v.patient_id = p.patient_id
+            {$reportFilters['where_sql']}
             GROUP BY sm.service_id, sm.service_name
-            ORDER BY revenue DESC
+            ORDER BY revenue DESC, sm.service_name ASC
             LIMIT :_limit
         ";
 
         $stmt = $this->conn->prepare($sql);
-        foreach ($params as $k => $v) {
-            $stmt->bindValue($k, $v);
+        foreach ($reportFilters['params'] as $k => $v) {
+            $stmt->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
         }
         $stmt->bindValue(':_limit', $limit, PDO::PARAM_INT);
         $stmt->execute();
@@ -770,8 +1024,9 @@ class FinanceModel
      */
     public function getAccountantsPerformance(?array $filters = null): array
     {
-        $unified = $this->buildUnifiedLedgerSql();
-        $where   = $this->buildWhereClause($filters ?? [], 'u');
+        $activeFilters = $filters ?? [];
+        $unified = $this->buildUnifiedLedgerSql($activeFilters);
+        $where   = $this->buildWhereClause($activeFilters, 'u');
 
         // دمج فلاتر إضافية مع الـ WHERE
         $extraConditions = "u.accountant_id IS NOT NULL AND u.status <> 'cancelled'";
@@ -1024,25 +1279,17 @@ class FinanceModel
      *   - حصة الوزارة من الفواتير (موزّعة بالخدمات + الأقسام)
      *   - حصة الوزارة من التذاكر (مجمّعة بالنوع صباحي/مسائي)
      */
-    public function getMinistryShareReport(array $filters): array
+    public function getMinistryShareReport(array $filters, ?int $accountantId = null): array
     {
         $this->loadTicketMinistryShares();
 
-        $from = $filters['from'] ?? null;
-        $to   = $filters['to']   ?? null;
-
-        $whereTime = '';
-        $paramsTime = [];
-        if ($from) {
-            $whereTime .= " AND COALESCE(i.paid_at, i.created_at) >= :from";
-            $paramsTime[':from'] = $from;
+        $reportFilters = $this->buildInvoiceReportFilters($filters, 'i', 'v', 'p', 'id', 'sm', 'sc', 'dt');
+        if ($accountantId !== null) {
+            $reportFilters['where_sql'] .= " AND i.accountant_id = :min_acc";
+            $reportFilters['params'][':min_acc'] = $accountantId;
         }
-        if ($to) {
-            $whereTime .= " AND COALESCE(i.paid_at, i.created_at) <= :to";
-            $paramsTime[':to'] = $to;
-        }
+        $reportFilters['where_sql'] .= " AND id.ministry_share_at_time > 0";
 
-        // (1) تفاصيل بالخدمات
         $servicesSql = "
             SELECT
                 sm.service_id,
@@ -1062,70 +1309,145 @@ class FinanceModel
             LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
             LEFT JOIN departments d ON sc.department_id = d.department_id
             JOIN invoices i ON id.invoice_id = i.invoice_id
+            JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
+            JOIN visits v ON i.visit_id = v.visit_id
+            JOIN patients p ON v.patient_id = p.patient_id
             LEFT JOIN LATERAL (
                 SELECT SUM(id2.ministry_share_at_time) AS total_ministry
                 FROM invoice_details id2
                 WHERE id2.invoice_id = i.invoice_id
             ) inv_totals ON TRUE
-            WHERE i.doc_type_id IS NOT NULL
-              AND i.cancelled_at IS NULL
-              AND id.ministry_share_at_time > 0
-              {$whereTime}
+            {$reportFilters['where_sql']}
             GROUP BY sm.service_id, sm.service_name, sc.category_name, d.department_name
-            ORDER BY ministry_share DESC
+            ORDER BY ministry_share DESC, sm.service_name ASC
         ";
         $stmt = $this->conn->prepare($servicesSql);
-        foreach ($paramsTime as $k => $v) $stmt->bindValue($k, $v);
+        foreach ($reportFilters['params'] as $k => $v) {
+            $stmt->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
         $stmt->execute();
         $byService = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // (2) تفاصيل بالتذاكر (صباحي/مسائي)
-        $ticketsWhere = '';
-        $paramsTk = [];
-        if ($from) { $ticketsWhere .= " AND t.created_at >= :from"; $paramsTk[':from'] = $from; }
-        if ($to)   { $ticketsWhere .= " AND t.created_at <= :to";   $paramsTk[':to']   = $to; }
+        $ticketAllowed = true;
+        if (!empty($filters['doc_codes']) && is_array($filters['doc_codes']) && !in_array('T', $filters['doc_codes'], true)) {
+            $ticketAllowed = false;
+        }
+        if (!empty($filters['statuses']) && is_array($filters['statuses']) && !in_array('issued', $filters['statuses'], true)) {
+            $ticketAllowed = false;
+        }
+        if ($this->hasLineScopedFilters($filters)) {
+            $ticketAllowed = false;
+        }
 
-        $ticketsSql = "
-            SELECT
-                t.ticket_type,
-                COUNT(*) AS count,
-                LEAST(
-                    CASE t.ticket_type
-                        WHEN 'morning' THEN :ms_morning
-                        WHEN 'evening' THEN :ms_evening
-                        ELSE 0
-                    END,
-                    MIN(t.amount)
-                ) AS unit_share,
-                COALESCE(SUM(LEAST(
-                    t.amount,
-                    CASE t.ticket_type
-                        WHEN 'morning' THEN :ms_morning_2
-                        WHEN 'evening' THEN :ms_evening_2
-                        ELSE 0
-                    END
-                )), 0) AS ministry_share,
-                COALESCE(SUM(t.amount), 0) AS total_revenue
-            FROM examination_tickets t
-            WHERE 1=1 {$ticketsWhere}
-            GROUP BY t.ticket_type
-            ORDER BY ministry_share DESC
-        ";
-        $stmt = $this->conn->prepare($ticketsSql);
-        $stmt->bindValue(':ms_morning',   $this->ticketMinistryMorning);
-        $stmt->bindValue(':ms_evening',   $this->ticketMinistryEvening);
-        $stmt->bindValue(':ms_morning_2', $this->ticketMinistryMorning);
-        $stmt->bindValue(':ms_evening_2', $this->ticketMinistryEvening);
-        foreach ($paramsTk as $k => $v) $stmt->bindValue($k, $v);
-        $stmt->execute();
-        $byTicket = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $byTicket = [];
+        if ($ticketAllowed) {
+            $ticketWhere = ['1 = 1'];
+            $ticketParams = [
+                ':ms_morning'   => $this->ticketMinistryMorning,
+                ':ms_evening'   => $this->ticketMinistryEvening,
+                ':ms_morning_2' => $this->ticketMinistryMorning,
+                ':ms_evening_2' => $this->ticketMinistryEvening,
+            ];
 
-        // الإجماليات
+            if (!empty($filters['from'])) {
+                $ticketWhere[] = 't.created_at >= :tk_from';
+                $ticketParams[':tk_from'] = $filters['from'];
+            }
+            if (!empty($filters['to'])) {
+                $ticketWhere[] = 't.created_at <= :tk_to';
+                $ticketParams[':tk_to'] = $filters['to'];
+            }
+            if ($accountantId !== null) {
+                $ticketWhere[] = 't.issued_by = :tk_acc';
+                $ticketParams[':tk_acc'] = $accountantId;
+            }
+            if (!empty($filters['accountant_ids']) && is_array($filters['accountant_ids'])) {
+                $ids = array_values(array_filter(array_map('intval', $filters['accountant_ids']), fn($v) => $v > 0));
+                if (!empty($ids)) {
+                    $placeholders = [];
+                    foreach ($ids as $i => $id) {
+                        $key = ":tk_acc_scope_$i";
+                        $placeholders[] = $key;
+                        $ticketParams[$key] = $id;
+                    }
+                    $ticketWhere[] = 't.issued_by IN (' . implode(',', $placeholders) . ')';
+                }
+            }
+            if (!empty($filters['doctor_ids']) && is_array($filters['doctor_ids'])) {
+                $ids = array_values(array_filter(array_map('intval', $filters['doctor_ids']), fn($v) => $v > 0));
+                if (!empty($ids)) {
+                    $placeholders = [];
+                    foreach ($ids as $i => $id) {
+                        $key = ":tk_doc_$i";
+                        $placeholders[] = $key;
+                        $ticketParams[$key] = $id;
+                    }
+                    $ticketWhere[] = 'v.doctor_id IN (' . implode(',', $placeholders) . ')';
+                }
+            }
+            if (!empty($filters['query'])) {
+                $q = trim((string) $filters['query']);
+                if ($q !== '') {
+                    $like = $this->driver === 'pgsql' ? 'ILIKE' : 'LIKE';
+                    $ticketWhere[] = "(p.full_name {$like} :tk_query1 OR CAST(t.serial_number AS TEXT) {$like} :tk_query2 OR CAST(t.ticket_id AS TEXT) {$like} :tk_query3)";
+                    $ticketParams[':tk_query1'] = '%' . $q . '%';
+                    $ticketParams[':tk_query2'] = '%' . $q . '%';
+                    $ticketParams[':tk_query3'] = '%' . $q . '%';
+                }
+            }
+            if (isset($filters['amount_min']) && is_numeric($filters['amount_min'])) {
+                $ticketWhere[] = 't.amount >= :tk_amount_min';
+                $ticketParams[':tk_amount_min'] = (float) $filters['amount_min'];
+            }
+            if (isset($filters['amount_max']) && is_numeric($filters['amount_max'])) {
+                $ticketWhere[] = 't.amount <= :tk_amount_max';
+                $ticketParams[':tk_amount_max'] = (float) $filters['amount_max'];
+            }
+            if (!empty($filters['has_ministry_share'])) {
+                $ticketWhere[] = "LEAST(t.amount, CASE t.ticket_type WHEN 'morning' THEN :ms_morning_2 WHEN 'evening' THEN :ms_evening_2 ELSE 0 END) > 0";
+            }
+
+            $ticketsSql = "
+                SELECT
+                    t.ticket_type,
+                    COUNT(*) AS count,
+                    LEAST(
+                        CASE t.ticket_type
+                            WHEN 'morning' THEN :ms_morning
+                            WHEN 'evening' THEN :ms_evening
+                            ELSE 0
+                        END,
+                        MIN(t.amount)
+                    ) AS unit_share,
+                    COALESCE(SUM(LEAST(
+                        t.amount,
+                        CASE t.ticket_type
+                            WHEN 'morning' THEN :ms_morning_2
+                            WHEN 'evening' THEN :ms_evening_2
+                            ELSE 0
+                        END
+                    )), 0) AS ministry_share,
+                    COALESCE(SUM(t.amount), 0) AS total_revenue
+                FROM examination_tickets t
+                JOIN visits v ON t.visit_id = v.visit_id
+                JOIN patients p ON v.patient_id = p.patient_id
+                WHERE " . implode(' AND ', $ticketWhere) . "
+                GROUP BY t.ticket_type
+                ORDER BY ministry_share DESC
+            ";
+            $stmt = $this->conn->prepare($ticketsSql);
+            foreach ($ticketParams as $k => $v) {
+                $stmt->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+            }
+            $stmt->execute();
+            $byTicket = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+
         $totalFromServices = array_sum(array_column($byService, 'ministry_share'));
         $totalFromTickets  = array_sum(array_column($byTicket, 'ministry_share'));
 
         return [
-            'period' => ['from' => $from, 'to' => $to],
+            'period' => ['from' => $filters['from'] ?? null, 'to' => $filters['to'] ?? null],
             'by_service' => array_map(fn($r) => [
                 'service_id'     => (int) $r['service_id'],
                 'service_name'   => $r['service_name'],
@@ -1136,12 +1458,12 @@ class FinanceModel
                 'total_revenue'  => (float) $r['total_revenue'],
             ], $byService),
             'by_ticket' => array_map(fn($r) => [
-                'ticket_type'    => $r['ticket_type'],
+                'ticket_type'       => $r['ticket_type'],
                 'ticket_type_label' => $r['ticket_type'] === 'morning' ? 'صباحي' : 'مسائي',
-                'count'          => (int)   $r['count'],
-                'unit_share'     => (float) $r['unit_share'],
-                'ministry_share' => (float) $r['ministry_share'],
-                'total_revenue'  => (float) $r['total_revenue'],
+                'count'             => (int)   $r['count'],
+                'unit_share'        => (float) $r['unit_share'],
+                'ministry_share'    => (float) $r['ministry_share'],
+                'total_revenue'     => (float) $r['total_revenue'],
             ], $byTicket),
             'totals' => [
                 'from_services' => (float) $totalFromServices,
