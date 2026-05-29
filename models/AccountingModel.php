@@ -298,6 +298,7 @@ class AccountingModel
                 JOIN Document_Types dt ON i.doc_type_id = dt.doc_type_id
                 JOIN Users u ON i.accountant_id = u.user_id
                 WHERE i.accountant_id IS NOT NULL
+                  AND i.cancelled_at IS NULL
                   AND {$timestamp} >= {$this->todayStart()}
                 ORDER BY {$timestamp} DESC";
         $stmt = $this->conn->query($sql);
@@ -314,7 +315,7 @@ class AccountingModel
                        SUM(CASE WHEN doc_type_id = 2 THEN 1 ELSE 0 END) AS count_partial,
                        SUM(CASE WHEN doc_type_id = 3 THEN 1 ELSE 0 END) AS count_full
                 FROM Invoices
-                WHERE doc_type_id IS NOT NULL AND {$timestamp} IS NOT NULL
+                WHERE doc_type_id IS NOT NULL AND cancelled_at IS NULL AND {$timestamp} IS NOT NULL
                 GROUP BY year_val
                 ORDER BY year_val DESC";
         $stmt = $this->conn->query($sql);
@@ -331,7 +332,7 @@ class AccountingModel
                        SUM(CASE WHEN doc_type_id = 2 THEN 1 ELSE 0 END) AS count_partial,
                        SUM(CASE WHEN doc_type_id = 3 THEN 1 ELSE 0 END) AS count_full
                 FROM Invoices
-                WHERE doc_type_id IS NOT NULL AND {$this->yearExpression($timestamp)} = :year
+                WHERE doc_type_id IS NOT NULL AND cancelled_at IS NULL AND {$this->yearExpression($timestamp)} = :year
                 GROUP BY month_val
                 ORDER BY month_val DESC";
         $stmt = $this->conn->prepare($sql);
@@ -349,7 +350,7 @@ class AccountingModel
                        SUM(CASE WHEN doc_type_id = 2 THEN 1 ELSE 0 END) AS count_partial,
                        SUM(CASE WHEN doc_type_id = 3 THEN 1 ELSE 0 END) AS count_full
                 FROM Invoices
-                WHERE doc_type_id IS NOT NULL AND {$this->yearMonthExpression($timestamp)} = :year_month
+                WHERE doc_type_id IS NOT NULL AND cancelled_at IS NULL AND {$this->yearMonthExpression($timestamp)} = :year_month
                 GROUP BY day_val
                 ORDER BY day_val DESC";
         $stmt = $this->conn->prepare($sql);
@@ -368,7 +369,8 @@ class AccountingModel
                 JOIN Patients p ON v.patient_id = p.patient_id
                 JOIN Document_Types dt ON i.doc_type_id = dt.doc_type_id
                 JOIN Users u ON i.accountant_id = u.user_id
-                WHERE i.doc_type_id IS NOT NULL";
+                WHERE i.doc_type_id IS NOT NULL
+                  AND i.cancelled_at IS NULL";
         $params = [];
 
         if ($date !== null && $date !== '') {

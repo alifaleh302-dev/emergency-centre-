@@ -306,7 +306,7 @@ class FinanceController extends BaseController
             $this->error($exception->getMessage(), 422);
         } catch (Throwable $exception) {
             error_log('finance/ministry_report: ' . $exception->getMessage());
-            $this->error('تعذر جلب تقرير حصة الوزارة حالياً.', 500);
+            $this->error('تعذر جلب تقرير المشتركة حالياً.', 500);
         }
     }
 
@@ -600,8 +600,8 @@ class FinanceController extends BaseController
             ['key' => 'total', 'label' => 'الإجمالي'],
             ['key' => 'cash_amount', 'label' => 'الكاش'],
             ['key' => 'exempt_amount', 'label' => 'الإعفاء'],
-            ['key' => 'center_share', 'label' => 'حصة المركز'],
-            ['key' => 'ministry_share', 'label' => 'حصة الوزارة'],
+            ['key' => 'center_share', 'label' => 'المشاركة'],
+            ['key' => 'ministry_share', 'label' => 'المشتركة'],
             ['key' => 'accountant_name', 'label' => 'المحاسب'],
             ['key' => 'doctor_name', 'label' => 'الطبيب'],
             ['key' => 'txn_timestamp', 'label' => 'التاريخ والوقت'],
@@ -767,13 +767,23 @@ class FinanceController extends BaseController
                 sc.category_name,
                 d.department_name,
                 COUNT(*)                                                 AS count,
-                COALESCE(SUM(id.ministry_share_at_time), 0)              AS ministry_share,
+                COALESCE(SUM(
+                    id.ministry_share_at_time * LEAST(
+                        1,
+                        COALESCE(i.net_amount / NULLIF(inv_totals.total_ministry, 0), 0)
+                    )
+                ), 0)                                                    AS ministry_share,
                 COALESCE(SUM(id.service_price_at_time * id.quantity), 0) AS total_revenue
             FROM invoice_details id
             JOIN services_master sm ON id.service_id = sm.service_id
             LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
             LEFT JOIN departments d ON sc.department_id = d.department_id
             JOIN invoices i ON id.invoice_id = i.invoice_id
+            LEFT JOIN LATERAL (
+                SELECT SUM(id2.ministry_share_at_time) AS total_ministry
+                FROM invoice_details id2
+                WHERE id2.invoice_id = i.invoice_id
+            ) inv_totals ON TRUE
             WHERE i.doc_type_id IS NOT NULL
               AND i.cancelled_at IS NULL
               AND id.ministry_share_at_time > 0
@@ -804,16 +814,22 @@ class FinanceController extends BaseController
             SELECT
                 t.ticket_type,
                 COUNT(*) AS count,
-                CASE t.ticket_type
-                    WHEN 'morning' THEN :ms_morning
-                    WHEN 'evening' THEN :ms_evening
-                    ELSE 0
-                END AS unit_share,
-                COUNT(*) * CASE t.ticket_type
-                    WHEN 'morning' THEN :ms_morning_2
-                    WHEN 'evening' THEN :ms_evening_2
-                    ELSE 0
-                END AS ministry_share,
+                LEAST(
+                    CASE t.ticket_type
+                        WHEN 'morning' THEN :ms_morning
+                        WHEN 'evening' THEN :ms_evening
+                        ELSE 0
+                    END,
+                    MIN(t.amount)
+                ) AS unit_share,
+                COALESCE(SUM(LEAST(
+                    t.amount,
+                    CASE t.ticket_type
+                        WHEN 'morning' THEN :ms_morning_2
+                        WHEN 'evening' THEN :ms_evening_2
+                        ELSE 0
+                    END
+                )), 0) AS ministry_share,
                 COALESCE(SUM(t.amount), 0) AS total_revenue
             FROM examination_tickets t
             WHERE 1=1 {$ticketWhere}

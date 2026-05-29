@@ -99,8 +99,8 @@ const FINANCE_COLUMN_CATALOG = [
     { key: 'total',          label: 'الإجمالي',         width: '110px', default: true, sortable: true,  sortField: 'total', numeric: true },
     { key: 'cash_amount',    label: 'الكاش',            width: '110px', default: true, sortable: true,  sortField: 'cash_amount', numeric: true },
     { key: 'exempt_amount',  label: 'الإعفاء',          width: '110px', default: true, sortable: true,  sortField: 'exempt_amount', numeric: true },
-    { key: 'center_share',   label: 'حصة المركز',       width: '120px', default: true, sortable: false, numeric: true },
-    { key: 'ministry_share', label: 'حصة الوزارة',      width: '120px', default: true, sortable: false, numeric: true },
+    { key: 'center_share',   label: 'المشاركة',       width: '120px', default: true, sortable: false, numeric: true },
+    { key: 'ministry_share', label: 'المشتركة',      width: '120px', default: true, sortable: false, numeric: true },
     { key: 'accountant_name',label: 'المحاسب',          width: '140px', default: false, sortable: false },
     { key: 'doctor_name',    label: 'الطبيب',           width: '140px', default: false, sortable: false },
     { key: 'txn_timestamp',  label: 'التاريخ والوقت',   width: '160px', default: true, sortable: true,  sortField: 'txn_timestamp' },
@@ -429,8 +429,8 @@ const Finance = {
             ['green','الكاش اليوم','bi-coin'],
             ['orange','الإعفاءات اليوم','bi-shield-check'],
             ['purple','التذاكر اليوم','bi-ticket-perforated'],
-            ['red','حصة الوزارة (الشهر)','bi-buildings'],
-            ['teal','صافي المركز (الشهر)','bi-graph-up-arrow'],
+            ['red','المشتركة (الشهر)','bi-buildings'],
+            ['teal','المشاركة (الشهر)','bi-graph-up-arrow'],
         ];
         return cards.map(([color,label,icon]) => `
             <div class="fh-kpi fh-kpi-${color}">
@@ -491,13 +491,13 @@ const Finance = {
             </div>
             <div class="fh-kpi fh-kpi-red">
                 <i class="bi bi-buildings fh-kpi-icon"></i>
-                <div class="fh-kpi-label">حصة الوزارة (الشهر)</div>
+                <div class="fh-kpi-label">المشتركة (الشهر)</div>
                 <div class="fh-kpi-value">${fmt(month.ministry_share)}</div>
                 <div class="fh-kpi-sub">من ${month.row_count||0} حركة</div>
             </div>
             <div class="fh-kpi fh-kpi-teal">
                 <i class="bi bi-graph-up-arrow fh-kpi-icon"></i>
-                <div class="fh-kpi-label">صافي المركز (الشهر)</div>
+                <div class="fh-kpi-label">المشاركة (الشهر)</div>
                 <div class="fh-kpi-value">${fmt(month.center_share)}</div>
                 <div class="fh-kpi-sub">إجمالي ${fmt(month.total)}</div>
             </div>`;
@@ -687,7 +687,7 @@ Object.assign(Finance, {
                     <button class="fh-preset-btn" onclick="Finance.applyPreset('exempts_only')">الإعفاءات فقط</button>
                     <button class="fh-preset-btn" onclick="Finance.applyPreset('tickets_only')">التذاكر فقط</button>
                     <button class="fh-preset-btn" onclick="Finance.applyPreset('cash_only')">الكاش فقط</button>
-                    <button class="fh-preset-btn" onclick="Finance.applyPreset('ministry_due')">حصة الوزارة</button>
+                    <button class="fh-preset-btn" onclick="Finance.applyPreset('ministry_due')">المشتركة</button>
                     <button class="fh-preset-btn" onclick="Finance.applyPreset('cancelled')">الملغاة</button>
                 </div>
                 <div class="fh-filters-grid">
@@ -763,7 +763,7 @@ Object.assign(Finance, {
                                ${f.has_ministry_share ? 'checked' : ''}
                                onchange="Finance.setFilter('has_ministry_share', this.checked); Finance.applyFilters();">
                         <label class="form-check-label" for="fh-min-share" style="font-size:.85rem;">
-                            حركات فيها حصة وزارة فقط
+                            حركات فيها مشتركة فقط
                         </label>
                     </div>
                     <div class="ms-auto d-flex gap-2 flex-wrap">
@@ -1153,7 +1153,7 @@ Object.assign(Finance, {
 
         const servicesHtml = services.length ? `
             <table class="fh-services-table">
-                <thead><tr><th>الخدمة</th><th>السعر</th><th>الكمية</th><th>حصة الوزارة</th><th>حصة المركز</th></tr></thead>
+                <thead><tr><th>الخدمة</th><th>السعر</th><th>الكمية</th><th>المشتركة</th><th>المشاركة</th></tr></thead>
                 <tbody>
                     ${services.map(s => `
                         <tr>
@@ -1230,8 +1230,8 @@ Object.assign(Finance, {
                     <div class="label">الإجمالي:</div><div class="value"><strong>${FinanceUtils.fmtMoney(totals.total)}</strong></div>
                     <div class="label">الكاش:</div><div class="value">${FinanceUtils.fmtMoney(totals.cash)}</div>
                     <div class="label">الإعفاء:</div><div class="value">${FinanceUtils.fmtMoney(totals.exempt)}</div>
-                    <div class="label">حصة الوزارة:</div><div class="value">${FinanceUtils.fmtMoney(totals.ministry_share)}</div>
-                    <div class="label">حصة المركز:</div><div class="value"><strong>${FinanceUtils.fmtMoney(totals.center_share)}</strong></div>
+                    <div class="label">المشتركة:</div><div class="value">${FinanceUtils.fmtMoney(totals.ministry_share)}</div>
+                    <div class="label">المشاركة:</div><div class="value"><strong>${FinanceUtils.fmtMoney(totals.center_share)}</strong></div>
                 </div>
             </div>
 
@@ -1290,8 +1290,8 @@ Object.assign(Finance, {
                 <h6><i class="bi bi-calculator"></i> الإجماليات</h6>
                 <div class="fh-detail-grid">
                     <div class="label">الإجمالي:</div><div class="value"><strong>${FinanceUtils.fmtMoney(totals.total)}</strong></div>
-                    <div class="label">حصة الوزارة:</div><div class="value">${FinanceUtils.fmtMoney(totals.ministry_share)}</div>
-                    <div class="label">حصة المركز:</div><div class="value"><strong>${FinanceUtils.fmtMoney(totals.center_share)}</strong></div>
+                    <div class="label">المشتركة:</div><div class="value">${FinanceUtils.fmtMoney(totals.ministry_share)}</div>
+                    <div class="label">المشاركة:</div><div class="value"><strong>${FinanceUtils.fmtMoney(totals.center_share)}</strong></div>
                 </div>
             </div>
         `;
@@ -1797,7 +1797,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
  * الـ APIs المستهلكة في هذا الجزء:
  *   - POST /api/finance/export          (تجهيز payload بأربع أوراق)
  *   - POST /api/finance/print_voucher   (تجهيز payload سند مفرد)
- *   - POST /api/finance/ministry_report (تقرير حصة الوزارة التفصيلي)
+ *   - POST /api/finance/ministry_report (تقرير المشتركة التفصيلي)
  * ========================================================================= */
 (function () {
     function injectFinanceM522Styles() {
@@ -1910,7 +1910,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
         if (Array.isArray(filters.statuses)  && filters.statuses.length)  parts.push(`حالات: ${filters.statuses.map(statusLabelAr).join('،')}`);
         if (filters.amount_min != null) parts.push(`أدنى مبلغ: ${fmtMoney(filters.amount_min)}`);
         if (filters.amount_max != null) parts.push(`أعلى مبلغ: ${fmtMoney(filters.amount_max)}`);
-        if (filters.has_ministry_share) parts.push('حصة وزارة فقط');
+        if (filters.has_ministry_share) parts.push('مشتركة فقط');
         if (filters.query) parts.push(`بحث: "${filters.query}"`);
         return parts.length ? parts.join(' • ') : 'بدون فلاتر';
     }
@@ -1955,7 +1955,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                     <label class="fh-export-option">
                         <input type="checkbox" id="fh-sheet-ministry" checked>
                         <div>
-                            <div class="fh-export-option-title">حصة الوزارة</div>
+                            <div class="fh-export-option-title">المشتركة</div>
                             <div class="fh-export-option-sub">التفصيل من الخدمات والتذاكر</div>
                         </div>
                     </label>
@@ -2034,8 +2034,8 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                         ['إجمالي المبالغ', s.total_amount ?? 0],
                         ['إجمالي الكاش', s.cash_amount ?? 0],
                         ['إجمالي الإعفاءات', s.exempt_amount ?? 0],
-                        ['حصة الوزارة', s.ministry_share ?? 0],
-                        ['حصة المركز', s.center_share ?? 0],
+                        ['المشتركة', s.ministry_share ?? 0],
+                        ['المشاركة', s.center_share ?? 0],
                         [],
                         ['الأعداد حسب النوع'],
                         ['كاش (A)', s.count_cash ?? 0],
@@ -2118,7 +2118,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                 if (data.sheets && data.sheets.ministry) {
                     const m = data.sheets.ministry.report || {};
                     const aoa = [];
-                    aoa.push(['تقرير حصة الوزارة']);
+                    aoa.push(['تقرير المشتركة']);
                     aoa.push([]);
                     aoa.push(['الإجماليات']);
                     aoa.push(['من الخدمات', Number(m.totals?.from_services || 0)]);
@@ -2127,7 +2127,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                     aoa.push([]);
 
                     aoa.push(['تفصيل الخدمات']);
-                    aoa.push(['الخدمة', 'القسم', 'التصنيف', 'عدد الحركات', 'حصة الوزارة', 'إجمالي الإيراد']);
+                    aoa.push(['الخدمة', 'القسم', 'التصنيف', 'عدد الحركات', 'المشتركة', 'إجمالي الإيراد']);
                     (m.by_service || m.services || []).forEach(row => {
                         aoa.push([
                             row.service_name || row.name || '—',
@@ -2141,7 +2141,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                     aoa.push([]);
 
                     aoa.push(['تفصيل التذاكر']);
-                    aoa.push(['الوردية', 'عدد التذاكر', 'حصة الوحدة', 'إجمالي حصة الوزارة', 'إجمالي الإيراد']);
+                    aoa.push(['الوردية', 'عدد التذاكر', 'حصة الوحدة', 'إجمالي المشتركة', 'إجمالي الإيراد']);
                     (m.by_ticket || m.tickets || []).forEach(row => {
                         const shiftLabel = (row.shift === 'morning' || row.ticket_type === 'morning') ? 'صباحي' :
                                            (row.shift === 'evening' || row.ticket_type === 'evening') ? 'مسائي' :
@@ -2157,7 +2157,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
 
                     const ws = XLSX.utils.aoa_to_sheet(aoa);
                     ws['!cols'] = [{ wch: 32 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 18 }];
-                    XLSX.utils.book_append_sheet(wb, ws, 'حصة الوزارة');
+                    XLSX.utils.book_append_sheet(wb, ws, 'المشتركة');
                 }
 
                 if (!wb.SheetNames.length) {
@@ -2329,7 +2329,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                         <tr>
                             <th>#</th><th>الخدمة</th><th>القسم</th>
                             <th>السعر</th><th>الكمية</th>
-                            <th>حصة الوزارة</th><th>حصة المركز</th>
+                            <th>المشتركة</th><th>المشاركة</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -2375,8 +2375,8 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                     <div class="label">الإجمالي:</div><div class="value">${fmtMoney(totals.total)} ${esc(currency)}</div>
                     <div class="label">الكاش:</div><div class="value">${fmtMoney(totals.cash)} ${esc(currency)}</div>
                     <div class="label">الإعفاء:</div><div class="value">${fmtMoney(totals.exempt)} ${esc(currency)}</div>
-                    <div class="label">حصة الوزارة:</div><div class="value">${fmtMoney(totals.ministry_share)} ${esc(currency)}</div>
-                    <div class="label grand">حصة المركز:</div><div class="value">${fmtMoney(totals.center_share)} ${esc(currency)}</div>
+                    <div class="label">المشتركة:</div><div class="value">${fmtMoney(totals.ministry_share)} ${esc(currency)}</div>
+                    <div class="label grand">المشاركة:</div><div class="value">${fmtMoney(totals.center_share)} ${esc(currency)}</div>
                 </div>
 
                 ${inv.cancelled_at ? `
@@ -2413,22 +2413,22 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
 
                 <div class="fh-print-totals" style="margin-top:18px;">
                     <div class="label">المبلغ:</div><div class="value">${fmtMoney(t.amount || totals.total)} ${esc(currency)}</div>
-                    <div class="label">حصة الوزارة:</div><div class="value">${fmtMoney(totals.ministry_share)} ${esc(currency)}</div>
-                    <div class="label grand">حصة المركز:</div><div class="value">${fmtMoney(totals.center_share)} ${esc(currency)}</div>
+                    <div class="label">المشتركة:</div><div class="value">${fmtMoney(totals.ministry_share)} ${esc(currency)}</div>
+                    <div class="label grand">المشاركة:</div><div class="value">${fmtMoney(totals.center_share)} ${esc(currency)}</div>
                 </div>
             `;
         },
     });
 
     /* =========================================================================
-     * 11.3  Ministry Report Modal — تقرير حصة الوزارة التفصيلي
+     * 11.3  Ministry Report Modal — تقرير المشتركة التفصيلي
      * ========================================================================= */
     Object.assign(Finance, {
 
         async openMinistryReport() {
             injectFinanceM522Styles();
             const modal = Finance._ensureModal('fh-ministry-report-modal',
-                '<i class="bi bi-buildings"></i> تقرير حصة الوزارة', 'modal-xl');
+                '<i class="bi bi-buildings"></i> تقرير المشتركة', 'modal-xl');
             const body = modal.querySelector('.modal-body');
             const footer = modal.querySelector('.modal-footer');
 
@@ -2436,7 +2436,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
             footer.innerHTML = `
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إغلاق</button>
                 <button type="button" class="btn btn-success" id="fh-ministry-export-btn" disabled>
-                    <i class="bi bi-file-earmark-excel"></i> تصدير حصة الوزارة فقط
+                    <i class="bi bi-file-earmark-excel"></i> تصدير المشتركة فقط
                 </button>
                 <button type="button" class="btn btn-primary" id="fh-ministry-print-btn" disabled>
                     <i class="bi bi-printer"></i> طباعة
@@ -2537,13 +2537,13 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                 ${summaryCards}
 
                 <h6 class="fh-modal-section-title" style="margin-top:8px;">
-                    <i class="bi bi-clipboard-data"></i> حصة الوزارة من الخدمات
+                    <i class="bi bi-clipboard-data"></i> المشتركة من الخدمات
                 </h6>
                 <table class="fh-mini-table">
                     <thead>
                         <tr>
                             <th>الخدمة</th><th>القسم</th><th>التصنيف</th>
-                            <th>عدد الحركات</th><th>حصة الوزارة</th><th>إجمالي الإيراد</th>
+                            <th>عدد الحركات</th><th>المشتركة</th><th>إجمالي الإيراد</th>
                         </tr>
                     </thead>
                     <tbody>${servicesRows}</tbody>
@@ -2558,13 +2558,13 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                 </table>
 
                 <h6 class="fh-modal-section-title" style="margin-top:14px;">
-                    <i class="bi bi-ticket-perforated"></i> حصة الوزارة من التذاكر
+                    <i class="bi bi-ticket-perforated"></i> المشتركة من التذاكر
                 </h6>
                 <table class="fh-mini-table">
                     <thead>
                         <tr>
                             <th>الوردية</th><th>عدد التذاكر</th><th>حصة الوحدة</th>
-                            <th>حصة الوزارة</th><th>إجمالي الإيراد</th>
+                            <th>المشتركة</th><th>إجمالي الإيراد</th>
                         </tr>
                     </thead>
                     <tbody>${ticketsRows}</tbody>
@@ -2599,7 +2599,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="utf-8">
-    <title>تقرير حصة الوزارة</title>
+    <title>تقرير المشتركة</title>
     <style>
         ${css}
         body { font-family: Cairo,'Segoe UI',Tahoma,Arial,sans-serif; padding:20px; }
@@ -2607,7 +2607,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
     </style>
 </head>
 <body>
-    <h2 style="text-align:center;">تقرير حصة الوزارة</h2>
+    <h2 style="text-align:center;">تقرير المشتركة</h2>
     ${html}
     <script>
         window.addEventListener('load', function () {
@@ -2691,7 +2691,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                         <h2><i class="bi bi-bank2"></i> المركز المالي والسندي الشامل</h2>
                         <div class="fh-header-actions">
                             <button class="btn btn-sm btn-outline-info" onclick="Finance.openMinistryReport()">
-                                <i class="bi bi-buildings"></i> تقرير حصة الوزارة
+                                <i class="bi bi-buildings"></i> تقرير المشتركة
                             </button>
                             <button class="btn btn-sm btn-outline-success" onclick="Finance.openExportDialog()">
                                 <i class="bi bi-file-earmark-excel"></i> تصدير

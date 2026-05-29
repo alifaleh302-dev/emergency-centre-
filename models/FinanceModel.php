@@ -98,8 +98,8 @@ class FinanceModel
         $this->loadTicketMinistryShares();
 
         // المصدر الأول: فواتير (Invoices)
-        // ml = ministry share من invoice_details
-        // cs = center share = total - ministry_share
+        // ml = إجمالي المشتركة المخزنة على مستوى تفاصيل الفاتورة
+        // المشاركة/المشتركة تُحتسب فقط من المبلغ المدفوع فعلياً
         $invoicesSql = "
             SELECT
                 'INV-' || i.invoice_id::TEXT          AS txn_id,
@@ -125,8 +125,14 @@ class FinanceModel
                 i.total                               AS total,
                 i.net_amount                          AS cash_amount,
                 i.exemption_value                     AS exempt_amount,
-                COALESCE(ml.center_share, 0)          AS center_share,
-                COALESCE(ml.ministry_share, 0)        AS ministry_share,
+                CASE
+                    WHEN dt.doc_name = 'A' THEN GREATEST(i.net_amount - LEAST(COALESCE(ml.ministry_share, 0), i.net_amount), 0)
+                    ELSE 0::NUMERIC
+                END                                   AS center_share,
+                CASE
+                    WHEN dt.doc_name = 'A' THEN LEAST(COALESCE(ml.ministry_share, 0), i.net_amount)
+                    ELSE 0::NUMERIC
+                END                                   AS ministry_share,
                 i.accountant_id                       AS accountant_id,
                 u.full_name                           AS accountant_name,
                 v.doctor_id                           AS doctor_id,
@@ -146,8 +152,7 @@ class FinanceModel
             LEFT JOIN users du     ON v.doctor_id    = du.user_id
             LEFT JOIN LATERAL (
                 SELECT
-                    SUM(id.service_price_at_time * id.quantity - id.ministry_share_at_time) AS center_share,
-                    SUM(id.ministry_share_at_time)                                          AS ministry_share
+                    SUM(id.ministry_share_at_time) AS ministry_share
                 FROM invoice_details id
                 WHERE id.invoice_id = i.invoice_id
             ) ml ON TRUE
@@ -171,16 +176,25 @@ class FinanceModel
                 t.amount                              AS total,
                 t.amount                              AS cash_amount,
                 0::NUMERIC                            AS exempt_amount,
-                t.amount - CASE t.ticket_type
-                    WHEN 'morning' THEN :tk_min_morning
-                    WHEN 'evening' THEN :tk_min_evening
-                    ELSE 0
-                END                                   AS center_share,
-                CASE t.ticket_type
-                    WHEN 'morning' THEN :tk_min_morning_2
-                    WHEN 'evening' THEN :tk_min_evening_2
-                    ELSE 0
-                END                                   AS ministry_share,
+                GREATEST(
+                    t.amount - LEAST(
+                        CASE t.ticket_type
+                            WHEN 'morning' THEN :tk_min_morning
+                            WHEN 'evening' THEN :tk_min_evening
+                            ELSE 0
+                        END,
+                        t.amount
+                    ),
+                    0
+                )                                     AS center_share,
+                LEAST(
+                    CASE t.ticket_type
+                        WHEN 'morning' THEN :tk_min_morning_2
+                        WHEN 'evening' THEN :tk_min_evening_2
+                        ELSE 0
+                    END,
+                    t.amount
+                )                                     AS ministry_share,
                 t.issued_by                           AS accountant_id,
                 ui.full_name                          AS accountant_name,
                 v.doctor_id                           AS doctor_id,
@@ -472,6 +486,9 @@ class FinanceModel
             'ministry_share' => 0.0,
         ];
         foreach ($rows as $r) {
+            if (($r['status'] ?? '') === 'cancelled') {
+                continue;
+            }
             $pageTotal['total']          += (float) $r['total'];
             $pageTotal['cash_amount']    += (float) $r['cash_amount'];
             $pageTotal['exempt_amount']  += (float) $r['exempt_amount'];
@@ -501,20 +518,20 @@ class FinanceModel
             WITH unified AS ({$unified['sql']})
             SELECT
                 COUNT(*)                                                AS row_count,
-                COALESCE(SUM(u.total), 0)                               AS sum_total,
-                COALESCE(SUM(u.cash_amount), 0)                         AS sum_cash,
-                COALESCE(SUM(u.exempt_amount), 0)                       AS sum_exempt,
-                COALESCE(SUM(u.center_share), 0)                        AS sum_center,
-                COALESCE(SUM(u.ministry_share), 0)                      AS sum_ministry,
-                COALESCE(SUM(CASE WHEN u.doc_code = 'A' THEN u.cash_amount ELSE 0 END), 0)   AS sum_cash_only,
-                COALESCE(SUM(CASE WHEN u.doc_code = 'B' THEN u.exempt_amount ELSE 0 END), 0) AS sum_partial,
-                COALESCE(SUM(CASE WHEN u.doc_code = 'C' THEN u.exempt_amount ELSE 0 END), 0) AS sum_full,
-                COALESCE(SUM(CASE WHEN u.doc_code = 'T' THEN u.cash_amount ELSE 0 END), 0)   AS sum_tickets,
-                COUNT(CASE WHEN u.doc_code = 'A' THEN 1 END)            AS count_cash,
-                COUNT(CASE WHEN u.doc_code = 'B' THEN 1 END)            AS count_partial,
-                COUNT(CASE WHEN u.doc_code = 'C' THEN 1 END)            AS count_full,
-                COUNT(CASE WHEN u.doc_code = 'T' THEN 1 END)            AS count_tickets,
-                COUNT(CASE WHEN u.status = 'cancelled' THEN 1 END)      AS count_cancelled
+                COALESCE(SUM(CASE WHEN u.status <> 'cancelled' THEN u.total ELSE 0 END), 0)          AS sum_total,
+                COALESCE(SUM(CASE WHEN u.status <> 'cancelled' THEN u.cash_amount ELSE 0 END), 0)    AS sum_cash,
+                COALESCE(SUM(CASE WHEN u.status <> 'cancelled' THEN u.exempt_amount ELSE 0 END), 0)  AS sum_exempt,
+                COALESCE(SUM(CASE WHEN u.status <> 'cancelled' THEN u.center_share ELSE 0 END), 0)   AS sum_center,
+                COALESCE(SUM(CASE WHEN u.status <> 'cancelled' THEN u.ministry_share ELSE 0 END), 0) AS sum_ministry,
+                COALESCE(SUM(CASE WHEN u.doc_code = 'A' AND u.status <> 'cancelled' THEN u.cash_amount ELSE 0 END), 0)   AS sum_cash_only,
+                COALESCE(SUM(CASE WHEN u.doc_code = 'B' AND u.status <> 'cancelled' THEN u.exempt_amount ELSE 0 END), 0) AS sum_partial,
+                COALESCE(SUM(CASE WHEN u.doc_code = 'C' AND u.status <> 'cancelled' THEN u.exempt_amount ELSE 0 END), 0) AS sum_full,
+                COALESCE(SUM(CASE WHEN u.doc_code = 'T' AND u.status <> 'cancelled' THEN u.cash_amount ELSE 0 END), 0)   AS sum_tickets,
+                COUNT(CASE WHEN u.doc_code = 'A' AND u.status <> 'cancelled' THEN 1 END)            AS count_cash,
+                COUNT(CASE WHEN u.doc_code = 'B' AND u.status <> 'cancelled' THEN 1 END)            AS count_partial,
+                COUNT(CASE WHEN u.doc_code = 'C' AND u.status <> 'cancelled' THEN 1 END)            AS count_full,
+                COUNT(CASE WHEN u.doc_code = 'T' AND u.status <> 'cancelled' THEN 1 END)            AS count_tickets,
+                COUNT(CASE WHEN u.status = 'cancelled' THEN 1 END)                                   AS count_cancelled
             FROM unified u
             {$where['where_sql']}
         ";
@@ -570,6 +587,9 @@ class FinanceModel
             $todayFilters = array_merge($todayFilters, $userScope);
             $monthFilters = array_merge($monthFilters, $userScope);
         }
+
+        $todayFilters['statuses'] = ['paid', 'issued'];
+        $monthFilters['statuses'] = ['paid', 'issued'];
 
         $todayStats = $this->getTotals($todayFilters);
         $monthStats = $this->getTotals($monthFilters);
@@ -851,7 +871,6 @@ class FinanceModel
             SELECT
                 id.detail_id, id.service_id, id.service_price_at_time AS price,
                 id.quantity, id.ministry_share_at_time AS ministry_share,
-                (id.service_price_at_time * id.quantity - id.ministry_share_at_time) AS center_share,
                 sm.service_name,
                 sc.category_name,
                 d.department_name
@@ -865,6 +884,60 @@ class FinanceModel
         $stmt = $this->conn->prepare($servicesSql);
         $stmt->execute([':iid' => $invoiceId]);
         $services = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $cashAmount = (float) ($invoice['net_amount'] ?? 0);
+        $docCode = (string) ($invoice['doc_code'] ?? '');
+
+        $services = array_map(function (array $row): array {
+            $price = (float) ($row['price'] ?? 0);
+            $quantity = (float) ($row['quantity'] ?? 0);
+            $ministryShare = (float) ($row['ministry_share'] ?? 0);
+
+            $row['price'] = $price;
+            $row['quantity'] = $quantity;
+            $row['ministry_share'] = $ministryShare;
+            $row['_original_center_share'] = max(($price * $quantity) - $ministryShare, 0.0);
+            return $row;
+        }, $services);
+
+        $originalMinistryTotal = array_sum(array_column($services, 'ministry_share'));
+        $originalCenterTotal = array_sum(array_column($services, '_original_center_share'));
+        $appliedMinistryTotal = $docCode === 'A' ? min($originalMinistryTotal, $cashAmount) : 0.0;
+        $appliedCenterTotal = $docCode === 'A' ? max($cashAmount - $appliedMinistryTotal, 0.0) : 0.0;
+        $remainingMinistry = $appliedMinistryTotal;
+        $remainingCenter = $appliedCenterTotal;
+        $lastIndex = count($services) - 1;
+
+        foreach ($services as $idx => &$service) {
+            $originalMinistry = (float) ($service['ministry_share'] ?? 0);
+            $originalCenter = (float) ($service['_original_center_share'] ?? 0);
+
+            if ($docCode !== 'A') {
+                $service['ministry_share'] = 0.0;
+                $service['center_share'] = 0.0;
+                unset($service['_original_center_share']);
+                continue;
+            }
+
+            if ($idx === $lastIndex) {
+                $serviceMinistry = $remainingMinistry;
+                $serviceCenter = $remainingCenter;
+            } else {
+                $serviceMinistry = $originalMinistryTotal > 0
+                    ? round(($originalMinistry / $originalMinistryTotal) * $appliedMinistryTotal, 2)
+                    : 0.0;
+                $serviceCenter = $originalCenterTotal > 0
+                    ? round(($originalCenter / $originalCenterTotal) * $appliedCenterTotal, 2)
+                    : 0.0;
+                $remainingMinistry -= $serviceMinistry;
+                $remainingCenter -= $serviceCenter;
+            }
+
+            $service['ministry_share'] = max((float) $serviceMinistry, 0.0);
+            $service['center_share'] = max((float) $serviceCenter, 0.0);
+            unset($service['_original_center_share']);
+        }
+        unset($service);
 
         // السند المرتبط (إن وجد)
         $related = null;
@@ -890,8 +963,8 @@ class FinanceModel
                 'total'          => (float) $invoice['total'],
                 'cash'           => (float) $invoice['net_amount'],
                 'exempt'         => (float) $invoice['exemption_value'],
-                'ministry_share' => array_sum(array_column($services, 'ministry_share')),
-                'center_share'   => array_sum(array_column($services, 'center_share')),
+                'ministry_share' => (float) $appliedMinistryTotal,
+                'center_share'   => (float) $appliedCenterTotal,
             ],
         ];
     }
@@ -923,9 +996,10 @@ class FinanceModel
 
         if (!$ticket) return null;
 
-        $ministryShare = $ticket['ticket_type'] === 'morning'
+        $configuredMinistryShare = $ticket['ticket_type'] === 'morning'
             ? $this->ticketMinistryMorning
             : $this->ticketMinistryEvening;
+        $ministryShare = min((float) $ticket['amount'], (float) $configuredMinistryShare);
 
         return [
             'txn_id'      => 'TKT-' . $ticketId,
@@ -936,7 +1010,7 @@ class FinanceModel
                 'cash'           => (float) $ticket['amount'],
                 'exempt'         => 0.0,
                 'ministry_share' => $ministryShare,
-                'center_share'   => (float) $ticket['amount'] - $ministryShare,
+                'center_share'   => max((float) $ticket['amount'] - $ministryShare, 0.0),
             ],
         ];
     }
@@ -976,13 +1050,23 @@ class FinanceModel
                 sc.category_name,
                 d.department_name,
                 COUNT(*)                                                AS count,
-                COALESCE(SUM(id.ministry_share_at_time), 0)             AS ministry_share,
+                COALESCE(SUM(
+                    id.ministry_share_at_time * LEAST(
+                        1,
+                        COALESCE(i.net_amount / NULLIF(inv_totals.total_ministry, 0), 0)
+                    )
+                ), 0)                                                   AS ministry_share,
                 COALESCE(SUM(id.service_price_at_time * id.quantity), 0) AS total_revenue
             FROM invoice_details id
             JOIN services_master sm ON id.service_id = sm.service_id
             LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
             LEFT JOIN departments d ON sc.department_id = d.department_id
             JOIN invoices i ON id.invoice_id = i.invoice_id
+            LEFT JOIN LATERAL (
+                SELECT SUM(id2.ministry_share_at_time) AS total_ministry
+                FROM invoice_details id2
+                WHERE id2.invoice_id = i.invoice_id
+            ) inv_totals ON TRUE
             WHERE i.doc_type_id IS NOT NULL
               AND i.cancelled_at IS NULL
               AND id.ministry_share_at_time > 0
@@ -1005,16 +1089,22 @@ class FinanceModel
             SELECT
                 t.ticket_type,
                 COUNT(*) AS count,
-                CASE t.ticket_type
-                    WHEN 'morning' THEN :ms_morning
-                    WHEN 'evening' THEN :ms_evening
-                    ELSE 0
-                END AS unit_share,
-                COUNT(*) * CASE t.ticket_type
-                    WHEN 'morning' THEN :ms_morning_2
-                    WHEN 'evening' THEN :ms_evening_2
-                    ELSE 0
-                END AS ministry_share,
+                LEAST(
+                    CASE t.ticket_type
+                        WHEN 'morning' THEN :ms_morning
+                        WHEN 'evening' THEN :ms_evening
+                        ELSE 0
+                    END,
+                    MIN(t.amount)
+                ) AS unit_share,
+                COALESCE(SUM(LEAST(
+                    t.amount,
+                    CASE t.ticket_type
+                        WHEN 'morning' THEN :ms_morning_2
+                        WHEN 'evening' THEN :ms_evening_2
+                        ELSE 0
+                    END
+                )), 0) AS ministry_share,
                 COALESCE(SUM(t.amount), 0) AS total_revenue
             FROM examination_tickets t
             WHERE 1=1 {$ticketsWhere}
