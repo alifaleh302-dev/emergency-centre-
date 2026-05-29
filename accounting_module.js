@@ -681,6 +681,12 @@ const Accountant = {
             console.error('openFinanceHub error:', err);
             Core.showAlert('حدث خطأ أثناء فتح المركز المالي.', 'error');
         }
+    },
+
+    openDailyInfo() {
+        Core.loadExternalScript("daily_info_module.js", "DailyInfo").then(() => {
+            if (window.DailyInfo) window.DailyInfo.view();
+        });
     }
 
 };
@@ -698,7 +704,8 @@ loading()
         { title: "الفواتير المستحقة", icon: "bi-receipt-cutoff", url: "javascript:void(0)", action: "Accountant.viewPendingInvoices()", active: true },
         { title: "الخزينة اليومية", icon: "bi-safe", url: "javascript:void(0)", action: "Accountant.viewTreasury('receipts')" },
         { title: "الإيرادات", icon: "bi-graph-up-arrow", url: "javascript:void(0)", action: "Accountant.viewRevenues('years')" },
-        { title: "المركز المالي والسندي", icon: "bi-bank2", url: "javascript:void(0)", action: "Accountant.openFinanceHub()" }
+        { title: "المركز المالي والسندي", icon: "bi-bank2", url: "javascript:void(0)", action: "Accountant.openFinanceHub()" },
+        { title: "المعلومية اليومية", icon: "bi-newspaper", url: "javascript:void(0)", action: "Accountant.openDailyInfo()" }
     ];
     Core.renderSidebar(accountingLinks);
     await Core.initRealtime(AccountantData.currentUser);
