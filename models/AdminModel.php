@@ -933,20 +933,68 @@ class AdminModel
 
     /**
      * إلغاء فاتورة (Soft delete)
+     *
+     * إذا كانت الفاتورة مرتبطة بسند آخر (A↔B في الإعفاء الجزئي)
+     * نلغي السند المرتبط أيضاً حتى لا يبقى جزء من العملية المالية
+     * محتسباً داخل التقارير أو المجاميع.
      */
     public function cancelInvoice(int|string $invoiceId, int|string $adminId, string $reason): array
     {
-        $stmt = $this->conn->prepare(
-            'UPDATE Invoices SET cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r, updated_at = NOW()
-             WHERE invoice_id = :id AND cancelled_at IS NULL
-             RETURNING invoice_id, serial_number, net_amount'
-        );
-        $stmt->execute([':id' => (string) $invoiceId, ':by' => (string) $adminId, ':r' => mb_substr($reason, 0, 255)]);
-        $row = $stmt->fetch();
-        if (!$row) {
-            throw new InvalidArgumentException('الفاتورة غير موجودة أو ملغاة مسبقاً.');
+        $reason = mb_substr($reason, 0, 255);
+
+        try {
+            $this->conn->beginTransaction();
+
+            $lookup = $this->conn->prepare(
+                'SELECT invoice_id, serial_number, net_amount, related_invoice_id
+                 FROM Invoices
+                 WHERE invoice_id = :id AND cancelled_at IS NULL
+                 FOR UPDATE'
+            );
+            $lookup->execute([':id' => (string) $invoiceId]);
+            $row = $lookup->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                throw new InvalidArgumentException('الفاتورة غير موجودة أو ملغاة مسبقاً.');
+            }
+
+            $cancelOne = $this->conn->prepare(
+                'UPDATE Invoices
+                 SET cancelled_at = NOW(), cancelled_by = :by, cancel_reason = :r, updated_at = NOW()
+                 WHERE invoice_id = :id AND cancelled_at IS NULL'
+            );
+
+            $cancelOne->execute([
+                ':id' => (string) $invoiceId,
+                ':by' => (string) $adminId,
+                ':r'  => $reason,
+            ]);
+
+            $relatedCancelled = null;
+            if (!empty($row['related_invoice_id'])) {
+                $relatedId = (string) $row['related_invoice_id'];
+                $cancelOne->execute([
+                    ':id' => $relatedId,
+                    ':by' => (string) $adminId,
+                    ':r'  => $reason,
+                ]);
+                $relatedCancelled = (int) $row['related_invoice_id'];
+            }
+
+            $this->conn->commit();
+
+            $row['invoice_id'] = (int) $row['invoice_id'];
+            $row['serial_number'] = $row['serial_number'] !== null ? (int) $row['serial_number'] : null;
+            $row['net_amount'] = (float) $row['net_amount'];
+            $row['related_cancelled_invoice_id'] = $relatedCancelled;
+
+            return $row;
+        } catch (Throwable $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $e;
         }
-        return $row;
     }
 
     /**

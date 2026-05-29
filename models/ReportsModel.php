@@ -33,11 +33,11 @@ class ReportsModel
                 }
                 if (
                     mb_strpos($serviceName, 'تلف') !== false
+                    || mb_strpos($serviceName, 'تلفزيوني') !== false
                     || mb_strpos($serviceName, 'سونار') !== false
                     || mb_strpos($serviceName, 'إيكو') !== false
                     || mb_strpos($serviceName, 'ايكو') !== false
                     || mb_strpos($serviceName, 'تليفزيوني') !== false
-                    || mb_strpos($serviceName, 'تلفزيوني') !== false
                 ) {
                     return 'tv_xray';
                 }
@@ -60,15 +60,15 @@ class ReportsModel
     }
 
     /**
-     * بنية الأعمدة الفارغة في التقرير.
+     * الأعمدة الفارغة في التقرير
      */
     private function emptyColumns(): array
     {
         return [
-            'mojara'   => 0.0,
-            'ruqood'   => 0.0,
-            'amaliyat' => 0.0,
             'lab'      => 0.0,
+            'amaliyat' => 0.0,
+            'ruqood'   => 0.0,
+            'mojara'   => 0.0,
             'ecg'      => 0.0,
             'xray'     => 0.0,
             'qararat'  => 0.0,
@@ -99,7 +99,45 @@ class ReportsModel
     }
 
     /**
-     * جلب إعدادات الفترة الصباحية.
+     * شرط الفاتورة النشطة وغير المرتبطة بسند ملغى
+     */
+    private function activeInvoiceCondition(string $alias = 'i'): string
+    {
+        return "{$alias}.cancelled_at IS NULL
+            AND (
+                {$alias}.related_invoice_id IS NULL
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM invoices rel
+                    WHERE rel.invoice_id = {$alias}.related_invoice_id
+                      AND rel.cancelled_at IS NOT NULL
+                )
+            )";
+    }
+
+    /**
+     * دمج أكثر من نطاق تسلسلي في نطاق واحد
+     */
+    private function mergeRanges(?array ...$ranges): ?array
+    {
+        $valid = array_values(array_filter($ranges, static fn ($r) => is_array($r) && !empty($r['from']) && !empty($r['to'])));
+        if (empty($valid)) {
+            return null;
+        }
+
+        $froms = array_map(static fn ($r) => (int) $r['from'], $valid);
+        $tos   = array_map(static fn ($r) => (int) $r['to'], $valid);
+        $count = array_sum(array_map(static fn ($r) => (int) ($r['count'] ?? 0), $valid));
+
+        return [
+            'from'  => min($froms),
+            'to'    => max($tos),
+            'count' => $count,
+        ];
+    }
+
+    /**
+     * جلب إعدادات الفترة الصباحية
      */
     public function getShiftSettings(): array
     {
@@ -116,7 +154,7 @@ class ReportsModel
     }
 
     /**
-     * جلب إعدادات الترويسة.
+     * جلب إعدادات الترويسة
      */
     public function getHeaderSettings(): array
     {
@@ -128,7 +166,7 @@ class ReportsModel
     }
 
     /**
-     * تحديد الفترة (صباحية/مسائية) اعتماداً على ساعة السند.
+     * تحديد الفترة (صباحية/مسائية) بناءً على الوقت
      */
     private function getShift(string $timestamp, int $mStart, int $mEnd): string
     {
@@ -137,16 +175,13 @@ class ReportsModel
     }
 
     /**
-     * يوزّع المبالغ الخاصة بكل فاتورة على تفاصيلها حتى نضمن:
-     * - الكاش = حصة المركز فقط.
-     * - المشتركة = حصة الوزارة كاملة وثابتة.
-     * - الإعفاء = الجزء المعفى من حصة المركز فقط.
+     * تجهيز بيانات الفواتير والخدمات للتقرير اليومي.
      *
-     * ملاحظة مهمة:
-     * لا نعتمد على center_share_at_time أو total_at_time لأنها غير موجودة
-     * في المخطط الحالي. لذلك نستخرج الإجمالي من service_price_at_time * quantity،
-     * ونستخدم ministry_share_at_time مع fallback إلى services_master.ministry_share
-     * عند الحاجة، خصوصاً لسندات C القديمة.
+     * منطق التوزيع:
+     * - حصة الوزارة ثابتة على سند A فقط.
+     * - حصة المركز = المدفوع نقداً بعد خصم حصة الوزارة.
+     * - الإعفاء = الجزء غير المحصل من حصة المركز، أو كامل قيمة الخدمة في سند C.
+     * - أي سند مرتبط بسند ملغى يُستبعد بالكامل.
      */
     public function getInvoiceData(string $reportDate, int $mStart, int $mEnd): array
     {
@@ -156,23 +191,25 @@ class ReportsModel
                 i.paid_at,
                 i.net_amount,
                 i.exemption_value,
+                i.related_invoice_id,
                 dt.doc_name,
                 id.detail_id,
-                id.quantity,
+                id.service_id,
                 sm.service_name,
-                d.department_code,
-                id.service_price_at_time,
-                id.ministry_share_at_time,
-                COALESCE(sm.ministry_share, 0) AS ministry_share_master
+                COALESCE(d.department_code, 'Other') AS department_code,
+                CAST(id.quantity AS FLOAT) AS quantity,
+                CAST(id.service_price_at_time * id.quantity AS FLOAT) AS gross_svc,
+                CAST(id.ministry_share_at_time AS FLOAT) AS ministry_svc,
+                CAST(COALESCE(sm.ministry_share, 0) * id.quantity AS FLOAT) AS ministry_svc_fallback
             FROM invoices i
-            JOIN document_types dt  ON i.doc_type_id = dt.doc_type_id
+            JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
             JOIN invoice_details id ON id.invoice_id = i.invoice_id
             JOIN services_master sm ON id.service_id = sm.service_id
-            JOIN service_categories sc ON sm.category_id = sc.category_id
-            JOIN departments d ON sc.department_id = d.department_id
-            WHERE i.cancelled_at IS NULL
+            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
+            LEFT JOIN departments d ON sc.department_id = d.department_id
+            WHERE {$this->activeInvoiceCondition('i')}
               AND DATE(i.paid_at) = :report_date
-              AND dt.doc_name IN ('A', 'C')
+              AND dt.doc_name IN ('A', 'B', 'C')
             ORDER BY i.invoice_id, id.detail_id
         ";
 
@@ -181,77 +218,101 @@ class ReportsModel
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = $this->createEmptyResult();
-        if (!$rows) {
+        if (empty($rows)) {
             return $result;
         }
 
         $grouped = [];
         foreach ($rows as $row) {
-            $grouped[(int) $row['invoice_id']][] = $row;
+            $invoiceId = (int) $row['invoice_id'];
+            if (!isset($grouped[$invoiceId])) {
+                $grouped[$invoiceId] = [
+                    'invoice_id'         => $invoiceId,
+                    'paid_at'            => (string) $row['paid_at'],
+                    'doc_name'           => (string) $row['doc_name'],
+                    'net_amount'         => (float) $row['net_amount'],
+                    'exemption_value'    => (float) $row['exemption_value'],
+                    'related_invoice_id' => $row['related_invoice_id'] !== null ? (int) $row['related_invoice_id'] : null,
+                    'lines'              => [],
+                ];
+            }
+
+            $grossSvc = (float) $row['gross_svc'];
+            $storedMinistry = (float) $row['ministry_svc'];
+            $fallbackMinistry = (float) $row['ministry_svc_fallback'];
+            $ministrySvc = ((string) $row['doc_name'] === 'A')
+                ? min($storedMinistry > 0 ? $storedMinistry : $fallbackMinistry, $grossSvc)
+                : 0.0;
+
+            $grouped[$invoiceId]['lines'][] = [
+                'column'     => $this->mapServiceToColumn((string) $row['department_code'], (string) $row['service_name']),
+                'quantity'   => (float) $row['quantity'],
+                'gross'      => $grossSvc,
+                'ministry'   => $ministrySvc,
+                'raw_center' => max($grossSvc - $ministrySvc, 0.0),
+            ];
         }
 
-        foreach ($grouped as $invoiceRows) {
-            $first = $invoiceRows[0];
-            $shift = $this->getShift((string) $first['paid_at'], $mStart, $mEnd);
-            $docName = (string) $first['doc_name'];
+        foreach ($grouped as $invoice) {
+            $shift = $this->getShift($invoice['paid_at'], $mStart, $mEnd);
+            $doc   = $invoice['doc_name'];
+            $lines = $invoice['lines'];
 
-            $prepared = [];
-            $invoiceMinistryTotal = 0.0;
-            $invoiceCenterRawTotal = 0.0;
+            $grossTotal       = array_sum(array_map(static fn ($line) => $line['gross'], $lines));
+            $rawCenterTotal   = array_sum(array_map(static fn ($line) => $line['raw_center'], $lines));
+            $rawMinistryTotal = array_sum(array_map(static fn ($line) => $line['ministry'], $lines));
 
-            foreach ($invoiceRows as $row) {
-                $gross = (float) $row['service_price_at_time'] * (int) $row['quantity'];
-                $storedMinistry = (float) ($row['ministry_share_at_time'] ?? 0);
-                $fallbackMinistry = (float) ($row['ministry_share_master'] ?? 0) * (int) $row['quantity'];
-                $ministry = $storedMinistry > 0 ? $storedMinistry : $fallbackMinistry;
-                $ministry = min($ministry, $gross);
-                $rawCenter = max($gross - $ministry, 0.0);
+            $ministryCollectedTotal = 0.0;
+            $centerCollectedTotal   = 0.0;
+            $distributionBaseTotal  = 0.0;
 
-                $prepared[] = [
-                    'department_code' => (string) $row['department_code'],
-                    'service_name'    => (string) $row['service_name'],
-                    'quantity'        => (float) $row['quantity'],
-                    'gross'           => $gross,
-                    'ministry'        => $ministry,
-                    'raw_center'      => $rawCenter,
-                ];
-
-                $invoiceMinistryTotal += $ministry;
-                $invoiceCenterRawTotal += $rawCenter;
+            if ($doc === 'A') {
+                $ministryCollectedTotal = $rawMinistryTotal;
+                $centerCollectedTotal   = max($invoice['net_amount'] - $ministryCollectedTotal, 0.0);
+                $centerCollectedTotal   = min($centerCollectedTotal, $rawCenterTotal);
+                $distributionBaseTotal  = $rawCenterTotal;
+            } elseif ($doc === 'B') {
+                // توافق عكسي مع سندات B القديمة التي كانت تحمل التفاصيل نفسها.
+                $ministryCollectedTotal = 0.0;
+                $centerCollectedTotal   = min(max($invoice['net_amount'], 0.0), $grossTotal);
+                $distributionBaseTotal  = $grossTotal;
+            } else {
+                // سند C = إعفاء كلي
+                $ministryCollectedTotal = 0.0;
+                $centerCollectedTotal   = 0.0;
+                $distributionBaseTotal  = $grossTotal;
             }
 
-            $centerCollectedTotal = 0.0;
-            $exemptTotal = 0.0;
+            $centerRatio = $distributionBaseTotal > 0 ? ($centerCollectedTotal / $distributionBaseTotal) : 0.0;
 
-            if ($docName === 'A') {
-                // الصافي المدفوع يتضمن حصة الوزارة؛ لذا حصة المركز = المدفوع - الوزارة.
-                $centerCollectedTotal = max((float) $first['net_amount'] - $invoiceMinistryTotal, 0.0);
-                $centerCollectedTotal = min($centerCollectedTotal, $invoiceCenterRawTotal);
-                $exemptTotal = max($invoiceCenterRawTotal - $centerCollectedTotal, 0.0);
-            } elseif ($docName === 'C') {
-                // في الإعفاء الكلي لا يوجد كاش للمركز، وتظل حصة الوزارة ثابتة بحسب الخدمة.
-                $centerCollectedTotal = 0.0;
-                $exemptTotal = $invoiceCenterRawTotal;
-            }
+            foreach ($lines as $line) {
+                $col = $line['column'];
 
-            foreach ($prepared as $detail) {
-                $col = $this->mapServiceToColumn($detail['department_code'], $detail['service_name']);
-                $rawCenter = $detail['raw_center'];
-                $ratio = $invoiceCenterRawTotal > 0 ? ($rawCenter / $invoiceCenterRawTotal) : 0.0;
-                $centerAllocated = $ratio > 0 ? $centerCollectedTotal * $ratio : 0.0;
-                $exemptAllocated = $ratio > 0 ? $exemptTotal * $ratio : 0.0;
+                if ($doc === 'A') {
+                    $centerSvc   = $line['raw_center'] * $centerRatio;
+                    $ministrySvc = $line['ministry'];
+                    $exemptSvc   = max($line['raw_center'] - $centerSvc, 0.0);
+                } elseif ($doc === 'B') {
+                    $centerSvc   = $line['gross'] * $centerRatio;
+                    $ministrySvc = 0.0;
+                    $exemptSvc   = max($line['gross'] - $centerSvc, 0.0);
+                } else {
+                    $centerSvc   = 0.0;
+                    $ministrySvc = 0.0;
+                    $exemptSvc   = $line['gross'];
+                }
 
-                $result[$shift]['visitors'][$col] += $detail['quantity'];
-                $result[$shift]['visitors']['total'] += $detail['quantity'];
+                $result[$shift]['visitors'][$col]    += $line['quantity'];
+                $result[$shift]['visitors']['total'] += $line['quantity'];
 
-                $result[$shift]['center'][$col] += $centerAllocated;
-                $result[$shift]['center']['total'] += $centerAllocated;
+                $result[$shift]['center'][$col]      += $centerSvc;
+                $result[$shift]['center']['total']   += $centerSvc;
 
-                $result[$shift]['ministry'][$col] += $detail['ministry'];
-                $result[$shift]['ministry']['total'] += $detail['ministry'];
+                $result[$shift]['ministry'][$col]    += $ministrySvc;
+                $result[$shift]['ministry']['total'] += $ministrySvc;
 
-                $result[$shift]['exempt'][$col] += $exemptAllocated;
-                $result[$shift]['exempt']['total'] += $exemptAllocated;
+                $result[$shift]['exempt'][$col]      += $exemptSvc;
+                $result[$shift]['exempt']['total']   += $exemptSvc;
             }
         }
 
@@ -259,16 +320,10 @@ class ReportsModel
     }
 
     /**
-     * بيانات تذاكر المعاينة + توزيعها إلى حصة مركز/وزارة.
+     * بيانات تذاكر المعاينة
      */
     public function getTicketData(string $reportDate): array
     {
-        $settingsStmt = $this->conn->query(
-            "SELECT setting_key, setting_value FROM system_settings
-             WHERE setting_key IN ('ticket_ministry_share_morning', 'ticket_ministry_share_evening')"
-        );
-        $ticketSettings = $settingsStmt->fetchAll(PDO::FETCH_KEY_PAIR) ?: [];
-
         $sql = "
             SELECT
                 t.ticket_type AS shift,
@@ -282,54 +337,29 @@ class ReportsModel
               AND DATE(t.created_at) = :report_date
             GROUP BY t.ticket_type
         ";
+
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([':report_date' => $reportDate]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = [
-            'morning' => [
-                'count' => 0,
-                'amount' => 0.0,
-                'center_amount' => 0.0,
-                'ministry_amount' => 0.0,
-                'serial_from' => null,
-                'serial_to' => null,
-            ],
-            'evening' => [
-                'count' => 0,
-                'amount' => 0.0,
-                'center_amount' => 0.0,
-                'ministry_amount' => 0.0,
-                'serial_from' => null,
-                'serial_to' => null,
-            ],
+            'morning' => ['count' => 0, 'amount' => 0.0, 'serial_from' => null, 'serial_to' => null],
+            'evening' => ['count' => 0, 'amount' => 0.0, 'serial_from' => null, 'serial_to' => null],
         ];
 
         foreach ($rows as $row) {
             $shift = ($row['shift'] === 'morning') ? 'morning' : 'evening';
-            $count = (int) $row['ticket_count'];
-            $amount = (float) $row['ticket_amount'];
-            $perTicketMinistry = (float) (
-                $shift === 'morning'
-                    ? ($ticketSettings['ticket_ministry_share_morning'] ?? 30)
-                    : ($ticketSettings['ticket_ministry_share_evening'] ?? 100)
-            );
-            $ministryAmount = min($amount, $count * $perTicketMinistry);
-            $centerAmount = max($amount - $ministryAmount, 0.0);
-
-            $result[$shift]['count'] = $count;
-            $result[$shift]['amount'] = $amount;
-            $result[$shift]['center_amount'] = $centerAmount;
-            $result[$shift]['ministry_amount'] = $ministryAmount;
+            $result[$shift]['count']       = (int) $row['ticket_count'];
+            $result[$shift]['amount']      = (float) $row['ticket_amount'];
             $result[$shift]['serial_from'] = $row['serial_from'];
-            $result[$shift]['serial_to'] = $row['serial_to'];
+            $result[$shift]['serial_to']   = $row['serial_to'];
         }
 
         return $result;
     }
 
     /**
-     * نطاقات الأرقام التسلسلية للسندات.
+     * نطاقات الأرقام التسلسلية للسندات
      */
     public function getSerialRanges(string $reportDate): array
     {
@@ -341,16 +371,17 @@ class ReportsModel
                 COUNT(*) AS doc_count
             FROM invoices i
             JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
-            WHERE i.cancelled_at IS NULL
+            WHERE {$this->activeInvoiceCondition('i')}
               AND DATE(i.paid_at) = :report_date
               AND dt.doc_name IN ('A', 'B', 'C')
             GROUP BY dt.doc_name
         ";
+
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([':report_date' => $reportDate]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $result = ['A' => null, 'B' => null, 'C' => null, 'L' => null];
+        $result = ['A' => null, 'B' => null, 'C' => null, 'L' => null, 'EXEMPT' => null];
         foreach ($rows as $row) {
             $result[$row['doc_name']] = [
                 'from'  => $row['serial_from'],
@@ -359,14 +390,18 @@ class ReportsModel
             ];
         }
 
+        $result['EXEMPT'] = $this->mergeRanges($result['B'], $result['C']);
+
         try {
             $sqlL = "
                 SELECT
-                    MIN(serial_number) AS serial_from,
-                    MAX(serial_number) AS serial_to,
+                    MIN(ld.serial_number) AS serial_from,
+                    MAX(ld.serial_number) AS serial_to,
                     COUNT(*) AS doc_count
-                FROM laboratory_documents
-                WHERE DATE(created_at) = :report_date
+                FROM laboratory_documents ld
+                LEFT JOIN invoices i ON ld.invoice_id = i.invoice_id
+                WHERE DATE(ld.created_at) = :report_date
+                  AND (ld.invoice_id IS NULL OR i.cancelled_at IS NULL)
             ";
             $stmtL = $this->conn->prepare($sqlL);
             $stmtL->execute([':report_date' => $reportDate]);
