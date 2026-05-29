@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../config/bootstrap.php';
+require_once __DIR__ . '/../controllers/ReportsController.php';
 
 ini_set('log_errors', '1');
 ini_set('error_log', '/dev/stderr');
@@ -176,6 +177,7 @@ $routes = [
         $model->markAllRead($userData['job']);
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     }],
+    'reports/daily_info' => ['methods' => ['GET'], 'handler' => fn () => (new ReportsController())->getDailyInfo()],
 
     // إعدادات الترويسة - متاح لأي مستخدم مسجل دخوله لاستخدامها في نماذج الطباعة
     'settings/header' => ['methods' => ['GET'], 'handler' => function (): void {
