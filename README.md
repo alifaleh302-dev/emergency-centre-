@@ -4,6 +4,72 @@
 
 ---
 
+## 🏗️ بنية المشروع
+
+تمت إعادة تنظيم المشروع وفقًا لأفضل الممارسات (Industry Standard) لفصل الواجهة العامّة عن كود الخادم وتحصين الأمان:
+
+```
+emergency-centre/
+├── public/                       ← DocumentRoot (الوحيد المكشوف للويب)
+│   ├── index.html                ← الواجهة الرئيسية
+│   ├── login.html
+│   ├── .htaccess                 ← رؤوس أمنية + ضغط + كاش
+│   ├── api/
+│   │   ├── index.php             ← مدخل الـ API الوحيد
+│   │   └── .htaccess             ← Apache rewrite
+│   └── assets/
+│       ├── css/                  ← (محجوز للإضافات المستقبلية)
+│       └── js/
+│           ├── core/main.js      ← النواة المركزية (Core)
+│           └── modules/          ← وحدات حسب الدور
+│               ├── doctor.js
+│               ├── admin.js
+│               ├── accounting.js
+│               ├── finance.js
+│               └── daily_info.js
+│
+├── src/                          ← كود PHP (غير مكشوف عبر الويب)
+│   ├── Config/
+│   │   ├── bootstrap.php         ← تحميل .env + autoload + session
+│   │   └── Database.php
+│   ├── Controllers/              ← طبقة التحكم
+│   ├── Models/                   ← طبقة البيانات
+│   └── Utils/                    ← خدمات مساعدة (JWT/Auth/Pusher...)
+│
+├── database/
+│   └── migrations/               ← ترحيلات SQL (محميّة من الويب)
+│
+├── docs/
+│   └── changelogs/               ← سجلات التغييرات CHANGES_*.md
+│
+├── .env.example
+├── .gitignore
+├── .dockerignore
+├── composer.json
+├── Dockerfile                    ← DocumentRoot = /var/www/html/public
+└── README.md
+```
+
+### لماذا هذه البنية؟
+
+| المجلد | الغرض |
+|--------|--------|
+| `public/` | **الملفات الوحيدة المكشوفة للويب.** أي محاولة للوصول إلى `/controllers/...` أو `/migrations/...` لن تعود بأي شيء. |
+| `src/` | **كود PHP الحمّاس.** Controllers / Models / Utils غير قابلة للتنزيل عبر HTTP. |
+| `database/migrations/` | **SQL محمي.** سابقًا كان ممكنًا تنزيل أي فايل .sql مباشرة. |
+| `docs/changelogs/` | تجميع سجلات التغيير في مكان واحد بدل تلويث الجذر. |
+| `assets/js/modules/` | وحدات JS منظّمة حسب الدور (doctor / admin / accounting...) بدلاً من رمي كل شيء في الجذر. |
+
+### التغييرات التي رافقت إعادة الهيكلة
+- `Dockerfile`: تحديث Apache `DocumentRoot` إلى `public/` + تفعيل `mod_headers`.
+- `composer.json`: تحديث classmap للمسارات الجديدة.
+- `src/Config/bootstrap.php`: `BASE_PATH` صار يشير لجذر المشروع، وأضيف `SRC_PATH` للـ autoloader.
+- `Roles.script_url` في قاعدة البيانات: تحديث القيم إلى `assets/js/modules/*.js`.
+- إضافة `.gitignore` و `.dockerignore` و `public/.htaccess` برؤوس أمنية.
+
+
+---
+
 ## 🆕 آخر تحديث: تحويل المفاتيح من UUID إلى INT auto-increment (Migration 003)
 
 تم تحويل جميع المفاتيح الأساسية والأجنبية في قاعدة البيانات من نوع `UUID` إلى `SERIAL` (INTEGER auto-increment) لتبسيط واجهة لوحة الإدارة ورفع أداء الاستعلامات.

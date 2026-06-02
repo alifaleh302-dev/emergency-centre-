@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/BaseController.php';
-require_once __DIR__ . '/../models/ReportsModel.php';
+require_once __DIR__ . '/../Models/ReportsModel.php';
 
 /**
  * ReportsController - تحكم تقرير المعلومية اليومية

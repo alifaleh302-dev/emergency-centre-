@@ -1,8 +1,8 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../config/bootstrap.php';
-require_once __DIR__ . '/../controllers/ReportsController.php';
+require_once dirname(__DIR__, 2) . '/src/Config/bootstrap.php';
+require_once dirname(__DIR__, 2) . '/src/Controllers/ReportsController.php';
 
 ini_set('log_errors', '1');
 ini_set('error_log', '/dev/stderr');

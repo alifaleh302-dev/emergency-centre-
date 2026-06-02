@@ -1,0 +1,27 @@
+# استبعاد الملفات غير الضرورية من بناء Docker
+.git/
+.gitignore
+.dockerignore
+.env
+.env.local
+.env.*.local
+
+# الوثائق وسجلات التغيير
+docs/
+README.md
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+node_modules/
+vendor/
+composer.lock
+*.log

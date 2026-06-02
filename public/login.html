@@ -96,7 +96,7 @@
         (function(){ const t=localStorage.getItem('theme')||'light'; document.documentElement.setAttribute('data-theme',t); const i=document.getElementById('login-theme-icon'); if(i) i.className=t==='dark'?'bi bi-sun-fill':'bi bi-moon-fill'; })();
         function toggleLoginTheme(){ const c=document.documentElement.getAttribute('data-theme'); const n=c==='dark'?'light':'dark'; document.documentElement.setAttribute('data-theme',n); localStorage.setItem('theme',n); const i=document.getElementById('login-theme-icon'); if(i) i.className=n==='dark'?'bi bi-sun-fill':'bi bi-moon-fill'; }
     </script>
-    <script src="main_core.js"></script>
+    <script src="assets/js/core/main.js"></script>
     <script>
         async function handleLogin(event) {
             event.preventDefault();

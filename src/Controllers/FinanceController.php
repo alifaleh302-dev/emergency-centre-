@@ -2,8 +2,8 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/BaseController.php';
-require_once __DIR__ . '/../utils/AuditService.php';
-require_once __DIR__ . '/../utils/SettingsService.php';
+require_once __DIR__ . '/../Utils/AuditService.php';
+require_once __DIR__ . '/../Utils/SettingsService.php';
 
 /**
  * FinanceController

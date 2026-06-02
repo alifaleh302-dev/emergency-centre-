@@ -1,0 +1,36 @@
+# ──────────── متغيرات البيئة والأسرار ────────────
+.env
+.env.local
+.env.*.local
+
+# ──────────── Composer ────────────
+/vendor/
+composer.lock
+
+# ──────────── PHP ────────────
+*.log
+error_log
+*.cache
+
+# ──────────── Editor / IDE ────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ──────────── OS ────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ──────────── Build artifacts ────────────
+/dist/
+/build/
+node_modules/
+
+# ──────────── Temp & backups ────────────
+*.bak
+*.tmp
+*.old
+/tmp/

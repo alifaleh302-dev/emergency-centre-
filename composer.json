@@ -9,10 +9,10 @@
     },
     "autoload": {
         "classmap": [
-            "config/",
-            "controllers/",
-            "models/",
-            "utils/"
+            "src/Config",
+            "src/Controllers",
+            "src/Models",
+            "src/Utils"
         ]
     }
 }

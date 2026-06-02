@@ -24,7 +24,7 @@
  *   - Print Templates (سند مفرد + تقرير دفعة).
  *   - Ministry Report Modal.
  *
- * الاعتمادات: Core (main_core.js) + Bootstrap 5.3 + Chart.js (محمَّلة في index.html).
+ * الاعتمادات: Core (assets/js/core/main.js) + Bootstrap 5.3 + Chart.js (محمَّلة في index.html).
  *
  * لا يُسجَّل هذا الموديول في القائمة الجانبية تلقائياً — التكامل مؤجَّل إلى M6.
  * للاستخدام اليدوي/الاختبار: `Finance.viewHub()`.

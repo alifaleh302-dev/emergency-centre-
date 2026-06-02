@@ -1,8 +1,14 @@
 <?php
 declare(strict_types=1);
 
+// BASE_PATH = جذر المشروع (parent of src/)
 if (!defined('BASE_PATH')) {
-    define('BASE_PATH', __DIR__ . '/..');
+    define('BASE_PATH', dirname(__DIR__, 2));
+}
+
+// SRC_PATH = مجلد كود PHP (src/)
+if (!defined('SRC_PATH')) {
+    define('SRC_PATH', dirname(__DIR__));
 }
 
 // Polyfill minimal mbstring functions to keep the app usable even if the
@@ -64,10 +70,10 @@ if (!function_exists('mb_strtolower')) {
 
 spl_autoload_register(function (string $class): void {
     $directories = [
-        BASE_PATH . '/config',
-        BASE_PATH . '/controllers',
-        BASE_PATH . '/models',
-        BASE_PATH . '/utils',
+        SRC_PATH . '/Config',
+        SRC_PATH . '/Controllers',
+        SRC_PATH . '/Models',
+        SRC_PATH . '/Utils',
     ];
 
     foreach ($directories as $directory) {

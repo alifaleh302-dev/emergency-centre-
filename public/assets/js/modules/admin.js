@@ -81,7 +81,7 @@ const Admin = {
 
             // تحميل موديول Finance Hub ديناميكياً (أول مرة فقط)
             if (typeof window.Finance === 'undefined' || typeof Finance.viewHub !== 'function') {
-                await Core.loadExternalScript('finance_module.js', 'finance-hub-module');
+                await Core.loadExternalScript('assets/js/modules/finance.js', 'finance-hub-module');
             }
             if (typeof window.Finance === 'undefined' || typeof Finance.viewHub !== 'function') {
                 Core.showAlert('تعذر تحميل وحدة المركز المالي.', 'error');
