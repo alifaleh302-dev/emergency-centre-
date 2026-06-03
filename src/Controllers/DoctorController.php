@@ -547,6 +547,25 @@ class DoctorController extends BaseController
             return 'هذا المريض مسجل مسبقاً بنفس الاسم والعنوان.';
         }
 
+        // 🆕 رسائل إقفال الفترة (RuntimeException من ExaminationTicketModel)
+        // نعيد الرسالة كما هي لأنها واضحة وعربية.
+        if (
+            str_contains($message, 'إقفال الفترة') ||
+            str_contains($message, 'إصدار تذاكر')
+        ) {
+            return $message;
+        }
+
+        // في وضع التطوير: أظهر رسالة الخطأ الحقيقية لتسهيل التشخيص
+        // (يمكن إخفاؤها في الإنتاج عبر APP_DEBUG=false)
+        $debug = getenv('APP_DEBUG');
+        if ($debug === 'true' || $debug === '1') {
+            return 'خطأ تقني: ' . $message;
+        }
+
+        // تسجيل الخطأ في logs للمراجعة
+        error_log('[DoctorController] ' . $message . "\n" . $exception->getTraceAsString());
+
         return 'حدث خطأ أثناء معالجة طلب الطبيب.';
     }
 }

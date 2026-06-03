@@ -592,8 +592,9 @@ class AccountingModel
     }
 
     /**
-     * التحقق من وجود تذاكر في فترة سابقة غير مُقفلة (بتاريخ < اليوم)
-     * للنوع المحدد. يُستخدم لمنع إصدار تذاكر جديدة قبل إقفال الفترة السابقة.
+     * التحقق من وجود تذاكر في فترة الأمس فقط غير مُقفلة للنوع المحدد.
+     * يُستخدم لمنع إصدار تذاكر جديدة قبل إقفال فترة الأمس.
+     * (تذاكر أقدم من يومين تعتبر بيانات تاريخية)
      */
     public function hasOpenShiftBefore(string $shiftType): bool
     {
@@ -601,12 +602,12 @@ class AccountingModel
             ? "SELECT 1 FROM examination_tickets
                   WHERE ticket_type = :shift_type
                     AND shift_closure_id IS NULL
-                    AND DATE(created_at AT TIME ZONE 'UTC') < CURRENT_DATE
+                    AND DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE - INTERVAL '1 day'
                   LIMIT 1"
             : "SELECT 1 FROM examination_tickets
                   WHERE ticket_type = :shift_type
                     AND shift_closure_id IS NULL
-                    AND DATE(created_at) < CURDATE()
+                    AND DATE(created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
                   LIMIT 1";
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([':shift_type' => $shiftType]);
