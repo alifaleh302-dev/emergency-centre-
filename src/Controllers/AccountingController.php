@@ -277,4 +277,189 @@ class AccountingController extends BaseController
 
         return $invoices;
     }
+
+    // =====================================================================
+    // 🆕 واجهة "اليومية" + إقفال الفترة (Daily Journal + Shift Closure)
+    // =====================================================================
+
+    /**
+     * GET /api/accounting/daily_journal?date=YYYY-MM-DD&department_id=N
+     *
+     * يجلب بيانات جدول اليومية:
+     *   - سندات A أولاً (مجموعة مدفوعة)
+     *   - فاصل بصري (يتم إضافته في الواجهة بين المجموعتين)
+     *   - سندات B/C ثانياً (إعفاءات)
+     *   - صفوف إجماليات التذاكر للفترتين (صباحي/مسائي) مع زر إقفال
+     */
+    public function getDailyJournal(): void
+    {
+        try {
+            $date = isset($_GET['date']) ? trim((string) $_GET['date']) : '';
+            $deptId = isset($_GET['department_id']) ? (int) $_GET['department_id'] : 0;
+
+            // تحقق بسيط من صيغة التاريخ
+            if ($date !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+                throw new InvalidArgumentException('صيغة التاريخ غير صالحة (استخدم YYYY-MM-DD).');
+            }
+
+            $rows = $this->model->getDailyJournal($date ?: null, $deptId > 0 ? $deptId : null);
+
+            // بناء صفوف الجدول
+            $invoiceRows = [];
+            foreach ($rows as $row) {
+                $docName = (string) $row['doc_name'];
+                $hasRelated = !empty($row['related_invoice_id']);
+
+                // تحديد نوع السند عربياً
+                if ($docName === 'A' && !$hasRelated) {
+                    $typeLabel = 'دفع كامل (A)';
+                    $amount = (float) $row['net_amount'];
+                } elseif ($docName === 'A' && $hasRelated) {
+                    $typeLabel = 'دفع جزئي (A)';
+                    $amount = (float) $row['net_amount'];
+                } elseif ($docName === 'B' && $hasRelated) {
+                    $typeLabel = 'إعفاء جزئي (B)';
+                    $amount = (float) $row['exemption_value'];
+                } elseif ($docName === 'C') {
+                    $typeLabel = 'إعفاء كلي (C)';
+                    $amount = (float) $row['exemption_value'];
+                } else {
+                    $typeLabel = $docName;
+                    $amount = (float) $row['net_amount'];
+                }
+
+                $invoiceRows[] = [
+                    'invoice_id'      => (int) $row['invoice_id'],
+                    'serial_number'   => (int) $row['serial_number'],
+                    'doc_name'        => $docName,
+                    'type_label'      => $typeLabel,
+                    'group_order'     => (int) $row['group_order'], // 0 = A, 1 = B/C
+                    'patient_name'    => (string) $row['patient_name'],
+                    'department_id'   => $row['department_id'] !== null ? (int) $row['department_id'] : null,
+                    'department_name' => (string) $row['department_name'],
+                    'department_code' => (string) $row['department_code'],
+                    'amount'          => $amount,
+                    'total'           => (float) $row['total'],
+                    'exemption_value' => (float) $row['exemption_value'],
+                    'net_amount'      => (float) $row['net_amount'],
+                    'cashier'         => (string) $row['cashier'],
+                    'time'            => (string) $row['time'],
+                ];
+            }
+
+            // جلب إجماليات التذاكر للفترتين (فقط غير المُقفلة)
+            $morning = $this->model->getShiftTicketsSummary('morning', $date ?: null);
+            $evening = $this->model->getShiftTicketsSummary('evening', $date ?: null);
+            $settings = $this->model->getTicketShareSettings();
+
+            $buildShiftRow = function (?array $summary, string $type) use ($settings): ?array {
+                if ($summary === null) return null;
+                $count = (int) $summary['tickets_count'];
+                $totalAmount = (float) $summary['total_amount'];
+                $ministryPerTicket = $type === 'morning'
+                    ? (float) ($settings['ticket_ministry_share_morning'] ?? 0.0)
+                    : (float) ($settings['ticket_ministry_share_evening'] ?? 0.0);
+                $ministryShare = round($ministryPerTicket * $count, 2);
+                $centerShare = max(0.0, $totalAmount - $ministryShare);
+                return [
+                    'shift_type'     => $type,
+                    'shift_label'    => $type === 'morning' ? 'صباحي' : 'مسائي',
+                    'start_no'       => (int) $summary['start_no'],
+                    'end_no'         => (int) $summary['end_no'],
+                    'tickets_count'  => $count,
+                    'total_amount'   => $totalAmount,
+                    'center_share'   => $centerShare,
+                    'ministry_share' => $ministryShare,
+                ];
+            };
+
+            $shiftRows = array_values(array_filter([
+                $buildShiftRow($morning, 'morning'),
+                $buildShiftRow($evening, 'evening'),
+            ]));
+
+            // جلب إقفالات اليوم (لعرضها كـ السجلات المئوية المُنجزة)
+            $closures = $this->model->getShiftClosuresForDate($date ?: null);
+
+            $this->success([
+                'date'         => $date ?: date('Y-m-d'),
+                'invoices'     => $invoiceRows,
+                'shift_totals' => $shiftRows,    // فترات مفتوحة تحتاج إقفال
+                'closures'     => $closures,     // إقفالات سابقة في نفس اليوم
+            ]);
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب بيانات اليومية حالياً.', 500);
+        }
+    }
+
+    /**
+     * GET /api/accounting/invoice_services?invoice_id=N
+     * يجلب تفاصيل خدمات سند للعرض داخل Modal "التفاصيل".
+     */
+    public function getInvoiceServices(): void
+    {
+        try {
+            $invoiceId = isset($_GET['invoice_id']) ? (int) $_GET['invoice_id'] : 0;
+            if ($invoiceId <= 0) {
+                throw new InvalidArgumentException('رقم السند غير صالح.');
+            }
+            $services = $this->model->getInvoiceServiceDetails($invoiceId);
+            $this->success(['services' => $services]);
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب تفاصيل السند حالياً.', 500);
+        }
+    }
+
+    /**
+     * POST /api/accounting/close_shift
+     * body: { shift_type: 'morning'|'evening', date?: 'YYYY-MM-DD' }
+     *
+     * يُجري إقفال الفترة (Lock Period) بشكل ذرّي:
+     *   1) تجميع كل تذاكر الفترة غير المُقفلة
+     *   2) توليد سجل shifts_closures + سند A إجمالي
+     *   3) ربط التذاكر بالإقفال (يمنع إعادة الإقفال)
+     */
+    public function closeShift($data): void
+    {
+        try {
+            $shiftType = isset($data->shift_type) ? trim((string) $data->shift_type) : '';
+            $date = isset($data->date) ? trim((string) $data->date) : '';
+
+            if (!in_array($shiftType, ['morning', 'evening'], true)) {
+                throw new InvalidArgumentException('نوع الفترة غير صالح (يجب أن يكون morning أو evening).');
+            }
+            if ($date !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+                throw new InvalidArgumentException('صيغة التاريخ غير صالحة.');
+            }
+
+            $result = $this->model->closeShift($shiftType, $this->cashier_id, $date ?: null);
+
+            // إشعار للمدير / لوحة التحكم (اختياري)
+            try {
+                $notif = new NotificationModel($this->conn);
+                $shiftLabel = $shiftType === 'morning' ? 'الصباحية' : 'المسائية';
+                $notif->create(
+                    'مدير',
+                    'تم إقفال الفترة ' . $shiftLabel,
+                    'rate ' . $result['tickets_count'] . ' تذكرة - إجمالي ' . $result['total_amount'] . ' ريال - سند ' . $result['serial_number'],
+                    'shift_closure',
+                    (int) $result['invoice_id']
+                );
+            } catch (Throwable $e) {
+                // لا نوقف العملية
+            }
+
+            $this->success($result, 'تم إقفال الفترة بنجاح وتوليد سند A برقم ' . $result['serial_number']);
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
+        } catch (RuntimeException $exception) {
+            $this->error($exception->getMessage(), 409);
+        } catch (Throwable $exception) {
+            $this->error('تعذر إقفال الفترة حالياً.', 500);
+        }
+    }
 }

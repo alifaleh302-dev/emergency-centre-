@@ -466,4 +466,337 @@ class AccountingModel
 
         return 'LOWER(' . $column . ') LIKE LOWER(' . $parameter . ')';
     }
+
+    // =====================================================================
+    // 🆕 واجهة "اليومية" + إقفال الفترة (Migration 012)
+    // =====================================================================
+
+    /**
+     * جلب بيانات اليومية — السندات المدفوعة/المعفاة لتاريخ محدد،
+     * مرتّبة بحيث تظهر سندات A (مدفوعة كلياً/جزئياً) أولاً، ثم سندات B/C (إعفاءات).
+     *
+     * @param string|null $date YYYY-MM-DD (الافتراضي: اليوم)
+     * @param int|null    $departmentId فلتر اختياري برقم القسم
+     */
+    public function getDailyJournal(?string $date = null, ?int $departmentId = null): array
+    {
+        $params = [];
+        $whereParts = [];
+        $whereParts[] = 'i.accountant_id IS NOT NULL';
+        $whereParts[] = 'i.cancelled_at IS NULL';
+
+        $timestamp = $this->paymentTimestamp('i');
+
+        if ($date !== null && $date !== '') {
+            // فلترة بتاريخ محدد (PostgreSQL/MySQL compatible)
+            $whereParts[] = ($this->driver === 'pgsql'
+                ? "DATE({$timestamp} AT TIME ZONE 'UTC') = :journal_date"
+                : "DATE({$timestamp}) = :journal_date");
+            $params[':journal_date'] = $date;
+        } else {
+            $whereParts[] = "{$timestamp} >= {$this->todayStart()}";
+        }
+
+        if ($departmentId !== null && $departmentId > 0) {
+            $whereParts[] = 'i.department_id = :dept_id';
+            $params[':dept_id'] = $departmentId;
+        }
+
+        $whereClause = implode(' AND ', $whereParts);
+
+        // ترتيب المجموعات:
+        //   group_order = 0 -> A (مدفوع)
+        //   group_order = 1 -> B/C (إعفاءات)
+        $sql = "SELECT i.invoice_id,
+                       i.serial_number,
+                       dt.doc_name,
+                       i.total,
+                       i.exemption_value,
+                       i.net_amount,
+                       i.related_invoice_id,
+                       i.department_id,
+                       COALESCE(d.department_name, 'غير محدد') AS department_name,
+                       COALESCE(d.department_code, '') AS department_code,
+                       p.full_name AS patient_name,
+                       u.full_name AS cashier,
+                       {$this->formatTime($timestamp)} AS time,
+                       CASE WHEN dt.doc_name = 'A' THEN 0 ELSE 1 END AS group_order
+                FROM Invoices i
+                JOIN Visits v          ON i.visit_id = v.visit_id
+                JOIN Patients p        ON v.patient_id = p.patient_id
+                JOIN Document_Types dt ON i.doc_type_id = dt.doc_type_id
+                JOIN Users u           ON i.accountant_id = u.user_id
+                LEFT JOIN departments d ON d.department_id = i.department_id
+                WHERE {$whereClause}
+                ORDER BY group_order ASC, i.serial_number ASC";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * جلب تفاصيل خدمات سند محدد (يستخدم في Modal "التفاصيل")
+     */
+    public function getInvoiceServiceDetails(int $invoiceId): array
+    {
+        $sql = "SELECT id.detail_id, id.service_id, sm.service_name,
+                       id.service_price_at_time AS price, id.quantity
+                FROM invoice_details id
+                JOIN services_master sm ON sm.service_id = id.service_id
+                WHERE id.invoice_id = :inv_id
+                ORDER BY id.detail_id ASC";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':inv_id' => $invoiceId]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * جلب إجماليات التذاكر غير المُقفلة لفترة وتاريخ محددين.
+     * يُستخدم لعرض الصف المدمج الخاص بإقفال الفترة داخل جدول اليومية.
+     *
+     * @param string $shiftType 'morning' | 'evening'
+     * @param string|null $date YYYY-MM-DD (الافتراضي: اليوم)
+     */
+    public function getShiftTicketsSummary(string $shiftType, ?string $date = null): ?array
+    {
+        $params = [':shift_type' => $shiftType];
+        $dateFilter = '';
+
+        if ($date !== null && $date !== '') {
+            $dateFilter = ($this->driver === 'pgsql'
+                ? "AND DATE(created_at AT TIME ZONE 'UTC') = :shift_date"
+                : "AND DATE(created_at) = :shift_date");
+            $params[':shift_date'] = $date;
+        } else {
+            $dateFilter = ($this->driver === 'pgsql'
+                ? "AND DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE"
+                : "AND DATE(created_at) = CURDATE()");
+        }
+
+        $sql = "SELECT MIN(serial_number) AS start_no,
+                       MAX(serial_number) AS end_no,
+                       COUNT(*) AS tickets_count,
+                       COALESCE(SUM(amount), 0) AS total_amount
+                FROM examination_tickets
+                WHERE ticket_type = :shift_type
+                  AND shift_closure_id IS NULL
+                  {$dateFilter}";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch();
+        if (!$row || (int) $row['tickets_count'] === 0) {
+            return null;
+        }
+        return $row;
+    }
+
+    /**
+     * التحقق من وجود تذاكر في فترة سابقة غير مُقفلة (بتاريخ < اليوم)
+     * للنوع المحدد. يُستخدم لمنع إصدار تذاكر جديدة قبل إقفال الفترة السابقة.
+     */
+    public function hasOpenShiftBefore(string $shiftType): bool
+    {
+        $sql = $this->driver === 'pgsql'
+            ? "SELECT 1 FROM examination_tickets
+                  WHERE ticket_type = :shift_type
+                    AND shift_closure_id IS NULL
+                    AND DATE(created_at AT TIME ZONE 'UTC') < CURRENT_DATE
+                  LIMIT 1"
+            : "SELECT 1 FROM examination_tickets
+                  WHERE ticket_type = :shift_type
+                    AND shift_closure_id IS NULL
+                    AND DATE(created_at) < CURDATE()
+                  LIMIT 1";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':shift_type' => $shiftType]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
+     * جلب إعدادات حصص الوزارة للتذاكر من system_settings.
+     */
+    public function getTicketShareSettings(): array
+    {
+        $sql = "SELECT setting_key, setting_value
+                FROM system_settings
+                WHERE setting_key IN (
+                    'ticket_price_morning',
+                    'ticket_price_evening',
+                    'ticket_ministry_share_morning',
+                    'ticket_ministry_share_evening'
+                )";
+        $stmt = $this->conn->query($sql);
+        $rows = $stmt->fetchAll();
+        $out = [];
+        foreach ($rows as $r) {
+            $out[$r['setting_key']] = (float) $r['setting_value'];
+        }
+        return $out;
+    }
+
+    /**
+     * تنفيذ عملية إقفال الفترة بشكل ذرّي (Atomic Transaction).
+     *
+     * الخطوات:
+     *   1) جلب وقفل التذاكر غير المُقفلة (FOR UPDATE)
+     *   2) حساب حصة المركز وحصة الوزارة
+     *   3) إنشاء سجل في shifts_closures
+     *   4) إنشاء سند A إجمالي واحد مرتبط بالإقفال
+     *   5) ربط التذاكر بـ shift_closure_id
+     *
+     * @return array{closure_id:int, invoice_id:int, serial_number:int, total:float}
+     */
+    public function closeShift(string $shiftType, int $closedBy, ?string $date = null): array
+    {
+        if (!in_array($shiftType, ['morning', 'evening'], true)) {
+            throw new InvalidArgumentException('نوع الفترة غير صالح (يجب أن يكون morning أو evening).');
+        }
+        $shiftDate = $date ?: date('Y-m-d');
+
+        $this->conn->beginTransaction();
+        try {
+            // التحقق من عدم وجود إقفال سابق لنفس النوع والتاريخ
+            $existsStmt = $this->conn->prepare(
+                'SELECT id FROM shifts_closures WHERE shift_type = :st AND shift_date = :sd LIMIT 1'
+            );
+            $existsStmt->execute([':st' => $shiftType, ':sd' => $shiftDate]);
+            if ($existsStmt->fetchColumn()) {
+                throw new RuntimeException('الفترة الحالية مُقفلة بالفعل.');
+            }
+
+            // جلب التذاكر مع قفل الصف (لمنع إصدار تذاكر متوازية خلال الإقفال)
+            $dateExpr = $this->driver === 'pgsql'
+                ? "DATE(created_at AT TIME ZONE 'UTC')"
+                : 'DATE(created_at)';
+            $lockStmt = $this->conn->prepare(
+                "SELECT ticket_id, serial_number, amount
+                 FROM examination_tickets
+                 WHERE ticket_type = :st
+                   AND shift_closure_id IS NULL
+                   AND {$dateExpr} = :sd
+                 ORDER BY serial_number ASC
+                 FOR UPDATE"
+            );
+            $lockStmt->execute([':st' => $shiftType, ':sd' => $shiftDate]);
+            $tickets = $lockStmt->fetchAll();
+
+            if (empty($tickets)) {
+                throw new RuntimeException('لا توجد تذاكر في الفترة المحددة لإقفالها.');
+            }
+
+            $serials = array_map(static fn ($t) => (int) $t['serial_number'], $tickets);
+            $totalAmount = array_sum(array_map(static fn ($t) => (float) $t['amount'], $tickets));
+            $startNo = min($serials);
+            $endNo   = max($serials);
+            $count   = count($tickets);
+
+            // حساب حصة الوزارة وحصة المركز
+            $settings = $this->getTicketShareSettings();
+            $ministryPerTicket = $shiftType === 'morning'
+                ? (float) ($settings['ticket_ministry_share_morning'] ?? 0.0)
+                : (float) ($settings['ticket_ministry_share_evening'] ?? 0.0);
+            $ministryShare = round($ministryPerTicket * $count, 2);
+            $centerShare = round($totalAmount - $ministryShare, 2);
+            if ($centerShare < 0) {
+                $centerShare = 0.0;
+            }
+
+            // إنشاء سجل الإقفال أولاً (بدون closing_invoice_id)
+            $insertClosure = $this->conn->prepare(
+                "INSERT INTO shifts_closures (shift_type, shift_date, start_ticket_no, end_ticket_no,
+                                              tickets_count, center_share, ministry_share, total_amount,
+                                              closed_by, status)
+                 VALUES (:st, :sd, :start, :end, :cnt, :cs, :ms, :total, :uid, 'locked')"
+            );
+            $insertClosure->execute([
+                ':st' => $shiftType, ':sd' => $shiftDate,
+                ':start' => $startNo, ':end' => $endNo, ':cnt' => $count,
+                ':cs' => $centerShare, ':ms' => $ministryShare, ':total' => $totalAmount,
+                ':uid' => $closedBy,
+            ]);
+            $closureId = (int) $this->insertedIdFromLastStmt('id');
+            if ($closureId <= 0 && $this->driver === 'pgsql') {
+                $closureId = (int) $this->conn->lastInsertId('shifts_closures_id_seq');
+            }
+
+            // إنشاء سند A إجمالي مرتبط بالإقفال
+            //   - لا visit_id (لأنه سند تجميعي لفترة وليس لزيارة واحدة)
+            //   - doc_type = 'A' (تحصيل)
+            $docStmt = $this->conn->prepare("SELECT doc_type_id FROM document_types WHERE doc_name = 'A' LIMIT 1");
+            $docStmt->execute();
+            $docTypeIdA = (int) $docStmt->fetchColumn();
+            if ($docTypeIdA <= 0) {
+                throw new RuntimeException('لم يتم العثور على نوع السند A.');
+            }
+
+            $newSerial = $this->allocateSerial('A', [$docTypeIdA]);
+
+            $insertInvoice = $this->conn->prepare(
+                "INSERT INTO invoices (serial_number, doc_type_id, visit_id, total, exemption_value,
+                                       net_amount, accountant_id, paid_at, shift_closure_id)
+                 VALUES (:sn, :dt, NULL, :total, 0, :total, :uid, NOW(), :cid)"
+            );
+            $insertInvoice->execute([
+                ':sn'    => $newSerial,
+                ':dt'    => $docTypeIdA,
+                ':total' => $totalAmount,
+                ':uid'   => $closedBy,
+                ':cid'   => $closureId,
+            ]);
+            $newInvoiceId = (int) $this->insertedIdFromLastStmt('invoice_id');
+            if ($newInvoiceId <= 0 && $this->driver === 'pgsql') {
+                $newInvoiceId = (int) $this->conn->lastInsertId('invoices_invoice_id_seq');
+            }
+
+            // تحديث سجل الإقفال ليربط بسند التحصيل
+            $this->conn->prepare('UPDATE shifts_closures SET closing_invoice_id = :iid WHERE id = :cid')
+                ->execute([':iid' => $newInvoiceId, ':cid' => $closureId]);
+
+            // ربط التذاكر بالإقفال
+            $ticketIds = array_map(static fn ($t) => (int) $t['ticket_id'], $tickets);
+            $placeholders = implode(',', array_fill(0, count($ticketIds), '?'));
+            $updateTickets = $this->conn->prepare(
+                "UPDATE examination_tickets SET shift_closure_id = ? WHERE ticket_id IN ($placeholders)"
+            );
+            $updateTickets->execute(array_merge([$closureId], $ticketIds));
+
+            $this->conn->commit();
+
+            return [
+                'closure_id'     => $closureId,
+                'invoice_id'     => $newInvoiceId,
+                'serial_number'  => $newSerial,
+                'total_amount'   => $totalAmount,
+                'center_share'   => $centerShare,
+                'ministry_share' => $ministryShare,
+                'tickets_count'  => $count,
+                'start_no'       => $startNo,
+                'end_no'         => $endNo,
+            ];
+        } catch (Throwable $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * جلب جميع إقفالات يوم محدد (لعرض الصفوف المدمجة في اليومية)
+     */
+    public function getShiftClosuresForDate(?string $date = null): array
+    {
+        $sd = $date ?: date('Y-m-d');
+        $sql = "SELECT sc.*, i.serial_number AS closing_serial,
+                       u.full_name AS closed_by_name
+                FROM shifts_closures sc
+                LEFT JOIN invoices i ON i.invoice_id = sc.closing_invoice_id
+                LEFT JOIN users u    ON u.user_id    = sc.closed_by
+                WHERE sc.shift_date = :sd
+                ORDER BY sc.shift_type ASC, sc.closed_at ASC";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':sd' => $sd]);
+        return $stmt->fetchAll();
+    }
 }
