@@ -12,6 +12,20 @@ class AccountingModel
         $this->driver = $driver;
     }
 
+    private function activeInvoiceCondition(string $alias = 'i'): string
+    {
+        return "{$alias}.cancelled_at IS NULL
+            AND (
+                {$alias}.related_invoice_id IS NULL
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM invoices rel
+                    WHERE rel.invoice_id = {$alias}.related_invoice_id
+                      AND rel.cancelled_at IS NOT NULL
+                )
+            )";
+    }
+
     public function getPendingInvoices(): array
     {
         $sql = "SELECT i.invoice_id, p.full_name AS name, i.total AS sum,
@@ -298,7 +312,7 @@ class AccountingModel
                 JOIN Document_Types dt ON i.doc_type_id = dt.doc_type_id
                 JOIN Users u ON i.accountant_id = u.user_id
                 WHERE i.accountant_id IS NOT NULL
-                  AND i.cancelled_at IS NULL
+                  AND {$this->activeInvoiceCondition('i')}
                   AND {$timestamp} >= {$this->todayStart()}
                 ORDER BY {$timestamp} DESC";
         $stmt = $this->conn->query($sql);
@@ -314,8 +328,8 @@ class AccountingModel
                        SUM(CASE WHEN doc_type_id = 1 THEN 1 ELSE 0 END) AS count_cash,
                        SUM(CASE WHEN doc_type_id = 2 THEN 1 ELSE 0 END) AS count_partial,
                        SUM(CASE WHEN doc_type_id = 3 THEN 1 ELSE 0 END) AS count_full
-                FROM Invoices
-                WHERE doc_type_id IS NOT NULL AND cancelled_at IS NULL AND {$timestamp} IS NOT NULL
+                FROM Invoices i
+                WHERE i.doc_type_id IS NOT NULL AND {$this->activeInvoiceCondition('i')} AND {$timestamp} IS NOT NULL
                 GROUP BY year_val
                 ORDER BY year_val DESC";
         $stmt = $this->conn->query($sql);
@@ -331,8 +345,8 @@ class AccountingModel
                        SUM(CASE WHEN doc_type_id = 1 THEN 1 ELSE 0 END) AS count_cash,
                        SUM(CASE WHEN doc_type_id = 2 THEN 1 ELSE 0 END) AS count_partial,
                        SUM(CASE WHEN doc_type_id = 3 THEN 1 ELSE 0 END) AS count_full
-                FROM Invoices
-                WHERE doc_type_id IS NOT NULL AND cancelled_at IS NULL AND {$this->yearExpression($timestamp)} = :year
+                FROM Invoices i
+                WHERE i.doc_type_id IS NOT NULL AND {$this->activeInvoiceCondition('i')} AND {$this->yearExpression($timestamp)} = :year
                 GROUP BY month_val
                 ORDER BY month_val DESC";
         $stmt = $this->conn->prepare($sql);
@@ -349,8 +363,8 @@ class AccountingModel
                        SUM(CASE WHEN doc_type_id = 1 THEN 1 ELSE 0 END) AS count_cash,
                        SUM(CASE WHEN doc_type_id = 2 THEN 1 ELSE 0 END) AS count_partial,
                        SUM(CASE WHEN doc_type_id = 3 THEN 1 ELSE 0 END) AS count_full
-                FROM Invoices
-                WHERE doc_type_id IS NOT NULL AND cancelled_at IS NULL AND {$this->yearMonthExpression($timestamp)} = :year_month
+                FROM Invoices i
+                WHERE i.doc_type_id IS NOT NULL AND {$this->activeInvoiceCondition('i')} AND {$this->yearMonthExpression($timestamp)} = :year_month
                 GROUP BY day_val
                 ORDER BY day_val DESC";
         $stmt = $this->conn->prepare($sql);
@@ -370,7 +384,7 @@ class AccountingModel
                 JOIN Document_Types dt ON i.doc_type_id = dt.doc_type_id
                 JOIN Users u ON i.accountant_id = u.user_id
                 WHERE i.doc_type_id IS NOT NULL
-                  AND i.cancelled_at IS NULL";
+                  AND {$this->activeInvoiceCondition('i')}";
         $params = [];
 
         if ($date !== null && $date !== '') {
@@ -483,7 +497,7 @@ class AccountingModel
         $params = [];
         $whereParts = [];
         $whereParts[] = 'i.accountant_id IS NOT NULL';
-        $whereParts[] = 'i.cancelled_at IS NULL';
+        $whereParts[] = $this->activeInvoiceCondition('i');
 
         $timestamp = $this->paymentTimestamp('i');
 

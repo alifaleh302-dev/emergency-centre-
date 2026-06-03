@@ -150,6 +150,20 @@ class FinanceModel
         ];
     }
 
+    private function activeInvoiceSql(string $invoiceAlias = 'i'): string
+    {
+        return "{$invoiceAlias}.cancelled_at IS NULL
+            AND (
+                {$invoiceAlias}.related_invoice_id IS NULL
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM invoices rel
+                    WHERE rel.invoice_id = {$invoiceAlias}.related_invoice_id
+                      AND rel.cancelled_at IS NOT NULL
+                )
+            )";
+    }
+
     private function buildInvoiceReportFilters(
         array $filters,
         string $invoiceAlias = 'i',
@@ -162,7 +176,7 @@ class FinanceModel
     ): array {
         $conditions = [
             "{$invoiceAlias}.doc_type_id IS NOT NULL",
-            "{$invoiceAlias}.cancelled_at IS NULL",
+            $this->activeInvoiceSql($invoiceAlias),
         ];
         $params = [];
 
@@ -412,6 +426,7 @@ class FinanceModel
                     {$detailScopeSql}
                 ) scoped ON TRUE
                 WHERE i.doc_type_id IS NOT NULL
+                  AND {$this->activeInvoiceSql('i')}
                   AND COALESCE(scoped.matched_details_count, 0) > 0
             ";
         } else {
@@ -472,6 +487,7 @@ class FinanceModel
                     WHERE id.invoice_id = i.invoice_id
                 ) ml ON TRUE
                 WHERE i.doc_type_id IS NOT NULL
+                  AND {$this->activeInvoiceSql('i')}
             ";
         }
 
@@ -599,6 +615,10 @@ class FinanceModel
             }
         }
 
+        if ($this->hasLineScopedFilters($filters)) {
+            $conditions[] = "{$alias}.doc_code <> 'T'";
+        }
+
         // 4. المحاسبون
         if (!empty($filters['accountant_ids']) && is_array($filters['accountant_ids'])) {
             $ids = array_values(array_filter(array_map('intval', $filters['accountant_ids']), fn($v) => $v > 0));
@@ -672,32 +692,88 @@ class FinanceModel
         return ['where_sql' => $whereSql, 'params' => $params];
     }
 
-    /**
-     * يجلب صفحة من دفتر الحركات الموحّد مع total_count والمجاميع.
-     *
-     * @param array $filters فلاتر المستخدم
-     * @param int $page الصفحة (1-based)
-     * @param int $perPage حجم الصفحة
-     * @param string $sortBy حقل الفرز
-     * @param string $sortDir ASC | DESC
-     * @return array { rows, total_count, page_total }
-     */
-    public function getTransactions(array $filters, int $page = 1, int $perPage = 50, string $sortBy = 'txn_timestamp', string $sortDir = 'DESC'): array
+    private function normalizeSortRules(array $rules = [], string $fallbackSortBy = 'txn_timestamp', string $fallbackSortDir = 'DESC'): array
     {
-        $unified = $this->buildUnifiedLedgerSql($filters);
-        $where   = $this->buildWhereClause($filters, 'u');
-
-        // التحقق من sortBy للحماية من SQL Injection
         $allowedSorts = [
             'txn_timestamp', 'serial_number', 'source_id', 'visit_id', 'txn_id',
             'total', 'cash_amount', 'exempt_amount', 'ministry_share', 'center_share',
             'patient_name', 'doc_code', 'txn_type', 'txn_type_label', 'status',
             'accountant_name', 'doctor_name',
         ];
-        if (!in_array($sortBy, $allowedSorts, true)) {
-            $sortBy = 'txn_timestamp';
+
+        $normalized = [];
+        foreach ($rules as $rule) {
+            if (is_object($rule)) {
+                $rule = get_object_vars($rule);
+            }
+            if (!is_array($rule)) {
+                continue;
+            }
+            $field = (string) ($rule['field'] ?? $rule['by'] ?? '');
+            $dir = strtoupper((string) ($rule['dir'] ?? $rule['direction'] ?? 'DESC'));
+            if (!in_array($field, $allowedSorts, true)) {
+                continue;
+            }
+            if (isset($normalized[$field])) {
+                continue;
+            }
+            $normalized[$field] = [
+                'field' => $field,
+                'dir' => $dir === 'ASC' ? 'ASC' : 'DESC',
+            ];
+            if (count($normalized) >= 3) {
+                break;
+            }
         }
-        $sortDir = strtoupper($sortDir) === 'ASC' ? 'ASC' : 'DESC';
+
+        if (empty($normalized)) {
+            $field = in_array($fallbackSortBy, $allowedSorts, true) ? $fallbackSortBy : 'txn_timestamp';
+            $normalized[$field] = [
+                'field' => $field,
+                'dir' => strtoupper($fallbackSortDir) === 'ASC' ? 'ASC' : 'DESC',
+            ];
+        }
+
+        if (!isset($normalized['txn_timestamp'])) {
+            $normalized['txn_timestamp'] = ['field' => 'txn_timestamp', 'dir' => 'DESC'];
+        }
+        if (!isset($normalized['source_id'])) {
+            $normalized['source_id'] = ['field' => 'source_id', 'dir' => 'DESC'];
+        }
+
+        return array_values($normalized);
+    }
+
+    private function buildOrderByClause(array $rules, string $alias = 'u'): string
+    {
+        $parts = [];
+        foreach ($rules as $rule) {
+            $field = $rule['field'] ?? 'txn_timestamp';
+            $dir = strtoupper((string) ($rule['dir'] ?? 'DESC')) === 'ASC' ? 'ASC' : 'DESC';
+            $parts[] = "{$alias}.{$field} {$dir}";
+        }
+        return implode(', ', $parts);
+    }
+
+    /**
+     * يجلب صفحة من دفتر الحركات الموحّد مع total_count والمجاميع.
+     *
+     * @param array $filters فلاتر المستخدم
+     * @param int $page الصفحة (1-based)
+     * @param int $perPage حجم الصفحة
+     * @param string|array $sortBy حقل الفرز أو مصفوفة قواعد الفرز
+     * @param string $sortDir ASC | DESC
+     * @return array { rows, total_count, page_total }
+     */
+    public function getTransactions(array $filters, int $page = 1, int $perPage = 50, string|array $sortBy = 'txn_timestamp', string $sortDir = 'DESC'): array
+    {
+        $unified = $this->buildUnifiedLedgerSql($filters);
+        $where   = $this->buildWhereClause($filters, 'u');
+
+        $sortRules = is_array($sortBy)
+            ? $this->normalizeSortRules($sortBy)
+            : $this->normalizeSortRules([], $sortBy, $sortDir);
+        $orderBySql = $this->buildOrderByClause($sortRules, 'u');
 
         $page = max(1, $page);
         $perPage = max(1, min(500, $perPage));
@@ -709,7 +785,7 @@ class FinanceModel
             SELECT u.*, COUNT(*) OVER() AS _total_count
             FROM unified u
             {$where['where_sql']}
-            ORDER BY u.{$sortBy} {$sortDir}, u.txn_timestamp DESC
+            ORDER BY {$orderBySql}
             LIMIT :_limit OFFSET :_offset
         ";
 
@@ -764,6 +840,7 @@ class FinanceModel
             'page'        => $page,
             'per_page'    => $perPage,
             'page_total'  => $pageTotal,
+            'sort_rules'  => $sortRules,
         ];
     }
 

@@ -66,6 +66,7 @@ const FinanceState = {
 
     sortBy: 'txn_timestamp',
     sortDir: 'DESC',
+    sortRules: [{ field: 'txn_timestamp', dir: 'DESC' }],
     page: 1,
     perPage: 50,
 
@@ -923,10 +924,12 @@ Object.assign(Finance, {
         scroll.innerHTML = `<div class="fh-grid-state"><i class="bi bi-hourglass-split"></i> جاري تحميل البيانات...</div>`;
 
         try {
+            Finance._syncLegacySortState();
             const payload = {
                 ...FinanceUtils.cleanFilters(),
                 sort_by: FinanceState.sortBy,
                 sort_dir: FinanceState.sortDir,
+                sort_rules: FinanceState.sortRules,
                 page: FinanceState.page,
                 per_page: FinanceState.perPage,
             };
@@ -937,6 +940,10 @@ Object.assign(Finance, {
                 return;
             }
             FinanceState.lastResponse = res.data;
+            if (Array.isArray(res.data?.sort?.rules) && res.data.sort.rules.length) {
+                FinanceState.sortRules = Finance._normalizeSortRules(res.data.sort.rules);
+                Finance._syncLegacySortState();
+            }
             FinanceState.rows = res.data.rows || [];
             Finance.renderGridBody();
             Finance.renderPagination();
@@ -1045,37 +1052,99 @@ Object.assign(Finance, {
         }
     },
 
-    renderSortOptions() {
-        return FINANCE_SORT_OPTIONS.map(opt =>
-            `<option value="${FinanceUtils.esc(opt.value)}" ${FinanceState.sortBy === opt.value ? 'selected' : ''}>${FinanceUtils.esc(opt.label)}</option>`
-        ).join('');
+    _normalizeSortRules(rules) {
+        const allowed = new Set(FINANCE_SORT_OPTIONS.map(opt => opt.value));
+        const incoming = Array.isArray(rules) ? rules : [];
+        const out = [];
+        const seen = new Set();
+        incoming.forEach(rule => {
+            const field = String(rule?.field || rule?.by || '').trim();
+            if (!allowed.has(field) || seen.has(field)) return;
+            const dir = String(rule?.dir || rule?.direction || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+            out.push({ field, dir });
+            seen.add(field);
+        });
+        if (!out.length) out.push({ field: 'txn_timestamp', dir: 'DESC' });
+        return out.slice(0, 3);
+    },
+
+    _syncLegacySortState() {
+        FinanceState.sortRules = Finance._normalizeSortRules(FinanceState.sortRules);
+        const primary = FinanceState.sortRules[0] || { field: 'txn_timestamp', dir: 'DESC' };
+        FinanceState.sortBy = primary.field;
+        FinanceState.sortDir = primary.dir;
+    },
+
+    _primarySortRule() {
+        Finance._syncLegacySortState();
+        return FinanceState.sortRules[0] || { field: 'txn_timestamp', dir: 'DESC' };
+    },
+
+    renderSortOptions(selectedValue = null, includeBlank = false) {
+        const current = selectedValue ?? Finance._primarySortRule().field;
+        const options = [];
+        if (includeBlank) {
+            options.push('<option value="">— بدون —</option>');
+        }
+        FINANCE_SORT_OPTIONS.forEach(opt => {
+            options.push(`<option value="${FinanceUtils.esc(opt.value)}" ${current === opt.value ? 'selected' : ''}>${FinanceUtils.esc(opt.label)}</option>`);
+        });
+        return options.join('');
+    },
+
+    renderSortSummary() {
+        Finance._syncLegacySortState();
+        return (FinanceState.sortRules || []).map((rule, index) => {
+            const label = FINANCE_SORT_OPTIONS.find(opt => opt.value === rule.field)?.label || rule.field;
+            const dirLabel = rule.dir === 'ASC' ? 'تصاعدي' : 'تنازلي';
+            return `${index + 1}) ${label} — ${dirLabel}`;
+        }).join(' | ');
     },
 
     setSortField(field) {
         if (!field) return;
-        FinanceState.sortBy = field;
+        FinanceState.sortRules = Finance._normalizeSortRules([
+            { field, dir: FinanceState.sortDir || 'DESC' },
+            ...(FinanceState.sortRules || []).filter(rule => rule.field !== field),
+        ]);
+        Finance._syncLegacySortState();
         FinanceState.page = 1;
+        const sortSummaryEl = document.getElementById('fh-sort-summary');
+        if (sortSummaryEl) sortSummaryEl.textContent = Finance.renderSortSummary();
         Finance.loadTransactions();
     },
 
     setSortDirection(direction) {
-        FinanceState.sortDir = String(direction || '').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+        Finance._syncLegacySortState();
+        const dir = String(direction || '').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+        const primary = Finance._primarySortRule();
+        FinanceState.sortRules = Finance._normalizeSortRules([
+            { field: primary.field, dir },
+            ...(FinanceState.sortRules || []).slice(1),
+        ]);
+        Finance._syncLegacySortState();
         FinanceState.page = 1;
+        const sortSummaryEl = document.getElementById('fh-sort-summary');
+        if (sortSummaryEl) sortSummaryEl.textContent = Finance.renderSortSummary();
         Finance.loadTransactions();
     },
 
     sortBy(field) {
-        if (FinanceState.sortBy === field) {
-            FinanceState.sortDir = FinanceState.sortDir === 'ASC' ? 'DESC' : 'ASC';
-        } else {
-            FinanceState.sortBy = field;
-            FinanceState.sortDir = 'DESC';
-        }
+        Finance._syncLegacySortState();
+        const primary = Finance._primarySortRule();
+        const nextDir = primary.field === field && primary.dir === 'ASC' ? 'DESC' : 'ASC';
+        FinanceState.sortRules = Finance._normalizeSortRules([
+            { field, dir: primary.field === field ? nextDir : 'DESC' },
+            ...(FinanceState.sortRules || []).filter(rule => rule.field !== field),
+        ]);
+        Finance._syncLegacySortState();
         FinanceState.page = 1;
         const sortByEl = document.getElementById('fh-sort-by');
         const sortDirEl = document.getElementById('fh-sort-dir');
+        const sortSummaryEl = document.getElementById('fh-sort-summary');
         if (sortByEl) sortByEl.value = FinanceState.sortBy;
         if (sortDirEl) sortDirEl.value = FinanceState.sortDir;
+        if (sortSummaryEl) sortSummaryEl.textContent = Finance.renderSortSummary();
         Finance.loadTransactions();
     },
 
@@ -1679,6 +1748,86 @@ console.log('[Finance Hub M5.1] ✅ الموديول جاهز. للاختبار:
             Core.showAlert('تمت استعادة الأعمدة الافتراضية.', 'info');
         },
 
+        openSortManager() {
+            Finance._syncLegacySortState();
+            const modal = Finance._ensureModal('fh-sort-manager-modal', '<i class="bi bi-sort-down"></i> ترتيب متقدم', 'modal-md');
+            const body = modal.querySelector('.modal-body');
+            const footer = modal.querySelector('.modal-footer');
+            const rules = [...Finance._normalizeSortRules(FinanceState.sortRules || [])];
+            while (rules.length < 3) {
+                rules.push({ field: '', dir: 'DESC' });
+            }
+
+            body.innerHTML = `
+                <div class="fh-modal-section-title">قواعد الترتيب</div>
+                <div class="text-muted small mb-3">يمكنك تحديد حتى 3 مستويات للترتيب. المستوى الأول هو الأهم، ثم الثاني، ثم الثالث.</div>
+                <div class="fh-modal-list">
+                    ${rules.map((rule, index) => `
+                        <div class="fh-col-row">
+                            <div class="fh-col-row-left" style="min-width:110px;">
+                                <div>
+                                    <div class="fh-col-row-title">المستوى ${index + 1}</div>
+                                    <div class="fh-col-row-sub">Order by ${index + 1}</div>
+                                </div>
+                            </div>
+                            <div class="fh-col-row-right" style="flex:1;justify-content:flex-end;">
+                                <select class="form-select form-select-sm" id="fh-sort-rule-field-${index}" style="min-width:220px;">
+                                    ${Finance.renderSortOptions(rule.field || '', true)}
+                                </select>
+                                <select class="form-select form-select-sm" id="fh-sort-rule-dir-${index}" style="width:auto;">
+                                    <option value="DESC" ${String(rule.dir || 'DESC').toUpperCase()==='DESC'?'selected':''}>تنازلي</option>
+                                    <option value="ASC" ${String(rule.dir || 'DESC').toUpperCase()==='ASC'?'selected':''}>تصاعدي</option>
+                                </select>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+
+            footer.innerHTML = `
+                <button type="button" class="btn btn-outline-secondary" onclick="Finance.resetSortRules()">
+                    <i class="bi bi-arrow-counterclockwise"></i> إعادة الافتراضي
+                </button>
+                <button type="button" class="btn btn-primary" onclick="Finance.applySortManager()">
+                    <i class="bi bi-check2-circle"></i> تطبيق الترتيب
+                </button>
+            `;
+
+            getBootstrapModalInstance(modal).show();
+        },
+
+        applySortManager() {
+            const rules = [];
+            for (let index = 0; index < 3; index += 1) {
+                const field = document.getElementById(`fh-sort-rule-field-${index}`)?.value || '';
+                const dir = document.getElementById(`fh-sort-rule-dir-${index}`)?.value || 'DESC';
+                if (!field) continue;
+                rules.push({ field, dir });
+            }
+
+            FinanceState.sortRules = Finance._normalizeSortRules(rules);
+            Finance._syncLegacySortState();
+            FinanceState.page = 1;
+
+            const sortByEl = document.getElementById('fh-sort-by');
+            const sortDirEl = document.getElementById('fh-sort-dir');
+            const sortSummaryEl = document.getElementById('fh-sort-summary');
+            if (sortByEl) sortByEl.value = FinanceState.sortBy;
+            if (sortDirEl) sortDirEl.value = FinanceState.sortDir;
+            if (sortSummaryEl) sortSummaryEl.textContent = Finance.renderSortSummary();
+
+            const modal = document.getElementById('fh-sort-manager-modal');
+            getBootstrapModalInstance(modal).hide();
+            Finance.loadTransactions();
+            Core.showAlert('تم تحديث ترتيب العرض.', 'success');
+        },
+
+        resetSortRules() {
+            FinanceState.sortRules = [{ field: 'txn_timestamp', dir: 'DESC' }];
+            Finance._syncLegacySortState();
+            Finance.openSortManager();
+        },
+
         _getSavedViews() {
             const views = safeJsonParse(localStorage.getItem(FINANCE_VIEWS_STORAGE_KEY), []);
             return Array.isArray(views) ? views : [];
@@ -1696,6 +1845,7 @@ console.log('[Finance Hub M5.1] ✅ الموديول جاهز. للاختبار:
                 filters: cloneDeep(FinanceState.filters),
                 sortBy: FinanceState.sortBy,
                 sortDir: FinanceState.sortDir,
+                sortRules: cloneDeep(FinanceState.sortRules || []),
                 perPage: FinanceState.perPage,
                 columns: cloneDeep(FinanceState.columns || []),
             };
@@ -1784,8 +1934,8 @@ console.log('[Finance Hub M5.1] ✅ الموديول جاهز. للاختبار:
             }
 
             FinanceState.filters = { ...FinanceState.filters, ...(view.filters || {}) };
-            FinanceState.sortBy = view.sortBy || 'txn_timestamp';
-            FinanceState.sortDir = view.sortDir || 'DESC';
+            FinanceState.sortRules = Finance._normalizeSortRules(view.sortRules || [{ field: view.sortBy || 'txn_timestamp', dir: view.sortDir || 'DESC' }]);
+            Finance._syncLegacySortState();
             FinanceState.perPage = Number(view.perPage || 50);
             FinanceState.page = 1;
             FinanceState.selectedIds.clear();
@@ -2043,10 +2193,12 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
 
             try {
                 Core.showAlert('جاري تجهيز الملف...', 'info');
+                Finance._syncLegacySortState();
                 const payload = {
                     ...FinanceUtils.cleanFilters(),
                     sort_by: FinanceState.sortBy,
                     sort_dir: FinanceState.sortDir,
+                    sort_rules: FinanceState.sortRules,
                     format: 'xlsx',
                     include_sheets: includeSheets,
                 };
@@ -2669,6 +2821,7 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
     Finance.renderGridShell = function () {
         const container = document.getElementById('fh-grid-container');
         if (!container) return;
+        Finance._syncLegacySortState();
         container.innerHTML = `
             <div class="fh-grid-card">
                 <div class="fh-grid-toolbar">
@@ -2686,6 +2839,10 @@ console.log('[Finance Hub M5.2.1] ✅ تمت إضافة Column Manager + Saved V
                                 <option value="DESC" ${FinanceState.sortDir==='DESC'?'selected':''}>تنازلي</option>
                                 <option value="ASC" ${FinanceState.sortDir==='ASC'?'selected':''}>تصاعدي</option>
                             </select>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="Finance.openSortManager()">
+                                <i class="bi bi-sort-down"></i> ترتيب متقدم
+                            </button>
+                            <span class="text-muted small" id="fh-sort-summary">${Finance.renderSortSummary()}</span>
                         </div>
                         <button class="btn btn-sm btn-outline-success" onclick="Finance.openExportDialog()">
                             <i class="bi bi-file-earmark-excel"></i> تصدير XLSX

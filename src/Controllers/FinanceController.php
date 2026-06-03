@@ -89,11 +89,21 @@ class FinanceController extends BaseController
                 'per_page',
                 1
             );
-            $sortBy = $this->sanitizeText($this->getField($data, 'sort_by', 'txn_timestamp'), 'sort_by', 50, true) ?: 'txn_timestamp';
+
+            $sortByRaw = $this->getField($data, 'sort_by', null);
+            $sortRulesRaw = $this->getField($data, 'sort_rules', null);
             $sortDir = $this->sanitizeText($this->getField($data, 'sort_dir', 'DESC'), 'sort_dir', 8, true) ?: 'DESC';
+
+            if (is_array($sortRulesRaw) && !empty($sortRulesRaw)) {
+                $sortBy = $sortRulesRaw;
+            } else {
+                $sortByField = $this->sanitizeText($sortByRaw ?? 'txn_timestamp', 'sort_by', 50, true) ?: 'txn_timestamp';
+                $sortBy = [['field' => $sortByField, 'dir' => $sortDir]];
+            }
 
             $result = $this->model->getTransactions($filters, $page, $perPage, $sortBy, $sortDir);
             $totals = $this->model->getTotals($filters);
+            $firstRule = $result['sort_rules'][0] ?? ['field' => 'txn_timestamp', 'dir' => 'DESC'];
 
             $this->success([
                 'rows' => $result['rows'],
@@ -104,8 +114,9 @@ class FinanceController extends BaseController
                 'totals' => $totals,
                 'applied_filters' => $this->publicFilters($filters),
                 'sort' => [
-                    'by' => $sortBy,
-                    'dir' => strtoupper($sortDir) === 'ASC' ? 'ASC' : 'DESC',
+                    'by' => $firstRule['field'],
+                    'dir' => $firstRule['dir'],
+                    'rules' => $result['sort_rules'],
                 ],
                 'scope' => $this->buildScopeMeta(),
             ]);
@@ -163,8 +174,15 @@ class FinanceController extends BaseController
             }
 
             $includeSheets = $this->normalizeSheetList($this->getField($data, 'include_sheets', ['summary', 'transactions', 'pivot', 'ministry']));
-            $sortBy = $this->sanitizeText($this->getField($data, 'sort_by', 'txn_timestamp'), 'sort_by', 50, true) ?: 'txn_timestamp';
+            $sortByRaw = $this->getField($data, 'sort_by', null);
+            $sortRulesRaw = $this->getField($data, 'sort_rules', null);
             $sortDir = $this->sanitizeText($this->getField($data, 'sort_dir', 'DESC'), 'sort_dir', 8, true) ?: 'DESC';
+            if (is_array($sortRulesRaw) && !empty($sortRulesRaw)) {
+                $sortBy = $sortRulesRaw;
+            } else {
+                $sortByField = $this->sanitizeText($sortByRaw ?? 'txn_timestamp', 'sort_by', 50, true) ?: 'txn_timestamp';
+                $sortBy = [['field' => $sortByField, 'dir' => $sortDir]];
+            }
 
             $totals = $this->model->getTotals($filters);
             $exportLimit = max(1, $this->settings->getInt('finance_hub_export_limit', 10000));

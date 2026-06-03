@@ -95,6 +95,20 @@ class AdminModel
         }
     }
 
+    private function activeInvoiceCondition(string $alias = 'i'): string
+    {
+        return "{$alias}.cancelled_at IS NULL
+            AND (
+                {$alias}.related_invoice_id IS NULL
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM invoices rel
+                    WHERE rel.invoice_id = {$alias}.related_invoice_id
+                      AND rel.cancelled_at IS NOT NULL
+                )
+            )";
+    }
+
     public function getSchema(): array
     {
         // كاش داخل الطلب (موجود مسبقاً)
@@ -151,11 +165,11 @@ class AdminModel
                 (SELECT COUNT(*) FILTER (WHERE status = 'Active') FROM Visits) AS active_visits_count,
                 (SELECT COUNT(*) FILTER (WHERE status = 'Completed') FROM Visits) AS completed_visits_count,
                 (SELECT COUNT(*) FROM Visits WHERE visit_date >= CURRENT_DATE AND visit_date < CURRENT_DATE + INTERVAL '1 day') AS visits_today,
-                (SELECT COUNT(*) FROM Invoices WHERE accountant_id IS NULL AND cancelled_at IS NULL) AS pending_invoices_count,
-                (SELECT COUNT(*) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND COALESCE(paid_at, created_at) >= CURRENT_DATE AND COALESCE(paid_at, created_at) < CURRENT_DATE + INTERVAL '1 day') AS paid_invoices_today,
+                (SELECT COUNT(*) FROM Invoices i WHERE accountant_id IS NULL AND {$this->activeInvoiceCondition('i')}) AS pending_invoices_count,
+                (SELECT COUNT(*) FROM Invoices i WHERE accountant_id IS NOT NULL AND {$this->activeInvoiceCondition('i')} AND COALESCE(paid_at, created_at) >= CURRENT_DATE AND COALESCE(paid_at, created_at) < CURRENT_DATE + INTERVAL '1 day') AS paid_invoices_today,
                 (SELECT COUNT(*) FROM Invoices WHERE cancelled_at IS NOT NULL) AS cancelled_invoices_count,
-                (SELECT COALESCE(SUM(net_amount), 0) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND COALESCE(paid_at, created_at) >= CURRENT_DATE AND COALESCE(paid_at, created_at) < CURRENT_DATE + INTERVAL '1 day') AS revenue_today,
-                (SELECT COALESCE(SUM(net_amount), 0) FROM Invoices WHERE accountant_id IS NOT NULL AND cancelled_at IS NULL AND COALESCE(paid_at, created_at) >= DATE_TRUNC('month', CURRENT_DATE) AND COALESCE(paid_at, created_at) < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month') AS revenue_month,
+                (SELECT COALESCE(SUM(net_amount), 0) FROM Invoices i WHERE accountant_id IS NOT NULL AND {$this->activeInvoiceCondition('i')} AND COALESCE(paid_at, created_at) >= CURRENT_DATE AND COALESCE(paid_at, created_at) < CURRENT_DATE + INTERVAL '1 day') AS revenue_today,
+                (SELECT COALESCE(SUM(net_amount), 0) FROM Invoices i WHERE accountant_id IS NOT NULL AND {$this->activeInvoiceCondition('i')} AND COALESCE(paid_at, created_at) >= DATE_TRUNC('month', CURRENT_DATE) AND COALESCE(paid_at, created_at) < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month') AS revenue_month,
                 (SELECT COUNT(*) FROM Examination_Tickets WHERE created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day') AS tickets_today,
                 (SELECT COUNT(*) FROM Notifications WHERE created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day') AS notifications_today
         ";
@@ -814,9 +828,9 @@ class AdminModel
             "SELECT TO_CHAR(DATE(COALESCE(paid_at, created_at)), 'YYYY-MM-DD') AS day,
                     COALESCE(SUM(net_amount), 0) AS total,
                     COUNT(*) AS invoices_count
-             FROM Invoices
+             FROM Invoices i
              WHERE accountant_id IS NOT NULL
-               AND cancelled_at IS NULL
+               AND {$this->activeInvoiceCondition('i')}
                AND COALESCE(paid_at, created_at) >= CURRENT_DATE - INTERVAL '29 days'
              GROUP BY day
              ORDER BY day ASC"
@@ -837,7 +851,9 @@ class AdminModel
             "SELECT s.service_name AS label, COUNT(*) AS total,
                     COALESCE(SUM(id.service_price_at_time), 0) AS revenue
              FROM Invoice_Details id
+             JOIN Invoices i ON id.invoice_id = i.invoice_id
              JOIN Services_Master s ON id.service_id = s.service_id
+             WHERE {$this->activeInvoiceCondition('i')}
              GROUP BY s.service_name
              ORDER BY total DESC
              LIMIT 8"
@@ -1105,7 +1121,7 @@ class AdminModel
      */
     public function reportRevenueByService(?string $from = null, ?string $to = null): array
     {
-        $where = ['i.accountant_id IS NOT NULL', 'i.cancelled_at IS NULL'];
+        $where = ['i.accountant_id IS NOT NULL', $this->activeInvoiceCondition('i')];
         $params = [];
         if ($from) { $where[] = 'COALESCE(i.paid_at, i.created_at) >= :from'; $params[':from'] = $from; }
         if ($to)   { $where[] = 'COALESCE(i.paid_at, i.created_at) <= :to';   $params[':to']   = $to; }
