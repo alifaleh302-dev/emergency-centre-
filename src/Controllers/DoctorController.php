@@ -361,43 +361,85 @@ class DoctorController extends BaseController
                 throw new InvalidArgumentException('يجب اختيار خدمة واحدة على الأقل قبل إرسال الطلبات.');
             }
 
-            $this->conn->beginTransaction();
-            $invoiceId = $this->model->createPendingInvoice($visitId);
-            $totalInvoicePrice = 0.0;
-            $laboratoryServicesCount = 0; // 🧪 عدّ عدد خدمات المختبر في هذا الطلب
+            // 🆕 Migration 011 - تجميع الخدمات حسب القسم (Grouping by Department)
+            // بدلاً من إنشاء سند واحد تجميعي، ننشئ سند منفصل لكل قسم
+            // داخل نفس الـ Database Transaction (المتطلب رقم 1 في وثيقة التعديلات).
+            $servicesData = $this->model->getServicesGroupedByDepartment($allOrderIds);
+            if (count($servicesData) !== count($allOrderIds)) {
+                throw new InvalidArgumentException('تم إرسال خدمة غير موجودة في قائمة الخدمات.');
+            }
 
-            foreach ($allOrderIds as $serviceId) {
-                $service = $this->model->getServiceDetailsById($serviceId);
-                if (!$service) {
-                    throw new InvalidArgumentException('تم إرسال خدمة غير موجودة في قائمة الخدمات.');
+            // تجميع الخدمات حسب department_id
+            $grouped = [];
+            $laboratoryServicesCount = 0;
+            $unknownDepartments = false;
+            foreach ($servicesData as $service) {
+                $deptId = isset($service['department_id']) ? (int) $service['department_id'] : 0;
+                if ($deptId <= 0) {
+                    // خدمة بدون قسم — ننبه ونضعها تحت "أخرى" عند وجودها
+                    $unknownDepartments = true;
+                    $deptId = 0; // سيتم تجاوز هذه المجموعة تحت
                 }
+                $grouped[$deptId][] = $service;
 
-                $price = round((float) $service['total_price'], 2);
-                $this->model->addInvoiceDetail($invoiceId, (int) $service['service_id'], $price);
-                $totalInvoicePrice += $price;
-
-                // 🧪 إذا كانت الخدمة تتبع قسم المختبر
+                // 🧪 عد خدمات المختبر (للتوافق مع أتمتة مستندات المختبر)
                 $deptCode = isset($service['department_code']) ? (string) $service['department_code'] : '';
-                $deptName = isset($service['department']) ? (string) $service['department'] : '';
-                if (strcasecmp($deptCode, 'Laboratory') === 0 || strcasecmp($deptName, 'Laboratory') === 0) {
+                if (strcasecmp($deptCode, 'Laboratory') === 0) {
                     $laboratoryServicesCount++;
                 }
             }
 
-            if ($totalInvoicePrice <= 0) {
-                throw new InvalidArgumentException('تعذر تكوين فاتورة صحيحة للطلبات المرسلة.');
+            if (isset($grouped[0])) {
+                throw new InvalidArgumentException('بعض الخدمات المرسلة غير مرتبطة بقسم صحيح في النظام.');
             }
 
-            $this->model->updateInvoiceTotal($invoiceId, $totalInvoicePrice);
+            $this->conn->beginTransaction();
 
-            // 🧪 أتمتة مستندات المختبر: عند وجود أي خدمة مختبر في الطلب،
-            // أنشئ مستنداً جديداً (استمارة فحص) وصنّفه برمجياً من نوع laboratory.
+            // إنشاء سند منفصل لكل قسم
+            $createdInvoices = []; // [invoice_id => ['department_id'=>x,'department_name'=>y,'total'=>z]]
+            $grandTotal = 0.0;
+            $primaryInvoiceIdForLab = null; // سنربط مستند المختبر بسند المختبر تحديداً
+
+            foreach ($grouped as $deptId => $services) {
+                $invoiceId = $this->model->createPendingInvoiceForDepartment($visitId, (int) $deptId);
+                $deptTotal = 0.0;
+                $deptName  = '';
+                $deptCode  = '';
+
+                foreach ($services as $svc) {
+                    $price = round((float) $svc['total_price'], 2);
+                    $this->model->addInvoiceDetail($invoiceId, (int) $svc['service_id'], $price);
+                    $deptTotal += $price;
+                    $deptName = (string) ($svc['department_name'] ?? '');
+                    $deptCode = (string) ($svc['department_code'] ?? '');
+                }
+
+                if ($deptTotal <= 0) {
+                    throw new InvalidArgumentException('تعذر تكوين سند صحيح للقسم: ' . $deptName);
+                }
+
+                $this->model->updateInvoiceTotal($invoiceId, $deptTotal);
+                $createdInvoices[$invoiceId] = [
+                    'invoice_id'      => $invoiceId,
+                    'department_id'   => (int) $deptId,
+                    'department_name' => $deptName,
+                    'department_code' => $deptCode,
+                    'total'           => $deptTotal,
+                ];
+                $grandTotal += $deptTotal;
+
+                // 🧪 إذا كان هذا سند المختبر، سنستخدمه لربط مستند المختبر
+                if (strcasecmp($deptCode, 'Laboratory') === 0) {
+                    $primaryInvoiceIdForLab = $invoiceId;
+                }
+            }
+
+            // 🧪 أتمتة مستندات المختبر (مربوط بسند المختبر فقط بعد الفصل)
             $labDocId = null;
-            $labDocSerial = null;
-            if ($laboratoryServicesCount > 0) {
+            if ($laboratoryServicesCount > 0 && $primaryInvoiceIdForLab !== null) {
                 $labDocId = $this->model->createLaboratoryDocument(
                     $visitId,
-                    $invoiceId,
+                    $primaryInvoiceIdForLab,
                     $laboratoryServicesCount,
                     $this->doctor_id,
                     null
@@ -406,10 +448,15 @@ class DoctorController extends BaseController
 
             $this->conn->commit();
 
-            // إشعار للمحاسب بوجود فاتورة جديدة
+            // إشعار للمحاسب بوجود سندات جديدة (إشعار واحد جامع بدلاً من إشعارات متعددة)
             try {
                 $notif = new NotificationModel($this->conn);
-                $notif->create('أمين صندوق', 'فاتورة جديدة بانتظار التحصيل', 'إجمالي: ' . $totalInvoicePrice . ' ريال', 'new_invoice', $invoiceId);
+                $count = count($createdInvoices);
+                $msg = $count === 1
+                    ? 'فاتورة جديدة بانتظار التحصيل'
+                    : ($count . ' فواتير جديدة (حسب الأقسام) بانتظار التحصيل');
+                $firstId = (int) array_key_first($createdInvoices);
+                $notif->create('أمين صندوق', $msg, 'الإجمالي العام: ' . $grandTotal . ' ريال', 'new_invoice', $firstId);
             } catch (Throwable $e) {} // لا نوقف العملية بسبب الإشعار
 
             // 🧪 إشعار لفني المختبر عند إصدار مستند مختبر جديد
@@ -421,10 +468,13 @@ class DoctorController extends BaseController
             }
 
             $this->success([
-                'invoice_id' => $invoiceId,
+                'invoices' => array_values($createdInvoices),
+                'invoice_id' => (int) array_key_first($createdInvoices), // للتوافق مع الواجهة الأمامية القديمة
+                'invoices_count' => count($createdInvoices),
+                'grand_total' => $grandTotal,
                 'lab_document_id' => $labDocId,
                 'laboratory_services_count' => $laboratoryServicesCount,
-            ], 'تم إرسال الطلبات وحفظها بنجاح');
+            ], 'تم إرسال الطلبات وتوليد ' . count($createdInvoices) . ' سند' . (count($createdInvoices) > 1 ? 'ات' : '') . ' حسب الأقسام');
         } catch (InvalidArgumentException $exception) {
             if ($this->conn->inTransaction()) {
                 $this->conn->rollBack();

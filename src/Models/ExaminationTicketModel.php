@@ -39,6 +39,15 @@ class ExaminationTicketModel
         $amount     = $resolved['amount'];
         $notesValue = $notes !== null ? trim($notes) : '';
 
+        // 🆕 Migration 012 - Business Rule: منع إصدار تذاكر جديدة إذا كانت
+        // توجد تذاكر سابقة غير مُقفلة لنفس النوع (تعود لتواريخ سابقة).
+        if ($this->hasOpenShiftBefore($ticketType)) {
+            throw new RuntimeException(
+                'يجب إقفال الفترة ' . ($ticketType === 'morning' ? 'الصباحية' : 'المسائية') .
+                ' السابقة قبل إصدار تذاكر جديدة.'
+            );
+        }
+
         $manageTx = !$this->conn->inTransaction();
         if ($manageTx) {
             $this->conn->beginTransaction();
@@ -117,6 +126,32 @@ class ExaminationTicketModel
     {
         $stmt = $this->conn->prepare('SELECT 1 FROM examination_tickets WHERE visit_id = :vid LIMIT 1');
         $stmt->execute([':vid' => $visitId]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
+     * 🆕 Migration 012 - التحقق من وجود تذاكر سابقة غير مُقفلة
+     * (تعود لتاريخ أقدم من اليوم) للنوع المحدد. يُستخدم لفرض
+     * قاعدة: "لا يمكن فتح فترة جديدة قبل إقفال السابقة".
+     *
+     * جدير بالذكر أن تذاكر نفس اليوم مسموح بإصدارها حتى مع عدم
+     * وجود إقفال لليوم (لأن الإقفال يتم في نهاية الفترة فعلياً).
+     */
+    public function hasOpenShiftBefore(string $shiftType): bool
+    {
+        $sql = $this->driver === 'pgsql'
+            ? "SELECT 1 FROM examination_tickets
+                  WHERE ticket_type = :shift_type
+                    AND shift_closure_id IS NULL
+                    AND DATE(created_at AT TIME ZONE 'UTC') < CURRENT_DATE
+                  LIMIT 1"
+            : "SELECT 1 FROM examination_tickets
+                  WHERE ticket_type = :shift_type
+                    AND shift_closure_id IS NULL
+                    AND DATE(created_at) < CURDATE()
+                  LIMIT 1";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':shift_type' => $shiftType]);
         return (bool) $stmt->fetchColumn();
     }
 }

@@ -163,6 +163,64 @@ class DoctorModel
         return $this->insertAndGetId($sql, [':visit_id' => $visitId], 'invoice_id');
     }
 
+    /**
+     * 🆕 Migration 011 - إنشاء سند معلّق مرتبط بقسم محدد.
+     *
+     * يستخدم بدلاً من createPendingInvoice() عند الرغبة في فصل السندات
+     * حسب القسم (Grouping by Department). كل سند يحتفظ بـ department_id
+     * الخاص به لتسهيل واجهة "اليومية" والاستعلامات حسب القسم.
+     *
+     * @param int $visitId      معرف الزيارة
+     * @param int $departmentId معرف القسم في جدول departments
+     * @return int invoice_id الجديد
+     */
+    public function createPendingInvoiceForDepartment(int $visitId, int $departmentId): int
+    {
+        $sql = "INSERT INTO Invoices (serial_number, visit_id, total, exemption_value, net_amount, department_id)
+                SELECT COALESCE(MAX(serial_number), 0) + 1, :visit_id, 0, 0, 0, :department_id
+                FROM Invoices";
+
+        return $this->insertAndGetId(
+            $sql,
+            [':visit_id' => $visitId, ':department_id' => $departmentId],
+            'invoice_id'
+        );
+    }
+
+    /**
+     * 🆕 Migration 011 - جلب تفاصيل خدمات متعددة دفعة واحدة مع رقم القسم.
+     *
+     * يُستخدم لتجميع الخدمات حسب القسم في DoctorController::sendOrders
+     * قبل إنشاء سند منفصل لكل قسم.
+     *
+     * @param int[] $serviceIds
+     * @return array<int, array{service_id:int,total_price:float,department_id:int,department_code:string,department_name:string}>
+     */
+    public function getServicesGroupedByDepartment(array $serviceIds): array
+    {
+        if (empty($serviceIds)) {
+            return [];
+        }
+
+        $cleanIds = array_values(array_unique(array_map('intval', $serviceIds)));
+        $placeholders = implode(',', array_fill(0, count($cleanIds), '?'));
+
+        $sql = "SELECT sm.service_id,
+                       sm.total_price,
+                       sm.service_name,
+                       d.department_id,
+                       d.department_code,
+                       d.department_name
+                FROM services_master sm
+                LEFT JOIN service_categories sc ON sc.category_id = sm.category_id
+                LEFT JOIN departments d         ON d.department_id = sc.department_id
+                WHERE sm.service_id IN ($placeholders)";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute($cleanIds);
+        return $stmt->fetchAll();
+    }
+
     public function addInvoiceDetail(int $invoiceId, int $serviceId, float $price): bool
     {
         $sql = "INSERT INTO Invoice_Details (invoice_id, service_id, service_price_at_time)

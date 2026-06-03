@@ -133,6 +133,11 @@ $routes = [
     'accounting/daily_treasury' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('getDailyTreasury', false)],
     'accounting/revenues_drilldown' => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('getRevenuesDrilldown')],
 
+    // 🆕 واجهة "اليومية" + إقفال الفترة (Migration 011 + 012)
+    'accounting/daily_journal'    => ['methods' => ['GET'],  'handler' => fn () => $accountingHandler('getDailyJournal', false)],
+    'accounting/invoice_services' => ['methods' => ['GET'],  'handler' => fn () => $accountingHandler('getInvoiceServices', false)],
+    'accounting/close_shift'      => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('closeShift')],
+
     'admin/schema'           => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getSchema', false)],
     'admin/dashboard'        => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getDashboard', false)],
     'admin/dashboard_charts' => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getDashboardCharts', false)],
