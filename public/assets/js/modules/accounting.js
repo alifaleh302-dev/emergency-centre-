@@ -683,10 +683,34 @@ const Accountant = {
         }
     },
 
+    openDailyJournal() {
+        Core.loadExternalScript("assets/js/modules/daily_journal.js", "DailyJournal")
+            .then(() => {
+                if (window.DailyJournal) {
+                    window.DailyJournal.view();
+                    return;
+                }
+                Core.showAlert('تعذر تحميل واجهة اليومية.', 'error');
+            })
+            .catch((err) => {
+                console.error('openDailyJournal error:', err);
+                Core.showAlert('حدث خطأ أثناء فتح واجهة اليومية.', 'error');
+            });
+    },
+
     openDailyInfo() {
-        Core.loadExternalScript("assets/js/modules/daily_info.js", "DailyInfo").then(() => {
-            if (window.DailyInfo) window.DailyInfo.view();
-        });
+        Core.loadExternalScript("assets/js/modules/daily_info.js", "DailyInfo")
+            .then(() => {
+                if (window.DailyInfo) {
+                    window.DailyInfo.view();
+                    return;
+                }
+                Core.showAlert('تعذر تحميل واجهة المعلومية اليومية.', 'error');
+            })
+            .catch((err) => {
+                console.error('openDailyInfo error:', err);
+                Core.showAlert('حدث خطأ أثناء فتح واجهة المعلومية اليومية.', 'error');
+            });
     }
 
 };
@@ -705,6 +729,7 @@ loading()
         { title: "الخزينة اليومية", icon: "bi-safe", url: "javascript:void(0)", action: "Accountant.viewTreasury('receipts')" },
         { title: "الإيرادات", icon: "bi-graph-up-arrow", url: "javascript:void(0)", action: "Accountant.viewRevenues('years')" },
         { title: "المركز المالي والسندي", icon: "bi-bank2", url: "javascript:void(0)", action: "Accountant.openFinanceHub()" },
+        { title: "اليومية", icon: "bi-journal-text", url: "javascript:void(0)", action: "Accountant.openDailyJournal()" },
         { title: "المعلومية اليومية", icon: "bi-newspaper", url: "javascript:void(0)", action: "Accountant.openDailyInfo()" }
     ];
     Core.renderSidebar(accountingLinks);

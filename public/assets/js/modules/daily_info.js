@@ -110,7 +110,7 @@ const DailyInfo = {
         const today = this.getLocalIsoDate();
         this.state.reportDate = today;
 
-        Core.navigateTo('daily_info', () => {
+        Core.navigateTo('openDailyInfo', () => {
             document.getElementById('mainContent').innerHTML = this.renderShell();
         });
 

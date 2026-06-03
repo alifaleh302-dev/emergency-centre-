@@ -535,7 +535,6 @@
             // عند نجاح تحميل ملف الصلاحية
             scriptElement.onload = () => {
                 console.log(`[System] تم تحميل موديول الصلاحية بنجاح: ${scriptUrl}`);
-                // إضافة زر تسجيل الخروج في الواجهة (اختياري لكن مهم)
                 injectLogoutButton();
             };
 
@@ -547,8 +546,12 @@
             document.body.appendChild(scriptElement);
         });
 
-        // دالة مساعدة لإضافة زر تسجيل الخروج في القائمة الجانبية
-        
+        // دالة مساعدة توافقية: الواجهة الحالية تحتوي أزرار الخروج مسبقاً،
+        // لكن بعض الإصدارات القديمة ما زالت تستدعي هذه الدالة بعد تحميل الموديول.
+        // لذلك نُبقيها كدالة آمنة تمنع توقف الواجهة بسبب ReferenceError.
+        function injectLogoutButton() {
+            return true;
+        }
 
         function logout() {
             localStorage.removeItem('jwt_token');

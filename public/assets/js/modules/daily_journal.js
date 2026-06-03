@@ -118,7 +118,7 @@ const DailyJournal = {
 
     // ===================== Main entry =====================
     view() {
-        Core.navigateTo('viewDailyJournal', () => {
+        Core.navigateTo('openDailyJournal', () => {
             this.injectStylesOnce();
             this.state.date = this.getTodayIso();
             this.state.departmentId = 0;
