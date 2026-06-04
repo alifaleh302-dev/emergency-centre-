@@ -44,201 +44,276 @@ const DailyJournal = {
         const style = document.createElement('style');
         style.id = 'dj-styles';
         style.textContent = `
-            /* تطبيق الأنماط على الحاوية الفعلية #dj-container (بدلاً من #dj-container, #dj-wrapper غير الموجود) */
-            #dj-container, #dj-wrapper { direction: rtl; font-family: 'Noto Sans Arabic', 'Tajawal', 'Cairo', system-ui, sans-serif; }
-            #dj-container .app-module-surface-body, #dj-container, #dj-wrapper .app-module-surface-body { padding: 0; }
-
-            /* ===== مربعات الملخص المصغّرة (KPI) — تجاوز نسخة الـ core للحصول على شبكة 2×2 على الهاتف ===== */
-            #dj-container, #dj-wrapper .dj-kpi-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-                gap: 10px;
+            .dj-shell {
+                direction: rtl;
+                font-family: 'Noto Sans Arabic', 'Tajawal', 'Cairo', system-ui, sans-serif;
             }
-            #dj-container, #dj-wrapper .dj-kpi {
-                background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-                border: 1px solid rgba(226,232,240,0.95);
-                border-radius: 14px;
-                padding: 0.65rem 0.75rem;
-                min-height: 78px;
-                box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
-                display: flex;
-                flex-direction: column;
-                justify-content: center;
-                gap: 2px;
+            .dj-shell .app-module-toolbar-card {
+                padding: 0.85rem 1rem;
+                border-radius: 18px;
             }
-            #dj-container, #dj-wrapper .dj-kpi-label { color: #64748b; font-size: 0.72rem; font-weight: 700; line-height: 1.2; }
-            #dj-container, #dj-wrapper .dj-kpi-value { color: #0f172a; font-size: 1.05rem; font-weight: 800; line-height: 1.2; }
-            #dj-container, #dj-wrapper .dj-kpi-sub   { color: #94a3b8; font-size: 0.66rem; line-height: 1.25; margin-top: 1px; }
+            .dj-shell .app-module-surface-body { padding: 0; }
 
-            #dj-container, #dj-wrapper .dj-toolbar-grid {
+            .dj-shell .dj-toolbar-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                grid-template-columns: minmax(165px, 185px) minmax(175px, 220px) minmax(260px, 1fr);
                 gap: 12px;
                 align-items: end;
             }
-            #dj-container, #dj-wrapper .dj-toolbar-actions {
+            .dj-shell .dj-filter-field label {
+                color: #64748b;
+                font-size: 0.78rem;
+                font-weight: 800;
+                margin-bottom: 0.4rem;
+            }
+            .dj-shell .dj-filter-input {
+                height: 40px;
+                border-radius: 12px;
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                font-size: 0.9rem;
+                box-shadow: none;
+            }
+            .dj-shell .dj-filter-input:focus {
+                background: #fff;
+                border-color: #93c5fd;
+                box-shadow: 0 0 0 0.2rem rgba(59,130,246,0.12);
+            }
+            .dj-shell .dj-toolbar-actions {
                 display: flex;
+                align-items: end;
+                justify-content: space-between;
                 gap: 10px;
-                align-items: center;
                 flex-wrap: wrap;
             }
-            #dj-container, #dj-wrapper .dj-legend {
+            .dj-shell .dj-filter-btn {
+                height: 40px;
+                min-width: 150px;
+                border-radius: 12px;
+                padding: 0 16px;
+                box-shadow: 0 10px 22px rgba(65,96,224,0.16);
+                white-space: nowrap;
+            }
+            .dj-shell .dj-legend {
                 display: flex;
                 flex-wrap: wrap;
-                gap: 8px;
+                gap: 6px;
                 justify-content: flex-end;
             }
-            #dj-container, #dj-wrapper .dj-chip {
+            .dj-shell .dj-chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 6px 10px;
+                border-radius: 999px;
+                background: #eff6ff;
+                color: #1d4ed8;
+                font-size: 11px;
+                font-weight: 800;
+                border: 1px solid rgba(191,219,254,.9);
+            }
+            .dj-shell .dj-chip::before {
+                content: '';
+                width: 7px;
+                height: 7px;
+                border-radius: 50%;
+                background: currentColor;
+            }
+            .dj-shell .dj-chip.dj-chip-b { background: #fff7ed; color: #c2410c; border-color: #fed7aa; }
+            .dj-shell .dj-chip.dj-chip-shift { background: #fef3c7; color: #92400e; border-color: #fde68a; }
+            .dj-shell .dj-chip.dj-chip-closed { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+
+            .dj-shell .dj-surface-stack { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+
+            .dj-shell .dj-kpi-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+                gap: 10px;
+            }
+            .dj-shell .dj-kpi {
+                position: relative;
+                background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+                border: 1px solid #e9eef5;
+                border-radius: 18px;
+                padding: 0.8rem 0.9rem 0.72rem;
+                min-height: 86px;
+                box-shadow: 0 8px 22px rgba(15,23,42,0.05);
+                overflow: hidden;
+            }
+            .dj-shell .dj-kpi::before {
+                content: '';
+                position: absolute;
+                inset-inline: 0;
+                top: 0;
+                height: 4px;
+                background: linear-gradient(90deg, #4160e0 0%, #60a5fa 100%);
+            }
+            .dj-shell .dj-kpi-label { color: #64748b; font-size: 0.72rem; font-weight: 800; line-height: 1.2; margin-bottom: 0.25rem; }
+            .dj-shell .dj-kpi-value { color: #0f172a; font-size: 1.05rem; font-weight: 900; line-height: 1.15; }
+            .dj-shell .dj-kpi-sub { color: #94a3b8; font-size: 0.65rem; line-height: 1.25; margin-top: 0.22rem; }
+
+            .dj-shell .dj-table-card {
+                background: #fff;
+                border: 1px solid #e9ecef;
+                border-radius: 22px;
+                box-shadow: 0 12px 28px rgba(15,23,42,0.05);
+                overflow: hidden;
+            }
+            .dj-shell .dj-table-card-head {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 12px;
+                flex-wrap: wrap;
+                padding: 14px 18px;
+                background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+                border-bottom: 1px solid #eef2f7;
+            }
+            .dj-shell .dj-table-title { font-size: 0.95rem; font-weight: 900; color: #0f172a; }
+            .dj-shell .dj-table-subtitle { font-size: 0.76rem; color: #64748b; margin-top: 0.15rem; }
+            .dj-shell .dj-table-count {
                 display: inline-flex;
                 align-items: center;
                 gap: 6px;
                 padding: 7px 12px;
                 border-radius: 999px;
-                background: #eff6ff;
-                color: #1d4ed8;
-                font-size: 12px;
-                font-weight: 700;
+                background: #eef2ff;
+                color: #3730a3;
+                font-size: 0.74rem;
+                font-weight: 800;
+                border: 1px solid #c7d2fe;
             }
-            #dj-container, #dj-wrapper .dj-chip::before {
-                content: '';
-                width: 8px;
-                height: 8px;
-                border-radius: 50%;
-                background: currentColor;
-            }
-            #dj-container, #dj-wrapper .dj-chip.dj-chip-b { background: #fff7ed; color: #c2410c; }
-            #dj-container, #dj-wrapper .dj-chip.dj-chip-shift { background: #fef3c7; color: #92400e; }
-            #dj-container, #dj-wrapper .dj-chip.dj-chip-closed { background: #dcfce7; color: #166534; }
-            #dj-container, #dj-wrapper .dj-surface-stack { display: flex; flex-direction: column; gap: 16px; padding: 18px; }
-
-            /* ===== جدول اليومية — يتبع معايير custom-table في النظام ===== */
-            #dj-container, #dj-wrapper .dj-table-wrap {
-                overflow-x: auto;
-                overflow-y: auto;
+            .dj-shell .dj-table-wrap {
+                overflow: auto;
                 -webkit-overflow-scrolling: touch;
-                border: 1px solid #e9ecef;
-                border-radius: 16px;
-                background: #fff;
                 max-width: 100%;
-                box-shadow: 0 4px 14px rgba(15,23,42,0.04);
             }
-            #dj-container, #dj-wrapper .dj-table {
+            .dj-shell .dj-table {
                 width: 100%;
-                min-width: 880px;
+                min-width: 900px;
                 border-collapse: separate;
                 border-spacing: 0;
                 background: #fff;
             }
-            #dj-container, #dj-wrapper .dj-table th {
+            .dj-shell .dj-table th {
                 background-color: #f8f9fa;
                 color: #6c757d;
                 font-weight: 700;
-                font-size: 0.9rem;
-                padding: 14px 12px;
-                text-align: center;
-                vertical-align: middle;
+                font-size: 0.87rem;
+                padding: 13px 12px;
                 border-bottom: 2px solid #e9ecef;
                 white-space: nowrap;
+                text-align: center;
                 position: sticky;
                 top: 0;
                 z-index: 2;
             }
-            #dj-container, #dj-wrapper .dj-table td {
-                padding: 14px 12px;
-                text-align: center;
+            .dj-shell .dj-table td {
+                padding: 13px 12px;
                 vertical-align: middle;
                 border-bottom: 1px solid #f1f3f5;
                 color: #495057;
-                font-size: 0.92rem;
-                line-height: 1.5;
+                font-size: 0.9rem;
+                text-align: center;
             }
-            #dj-container, #dj-wrapper .dj-table td.dj-cell-patient {
+            .dj-shell .dj-table tbody tr { transition: all 0.18s ease; }
+            .dj-shell .dj-row-a:hover { background-color: rgba(65, 96, 224, 0.03); }
+            .dj-shell .dj-row-b { background: #fffaf3; }
+            .dj-shell .dj-row-b:hover { background: #fff2df; }
+            .dj-shell .dj-table td.dj-cell-patient {
                 white-space: normal;
                 word-break: break-word;
-                max-width: 220px;
+                max-width: 230px;
                 text-align: right;
-                font-weight: 600;
+                font-weight: 700;
                 color: #1f2937;
             }
-            #dj-container, #dj-wrapper .dj-table tbody tr { transition: all 0.2s ease; }
-            #dj-container, #dj-wrapper .dj-row-a { background: #ffffff; }
-            #dj-container, #dj-wrapper .dj-row-a:hover { background: rgba(65, 96, 224, 0.03); }
-            #dj-container, #dj-wrapper .dj-row-b { background: #fffaf3; }
-            #dj-container, #dj-wrapper .dj-row-b:hover { background: #fff1e0; }
-            #dj-container, #dj-wrapper .dj-row-separator {
+            .dj-shell .dj-serial-no { display:block; font-weight: 800; color: #0f172a; }
+            .dj-shell .dj-serial-doc { display:block; margin-top: 2px; font-size: 0.74rem; color: #94a3b8; }
+            .dj-shell .dj-amount { font-weight: 800; color: #0f172a; white-space: nowrap; }
+
+            .dj-shell .dj-row-separator td {
                 background: linear-gradient(90deg,#fde68a 0%,#fcd34d 50%,#fde68a 100%);
-                font-weight: 800;
+                font-weight: 900;
                 color: #78350f;
-                font-size: 14px;
+                font-size: 0.86rem;
+                letter-spacing: 0.2px;
+                border-bottom-color: #f3d37a;
             }
-            #dj-container, #dj-wrapper .dj-row-shift {
+            .dj-shell .dj-row-shift td {
                 background: #fffbeb;
                 color: #92400e;
-                font-weight: 700;
-                font-size: 13.5px;
-            }
-            #dj-container, #dj-wrapper .dj-row-shift td,
-            #dj-container, #dj-wrapper .dj-row-closed td {
-                padding: 16px 14px;
+                font-weight: 800;
                 text-align: right;
-                line-height: 1.9;
+                line-height: 1.85;
+                white-space: normal;
             }
-            #dj-container, #dj-wrapper .dj-shift-line {
+            .dj-shell .dj-row-closed td {
+                background: #ecfdf5;
+                color: #065f46;
+                font-weight: 800;
+                text-align: right;
+                line-height: 1.85;
+                white-space: normal;
+            }
+            .dj-shell .dj-shift-line {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
                 gap: 12px;
                 flex-wrap: wrap;
             }
-            #dj-container, #dj-wrapper .dj-row-closed {
-                background: #ecfdf5;
-                color: #065f46;
-                font-weight: 700;
-            }
-            #dj-container, #dj-wrapper .dj-badge {
+            .dj-shell .dj-badge {
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
                 padding: 5px 10px;
                 border-radius: 999px;
-                font-size: 11px;
+                font-size: 10.5px;
                 font-weight: 800;
                 white-space: nowrap;
             }
-            #dj-container, #dj-wrapper .dj-badge-a  { background: #dbeafe; color: #1e40af; }
-            #dj-container, #dj-wrapper .dj-badge-b  { background: #fed7aa; color: #9a3412; }
-            #dj-container, #dj-wrapper .dj-badge-c  { background: #fecaca; color: #991b1b; }
-            #dj-container, #dj-wrapper .dj-badge-dept { background: #e0e7ff; color: #3730a3; }
-            #dj-container, #dj-wrapper .dj-empty {
+            .dj-shell .dj-badge-a { background: #dbeafe; color: #1e40af; }
+            .dj-shell .dj-badge-b { background: #fed7aa; color: #9a3412; }
+            .dj-shell .dj-badge-c { background: #fecaca; color: #991b1b; }
+            .dj-shell .dj-badge-dept { background: #e0e7ff; color: #3730a3; }
+
+            .dj-shell .dj-empty {
                 padding: 56px 24px;
                 text-align: center;
                 color: #64748b;
+                background: #fff;
+                border: 1px dashed #dbe3ee;
+                border-radius: 18px;
             }
-            #dj-container, #dj-wrapper .dj-detail-btn {
-                background: #4f46e5;
-                color: #fff;
-                border: 0;
-                padding: 8px 14px;
-                border-radius: 10px;
+            .dj-shell .dj-detail-btn {
+                background: #fff;
+                color: #3656d4;
+                border: 1px solid #c7d2fe;
+                padding: 7px 12px;
+                border-radius: 999px;
                 cursor: pointer;
-                font-size: 12px;
-                font-weight: 700;
-                transition: all .2s ease;
+                font-size: 11.5px;
+                font-weight: 800;
+                transition: all 0.18s ease;
+                box-shadow: 0 4px 10px rgba(99,102,241,0.08);
+                white-space: nowrap;
             }
-            #dj-container, #dj-wrapper .dj-detail-btn:hover { background: #4338ca; transform: translateY(-1px); }
-            #dj-container, #dj-wrapper .dj-close-btn {
+            .dj-shell .dj-detail-btn:hover { background: #eef2ff; color: #253ea8; border-color: #a5b4fc; }
+            .dj-shell .dj-close-btn {
                 background: #dc2626;
                 color: #fff;
                 border: 0;
                 padding: 9px 16px;
-                border-radius: 10px;
+                border-radius: 999px;
                 cursor: pointer;
-                font-size: 12.5px;
-                font-weight: 800;
+                font-size: 12px;
+                font-weight: 900;
                 white-space: nowrap;
+                box-shadow: 0 8px 18px rgba(220,38,38,0.18);
             }
-            #dj-container, #dj-wrapper .dj-close-btn:hover { background: #b91c1c; }
-            #dj-container, #dj-wrapper .dj-close-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+            .dj-shell .dj-close-btn:hover { background: #b91c1c; }
+            .dj-shell .dj-close-btn:disabled { background: #9ca3af; cursor: not-allowed; box-shadow: none; }
 
             #dj-modal-bg {
                 position: fixed;
@@ -262,14 +337,9 @@ const DailyJournal = {
                 direction: rtl;
                 box-shadow: 0 24px 50px rgba(15,23,42,.25);
             }
-            #dj-modal h3 { margin: 0 0 14px 0; color: #1e40af; font-weight: 800; }
+            #dj-modal h3 { margin: 0 0 14px 0; color: #1e40af; font-weight: 900; }
             #dj-modal table { width: 100%; border-collapse: collapse; }
-            #dj-modal th, #dj-modal td {
-                border: 1px solid #d1d5db;
-                padding: 9px;
-                text-align: center;
-                font-size: 13px;
-            }
+            #dj-modal th, #dj-modal td { border: 1px solid #d1d5db; padding: 9px; text-align: center; font-size: 13px; }
             #dj-modal th { background: #f8fafc; font-weight: 700; }
             #dj-modal-close {
                 margin-top: 14px;
@@ -277,101 +347,108 @@ const DailyJournal = {
                 color: #fff;
                 border: 0;
                 padding: 10px 18px;
-                border-radius: 10px;
+                border-radius: 12px;
                 cursor: pointer;
-                font-weight: 700;
+                font-weight: 800;
             }
 
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-table-wrap,
+            [data-theme="dark"] .dj-shell .app-module-toolbar-card,
+            [data-theme="dark"] .dj-shell .dj-table-card,
             [data-theme="dark"] #dj-modal {
                 background: #1f2937;
                 border-color: #334155;
+                color: #e2e8f0;
             }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-table,
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-row-a,
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-row-b { background: transparent; color: #e2e8f0; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-table th,
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-table td,
-            [data-theme="dark"] #dj-modal th,
-            [data-theme="dark"] #dj-modal td { border-color: #334155; color: #e2e8f0; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-row-a:hover { background: rgba(59,130,246,.12); }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-row-b:hover { background: rgba(249,115,22,.12); }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-row-shift { background: rgba(245,158,11,.14); color: #fcd34d; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-row-closed { background: rgba(16,185,129,.14); color: #86efac; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-chip { background: rgba(59,130,246,.18); color: #93c5fd; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-chip.dj-chip-b { background: rgba(249,115,22,.18); color: #fdba74; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-chip.dj-chip-shift { background: rgba(245,158,11,.16); color: #fcd34d; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-chip.dj-chip-closed { background: rgba(16,185,129,.16); color: #86efac; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-empty { color: #cbd5e1; }
-            [data-theme="dark"] #dj-modal h3 { color: #93c5fd; }
-            [data-theme="dark"] #dj-modal th { background: #111827; }
-
-            @media (max-width: 768px) {
-                #dj-container, #dj-wrapper .dj-surface-stack { padding: 12px; gap: 12px; }
-                #dj-container, #dj-wrapper .dj-toolbar-grid { grid-template-columns: 1fr; }
-                #dj-container, #dj-wrapper .dj-toolbar-actions { flex-direction: column; align-items: stretch; }
-                #dj-container, #dj-wrapper .dj-legend { justify-content: flex-start; }
-                #dj-container, #dj-wrapper .dj-shift-line { flex-direction: column; align-items: stretch; }
-                #dj-container, #dj-wrapper .dj-close-btn { width: 100%; }
-
-                /* ===== شبكة 2×2 للملخصات على الهاتف ===== */
-                #dj-container, #dj-wrapper .dj-kpi-grid {
-                    grid-template-columns: repeat(2, 1fr) !important;
-                    gap: 8px;
-                }
-                #dj-container, #dj-wrapper .dj-kpi {
-                    padding: 0.55rem 0.6rem;
-                    min-height: 70px;
-                    border-radius: 12px;
-                }
-                #dj-container, #dj-wrapper .dj-kpi-label { font-size: 0.68rem; }
-                #dj-container, #dj-wrapper .dj-kpi-value { font-size: 0.95rem; }
-                #dj-container, #dj-wrapper .dj-kpi-sub   { font-size: 0.62rem; }
-
-                /* جدول أكثر راحة على الهاتف */
-                #dj-container, #dj-wrapper .dj-table { min-width: 760px; font-size: 0.82rem; }
-                #dj-container, #dj-wrapper .dj-table th { padding: 10px 8px; font-size: 0.78rem; }
-                #dj-container, #dj-wrapper .dj-table td { padding: 11px 8px; font-size: 0.82rem; }
-                #dj-container, #dj-wrapper .dj-table td.dj-cell-patient { max-width: 150px; }
-                #dj-container, #dj-wrapper .dj-detail-btn { padding: 7px 10px; font-size: 11px; }
-                #dj-container, #dj-wrapper .dj-badge { padding: 4px 8px; font-size: 10px; }
+            [data-theme="dark"] .dj-shell .dj-filter-field label,
+            [data-theme="dark"] .dj-shell .dj-table-subtitle,
+            [data-theme="dark"] .dj-shell .dj-kpi-label,
+            [data-theme="dark"] .dj-shell .dj-kpi-sub { color: #94a3b8; }
+            [data-theme="dark"] .dj-shell .dj-filter-input {
+                background: #111827;
+                border-color: #334155;
+                color: #e2e8f0;
             }
-
-            @media (max-width: 420px) {
-                #dj-container, #dj-wrapper .dj-kpi { min-height: 64px; padding: 0.5rem 0.55rem; }
-                #dj-container, #dj-wrapper .dj-kpi-value { font-size: 0.88rem; }
-                #dj-container, #dj-wrapper .dj-kpi-label { font-size: 0.64rem; }
-                #dj-container, #dj-wrapper .dj-kpi-sub   { font-size: 0.58rem; }
-            }
-
-            @media print {
-                #dj-container, #dj-wrapper .app-module-toolbar-card,
-                #dj-container, #dj-wrapper .dj-kpi-grid,
-                #dj-container, #dj-wrapper .dj-close-btn,
-                #dj-container, #dj-wrapper .dj-detail-btn,
-                #dj-modal-bg,
-                .custom-navbar,
-                .sidebar,
-                .sidebar-overlay { display: none !important; }
-                #dj-container, #dj-wrapper .app-module-surface,
-                #dj-container, #dj-wrapper .dj-table-wrap { box-shadow: none; border: 0; }
-                #dj-container, #dj-wrapper .dj-table { min-width: 100%; font-size: 11px; }
-                #dj-container, #dj-wrapper .dj-table th, #dj-container, #dj-wrapper .dj-table td { padding: 7px 6px; }
-            }
-
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-kpi {
+            [data-theme="dark"] .dj-shell .dj-filter-input:focus { background: #0f172a; }
+            [data-theme="dark"] .dj-shell .dj-chip { background: rgba(59,130,246,.18); color: #93c5fd; border-color: rgba(59,130,246,.22); }
+            [data-theme="dark"] .dj-shell .dj-chip.dj-chip-b { background: rgba(249,115,22,.18); color: #fdba74; border-color: rgba(249,115,22,.24); }
+            [data-theme="dark"] .dj-shell .dj-chip.dj-chip-shift { background: rgba(245,158,11,.16); color: #fcd34d; border-color: rgba(245,158,11,.24); }
+            [data-theme="dark"] .dj-shell .dj-chip.dj-chip-closed { background: rgba(16,185,129,.16); color: #86efac; border-color: rgba(16,185,129,.24); }
+            [data-theme="dark"] .dj-shell .dj-kpi {
                 background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
                 border-color: #334155;
                 box-shadow: none;
             }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-kpi-label { color: #94a3b8; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-kpi-value { color: #f8fafc; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-kpi-sub   { color: #cbd5e1; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-table th { background-color: #2d3748 !important; color: #a0aec0; border-bottom-color: #4a5568; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-table td { color: #e2e8f0; border-bottom-color: #4a5568; }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-row-a:hover { background-color: rgba(99,179,237,0.08); }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-row-b { background: rgba(249,115,22,.10); }
-            [data-theme="dark"] #dj-container, #dj-wrapper .dj-row-b:hover { background: rgba(249,115,22,.16); }
+            [data-theme="dark"] .dj-shell .dj-kpi-value,
+            [data-theme="dark"] .dj-shell .dj-table-title,
+            [data-theme="dark"] .dj-shell .dj-serial-no,
+            [data-theme="dark"] .dj-shell .dj-amount { color: #f8fafc; }
+            [data-theme="dark"] .dj-shell .dj-table-card-head { background: linear-gradient(180deg, #1f2937 0%, #111827 100%); border-bottom-color: #334155; }
+            [data-theme="dark"] .dj-shell .dj-table-count { background: rgba(99,102,241,.18); color: #c7d2fe; border-color: rgba(99,102,241,.22); }
+            [data-theme="dark"] .dj-shell .dj-table { background: transparent; }
+            [data-theme="dark"] .dj-shell .dj-table th { background-color: #2d3748 !important; color: #a0aec0; border-bottom-color: #4a5568; }
+            [data-theme="dark"] .dj-shell .dj-table td { color: #e2e8f0; border-bottom-color: #4a5568; }
+            [data-theme="dark"] .dj-shell .dj-row-a:hover { background-color: rgba(99,179,237,0.08); }
+            [data-theme="dark"] .dj-shell .dj-row-b { background: rgba(249,115,22,.10); }
+            [data-theme="dark"] .dj-shell .dj-row-b:hover { background: rgba(249,115,22,.16); }
+            [data-theme="dark"] .dj-shell .dj-row-shift td { background: rgba(245,158,11,.14); color: #fcd34d; }
+            [data-theme="dark"] .dj-shell .dj-row-closed td { background: rgba(16,185,129,.14); color: #86efac; }
+            [data-theme="dark"] .dj-shell .dj-empty { color: #cbd5e1; background: #1f2937; border-color: #334155; }
+            [data-theme="dark"] .dj-shell .dj-detail-btn { background: #111827; color: #c7d2fe; border-color: #4f46e5; box-shadow: none; }
+            [data-theme="dark"] #dj-modal h3 { color: #93c5fd; }
+            [data-theme="dark"] #dj-modal th { background: #111827; }
+            [data-theme="dark"] #dj-modal th,
+            [data-theme="dark"] #dj-modal td { border-color: #334155; color: #e2e8f0; }
+
+            @media (max-width: 1199px) {
+                .dj-shell .dj-toolbar-grid {
+                    grid-template-columns: minmax(160px, 180px) minmax(170px, 220px) 1fr;
+                }
+            }
+            @media (max-width: 992px) {
+                .dj-shell .dj-toolbar-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .dj-shell .dj-toolbar-actions { grid-column: 1 / -1; }
+                .dj-shell .dj-filter-btn { min-width: 136px; }
+            }
+            @media (max-width: 768px) {
+                .dj-shell .app-module-toolbar-card { padding: 0.8rem; }
+                .dj-shell .dj-surface-stack { padding: 12px; gap: 12px; }
+                .dj-shell .dj-toolbar-grid { grid-template-columns: 1fr; }
+                .dj-shell .dj-toolbar-actions { flex-direction: column; align-items: stretch; }
+                .dj-shell .dj-legend { justify-content: flex-start; }
+                .dj-shell .dj-filter-btn,
+                .dj-shell .dj-close-btn { width: 100%; }
+                .dj-shell .dj-kpi-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 8px; }
+                .dj-shell .dj-kpi { min-height: 70px; padding: 0.58rem 0.62rem; border-radius: 14px; }
+                .dj-shell .dj-kpi-label { font-size: 0.68rem; }
+                .dj-shell .dj-kpi-value { font-size: 0.94rem; }
+                .dj-shell .dj-kpi-sub { font-size: 0.6rem; }
+                .dj-shell .dj-table-card-head { padding: 12px 14px; }
+                .dj-shell .dj-table { min-width: 760px; }
+                .dj-shell .dj-table th { padding: 10px 8px; font-size: 0.78rem; }
+                .dj-shell .dj-table td { padding: 11px 8px; font-size: 0.82rem; }
+                .dj-shell .dj-table td.dj-cell-patient { max-width: 150px; }
+            }
+            @media (max-width: 420px) {
+                .dj-shell .dj-kpi { min-height: 64px; padding: 0.5rem 0.55rem; }
+                .dj-shell .dj-kpi-label { font-size: 0.64rem; }
+                .dj-shell .dj-kpi-value { font-size: 0.88rem; }
+                .dj-shell .dj-kpi-sub { font-size: 0.58rem; }
+            }
+            @media print {
+                .dj-shell .app-module-toolbar-card,
+                .dj-shell .dj-kpi-grid,
+                .dj-shell .dj-detail-btn,
+                .dj-shell .dj-close-btn,
+                #dj-modal-bg,
+                .custom-navbar,
+                .sidebar,
+                .sidebar-overlay { display: none !important; }
+                .dj-shell .app-module-surface,
+                .dj-shell .dj-table-card { box-shadow: none; border: 0; }
+                .dj-shell .dj-table { min-width: 100%; font-size: 11px; }
+                .dj-shell .dj-table th,
+                .dj-shell .dj-table td { padding: 7px 6px; }
+            }
         `;
         document.head.appendChild(style);
     },
@@ -390,13 +467,13 @@ const DailyJournal = {
 
             const toolbar = `
                 <div class="dj-toolbar-grid">
-                    <div>
-                        <label class="form-label fw-bold mb-2">التاريخ</label>
-                        <input type="date" id="dj-date" class="form-control" value="${this.state.date}">
+                    <div class="dj-filter-field">
+                        <label class="form-label">التاريخ</label>
+                        <input type="date" id="dj-date" class="form-control form-control-sm dj-filter-input" value="${this.state.date}">
                     </div>
-                    <div>
-                        <label class="form-label fw-bold mb-2">القسم</label>
-                        <select id="dj-dept" class="form-select">
+                    <div class="dj-filter-field">
+                        <label class="form-label">القسم</label>
+                        <select id="dj-dept" class="form-select form-select-sm dj-filter-input">
                             <option value="0">جميع الأقسام</option>
                             <option value="1">المختبر</option>
                             <option value="2">الأشعة</option>
@@ -407,15 +484,15 @@ const DailyJournal = {
                         </select>
                     </div>
                     <div class="dj-toolbar-actions">
-                        <button class="btn btn-primary w-100" onclick="DailyJournal.load()">
-                            <i class="bi bi-funnel ms-1"></i> تطبيق الفلاتر
-                        </button>
                         <div class="dj-legend">
                             <span class="dj-chip">سندات A</span>
                             <span class="dj-chip dj-chip-b">سندات B / C</span>
                             <span class="dj-chip dj-chip-shift">فترات مفتوحة</span>
                             <span class="dj-chip dj-chip-closed">فترات مقفلة</span>
                         </div>
+                        <button class="btn btn-primary btn-sm fw-bold dj-filter-btn" onclick="DailyJournal.load()">
+                            <i class="bi bi-funnel ms-1"></i> تطبيق الفلاتر
+                        </button>
                     </div>
                 </div>
             `;
@@ -536,21 +613,29 @@ const DailyJournal = {
 
         let html = `
             ${this.renderSummaryCards(invoices, groupA, groupBC, shift_totals, closures)}
-            <div class="dj-table-wrap">
-                <table class="dj-table">
-                    <thead>
-                        <tr>
-                            <th style="width: 60px;">#</th>
-                            <th>اسم المريض</th>
-                            <th style="width: 120px;">رقم السند</th>
-                            <th style="width: 140px;">القسم</th>
-                            <th style="width: 170px;">نوع السند</th>
-                            <th style="width: 140px;">المبلغ</th>
-                            <th style="width: 110px;">الوقت</th>
-                            <th style="width: 120px;">التفاصيل</th>
-                        </tr>
-                    </thead>
-                    <tbody>
+            <div class="dj-table-card">
+                <div class="dj-table-card-head">
+                    <div>
+                        <div class="dj-table-title">سجل السندات اليومية</div>
+                        <div class="dj-table-subtitle">عرض منسّق ومضغوط ومتوافق مع أسلوب جداول النظام.</div>
+                    </div>
+                    <span class="dj-table-count"><i class="bi bi-table"></i> ${(invoices.length || 0).toLocaleString('ar-EG')} سند</span>
+                </div>
+                <div class="dj-table-wrap">
+                    <table class="custom-table dj-table text-end mb-0">
+                        <thead>
+                            <tr>
+                                <th style="width: 56px;">#</th>
+                                <th>اسم المريض</th>
+                                <th style="width: 118px;">رقم السند</th>
+                                <th style="width: 132px;">القسم</th>
+                                <th style="width: 152px;">نوع السند</th>
+                                <th style="width: 132px;">المبلغ</th>
+                                <th style="width: 104px;">الوقت</th>
+                                <th style="width: 116px;">التفاصيل</th>
+                            </tr>
+                        </thead>
+                        <tbody>
         `;
 
         let rowNum = 1;
@@ -606,7 +691,7 @@ const DailyJournal = {
             `;
         }
 
-        html += `</tbody></table></div>`;
+        html += `</tbody></table></div></div>`;
         container.innerHTML = html;
     },
 
@@ -618,14 +703,17 @@ const DailyJournal = {
             <tr class="dj-row-${group}">
                 <td>${idx}</td>
                 <td class="dj-cell-patient" title="${patientName}">${patientName}</td>
-                <td><strong>${inv.serial_number}</strong> <small class="text-muted">(${inv.doc_name})</small></td>
+                <td>
+                    <span class="dj-serial-no">${inv.serial_number}</span>
+                    <span class="dj-serial-doc">(${inv.doc_name})</span>
+                </td>
                 <td><span class="dj-badge dj-badge-dept">${this.escape(inv.department_name || '—')}</span></td>
                 <td><span class="dj-badge ${docClass}">${this.escape(inv.type_label)}</span></td>
-                <td><strong>${this.fmtMoney(inv.amount)}</strong></td>
-                <td>${this.escape(inv.time || '')}</td>
+                <td><span class="dj-amount">${this.fmtMoney(inv.amount)}</span></td>
+                <td><span class="text-muted small fw-bold">${this.escape(inv.time || '')}</span></td>
                 <td>
                     <button class="dj-detail-btn" onclick="DailyJournal.showDetails(${inv.invoice_id}, decodeURIComponent('${safePatient}'))">
-                        <i class="bi bi-eye"></i> عرض
+                        <i class="bi bi-eye ms-1"></i> عرض
                     </button>
                 </td>
             </tr>
