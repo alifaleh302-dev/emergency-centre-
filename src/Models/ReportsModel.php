@@ -3,16 +3,26 @@ declare(strict_types=1);
 
 /**
  * ReportsModel - نموذج تقرير المعلومية اليومية
+ *
+ * إصلاح هام (2026-06): جميع حسابات الفترة (صباحية/مسائية) والتاريخ
+ * تتم الآن على التوقيت المحلي (Asia/Aden = UTC+3) بدلاً من UTC،
+ * لأن قاعدة البيانات تخزن بـ TIMESTAMPTZ بـ UTC، وعند استخراج
+ * EXTRACT(HOUR) أو DATE() مباشرةً كانت النتيجة بالـ UTC مما يؤدي
+ * إلى تصنيف خاطئ للفترة (مثلاً 14:00 UTC = 17:00 محلياً قد يُعد
+ * صباحياً عند المقارنة بـ 12).
  */
 class ReportsModel
 {
     private PDO $conn;
     private string $driver;
+    private string $tz;
 
     public function __construct(PDO $db, string $driver = 'pgsql')
     {
         $this->conn = $db;
         $this->driver = $driver;
+        // التوقيت المحلي للنظام (افتراضي Asia/Aden) يمكن تجاوزه عبر APP_TIMEZONE
+        $this->tz = getenv('APP_TIMEZONE') ?: 'Asia/Aden';
     }
 
     /**
@@ -166,11 +176,18 @@ class ReportsModel
     }
 
     /**
-     * تحديد الفترة (صباحية/مسائية) بناءً على الوقت
+     * تحديد الفترة (صباحية/مسائية) بناءً على وقت التوقيت المحلي.
+     * يقبل timestamp بأي صيغة قابلة لـ DateTimeImmutable.
      */
     private function getShift(string $timestamp, int $mStart, int $mEnd): string
     {
-        $hour = (int) date('G', strtotime($timestamp));
+        try {
+            $dt = new DateTimeImmutable($timestamp);
+            $dt = $dt->setTimezone(new DateTimeZone($this->tz));
+            $hour = (int) $dt->format('G');
+        } catch (\Throwable $e) {
+            $hour = (int) date('G', strtotime($timestamp));
+        }
         return ($hour >= $mStart && $hour < $mEnd) ? 'morning' : 'evening';
     }
 
@@ -182,6 +199,9 @@ class ReportsModel
      * - حصة المركز = المدفوع نقداً بعد خصم حصة الوزارة.
      * - الإعفاء = الجزء غير المحصل من حصة المركز، أو كامل قيمة الخدمة في سند C.
      * - أي سند مرتبط بسند ملغى يُستبعد بالكامل.
+     *
+     * تنبيه: نستخدم DATE(... AT TIME ZONE :tz) لاختيار الفواتير التي
+     * يقع تاريخها المحلي (لا UTC) ضمن تاريخ التقرير.
      */
     public function getInvoiceData(string $reportDate, int $mStart, int $mEnd): array
     {
@@ -189,6 +209,7 @@ class ReportsModel
             SELECT
                 i.invoice_id,
                 i.paid_at,
+                (i.paid_at AT TIME ZONE :tz) AS paid_at_local,
                 i.net_amount,
                 i.exemption_value,
                 i.related_invoice_id,
@@ -208,13 +229,13 @@ class ReportsModel
             LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
             LEFT JOIN departments d ON sc.department_id = d.department_id
             WHERE {$this->activeInvoiceCondition('i')}
-              AND DATE(i.paid_at) = :report_date
+              AND DATE(i.paid_at AT TIME ZONE :tz) = :report_date
               AND dt.doc_name IN ('A', 'B', 'C')
             ORDER BY i.invoice_id, id.detail_id
         ";
 
         $stmt = $this->conn->prepare($sql);
-        $stmt->execute([':report_date' => $reportDate]);
+        $stmt->execute([':report_date' => $reportDate, ':tz' => $this->tz]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = $this->createEmptyResult();
@@ -228,7 +249,7 @@ class ReportsModel
             if (!isset($grouped[$invoiceId])) {
                 $grouped[$invoiceId] = [
                     'invoice_id'         => $invoiceId,
-                    'paid_at'            => (string) $row['paid_at'],
+                    'paid_at_local'      => (string) $row['paid_at_local'],
                     'doc_name'           => (string) $row['doc_name'],
                     'net_amount'         => (float) $row['net_amount'],
                     'exemption_value'    => (float) $row['exemption_value'],
@@ -254,7 +275,9 @@ class ReportsModel
         }
 
         foreach ($grouped as $invoice) {
-            $shift = $this->getShift($invoice['paid_at'], $mStart, $mEnd);
+            // ⚠️ paid_at_local هو timestamp بدون منطقة زمنية (محول إلى التوقيت المحلي)
+            // لذا نمرّره مع DateTimeZone::UTC حتى لا يعيد PHP تحويله ثم نسأل عن الساعة مباشرة.
+            $shift = $this->getShiftFromLocalString($invoice['paid_at_local'], $mStart, $mEnd);
             $doc   = $invoice['doc_name'];
             $lines = $invoice['lines'];
 
@@ -320,13 +343,36 @@ class ReportsModel
     }
 
     /**
-     * بيانات تذاكر المعاينة
+     * استخراج الساعة من سلسلة timestamp محلية (بدون منطقة زمنية)
+     * التي أعادتها قاعدة البيانات بعد AT TIME ZONE.
      */
-    public function getTicketData(string $reportDate): array
+    private function getShiftFromLocalString(string $localTs, int $mStart, int $mEnd): string
+    {
+        // النص بصيغة 'YYYY-MM-DD HH:MM:SS.fff' بدون TZ → نأخذ الساعة مباشرة
+        if (preg_match('/\b(\d{1,2}):\d{2}:\d{2}/', $localTs, $m)) {
+            $hour = (int) $m[1];
+            return ($hour >= $mStart && $hour < $mEnd) ? 'morning' : 'evening';
+        }
+        // fallback
+        return $this->getShift($localTs, $mStart, $mEnd);
+    }
+
+    /**
+     * بيانات تذاكر المعاينة - إعادة بناء (2026-06):
+     *   • الفترة (صباحي/مسائي) تُحدّد الآن بحسب الساعة المحلية فعلياً
+     *     (وليس حسب ticket_type المخزن الذي قد يكون قد سُجّل تحت
+     *     timezone خاطئ في الإصدارات السابقة).
+     *   • التاريخ يُقارن أيضاً على التوقيت المحلي.
+     *   • تُرجع أرقام التسلسل (from/to/count) لكل فترة منفصلة
+     *     ومجموع اليوم total (من أول تذكرة إلى آخر تذكرة).
+     */
+    public function getTicketData(string $reportDate, int $mStart = 5, int $mEnd = 12): array
     {
         $sql = "
             SELECT
-                t.ticket_type AS shift,
+                CASE WHEN EXTRACT(HOUR FROM t.created_at AT TIME ZONE :tz) >= :m_start
+                          AND EXTRACT(HOUR FROM t.created_at AT TIME ZONE :tz) <  :m_end
+                     THEN 'morning' ELSE 'evening' END AS shift,
                 COUNT(*) AS ticket_count,
                 SUM(t.amount) AS ticket_amount,
                 MIN(t.serial_number) AS serial_from,
@@ -334,28 +380,42 @@ class ReportsModel
             FROM examination_tickets t
             JOIN visits v ON t.visit_id = v.visit_id
             WHERE v.cancelled_at IS NULL
-              AND DATE(t.created_at) = :report_date
-            GROUP BY t.ticket_type
+              AND DATE(t.created_at AT TIME ZONE :tz) = :report_date
+            GROUP BY 1
         ";
 
         $stmt = $this->conn->prepare($sql);
-        $stmt->execute([':report_date' => $reportDate]);
+        $stmt->execute([
+            ':report_date' => $reportDate,
+            ':tz'          => $this->tz,
+            ':m_start'     => $mStart,
+            ':m_end'       => $mEnd,
+        ]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+        $emptyShift = static fn () => [
+            'count'           => 0,
+            'amount'          => 0.0,
+            'center_amount'   => 0.0,
+            'ministry_amount' => 0.0,
+            'serial_from'     => null,
+            'serial_to'       => null,
+        ];
+
         $result = [
-            'morning' => ['count' => 0, 'amount' => 0.0, 'center_amount' => 0.0, 'ministry_amount' => 0.0, 'serial_from' => null, 'serial_to' => null],
-            'evening' => ['count' => 0, 'amount' => 0.0, 'center_amount' => 0.0, 'ministry_amount' => 0.0, 'serial_from' => null, 'serial_to' => null],
+            'morning' => $emptyShift(),
+            'evening' => $emptyShift(),
         ];
 
         foreach ($rows as $row) {
-            $shift = ($row['shift'] === 'morning') ? 'morning' : 'evening';
-            $result[$shift]['count']       = (int) $row['ticket_count'];
-            $result[$shift]['amount']      = (float) $row['ticket_amount'];
+            $shift = ((string) $row['shift']) === 'morning' ? 'morning' : 'evening';
+            $result[$shift]['count']           = (int) $row['ticket_count'];
+            $result[$shift]['amount']          = (float) $row['ticket_amount'];
             // تذاكر المعاينة بالكامل تذهب لحصة المركز (لا حصة وزارة عليها هنا)
             $result[$shift]['center_amount']   = (float) $row['ticket_amount'];
             $result[$shift]['ministry_amount'] = 0.0;
-            $result[$shift]['serial_from'] = $row['serial_from'];
-            $result[$shift]['serial_to']   = $row['serial_to'];
+            $result[$shift]['serial_from']     = $row['serial_from'];
+            $result[$shift]['serial_to']       = $row['serial_to'];
         }
 
         return $result;
@@ -371,12 +431,14 @@ class ReportsModel
      *
      * بالإضافة إلى مفاتيح المستوى الأعلى (from/to/count) المبقاة
      * للتوافق العكسي مع الواجهات القديمة — وهي مطابقة لـ total.
+     *
+     * ⚠️ يستخدم AT TIME ZONE لتحديد الفترة والتاريخ على التوقيت المحلي.
      */
     public function getSerialRanges(string $reportDate, int $mStart = 5, int $mEnd = 12): array
     {
-        // CASE تعبير SQL يحدد الفترة بناءً على ساعة الدفع
-        $shiftExpr = "CASE WHEN EXTRACT(HOUR FROM i.paid_at) >= :m_start
-                              AND EXTRACT(HOUR FROM i.paid_at) <  :m_end
+        // CASE تعبير SQL يحدد الفترة بناءً على ساعة الدفع بالتوقيت المحلي
+        $shiftExpr = "CASE WHEN EXTRACT(HOUR FROM i.paid_at AT TIME ZONE :tz) >= :m_start
+                              AND EXTRACT(HOUR FROM i.paid_at AT TIME ZONE :tz) <  :m_end
                          THEN 'morning' ELSE 'evening' END";
 
         $sql = "
@@ -389,7 +451,7 @@ class ReportsModel
             FROM invoices i
             JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
             WHERE {$this->activeInvoiceCondition('i')}
-              AND DATE(i.paid_at) = :report_date
+              AND DATE(i.paid_at AT TIME ZONE :tz) = :report_date
               AND dt.doc_name IN ('A', 'B', 'C')
             GROUP BY dt.doc_name, {$shiftExpr}
         ";
@@ -397,6 +459,7 @@ class ReportsModel
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([
             ':report_date' => $reportDate,
+            ':tz'          => $this->tz,
             ':m_start'     => $mStart,
             ':m_end'       => $mEnd,
         ]);
@@ -452,9 +515,10 @@ class ReportsModel
         $result['EXEMPT']['count'] = $exemptTotal['count'] ?? 0;
 
         // L: استمارات المختبر (لكل فترة + الإجمالي = من أول سند إلى آخر سند)
+        // مع AT TIME ZONE لتحديد الفترة والتاريخ بحسب التوقيت المحلي.
         try {
-            $shiftExprL = "CASE WHEN EXTRACT(HOUR FROM ld.created_at) >= :m_start
-                                   AND EXTRACT(HOUR FROM ld.created_at) <  :m_end
+            $shiftExprL = "CASE WHEN EXTRACT(HOUR FROM ld.created_at AT TIME ZONE :tz) >= :m_start
+                                   AND EXTRACT(HOUR FROM ld.created_at AT TIME ZONE :tz) <  :m_end
                               THEN 'morning' ELSE 'evening' END";
             $sqlL = "
                 SELECT
@@ -464,13 +528,14 @@ class ReportsModel
                     COUNT(*) AS doc_count
                 FROM laboratory_documents ld
                 LEFT JOIN invoices i ON ld.invoice_id = i.invoice_id
-                WHERE DATE(ld.created_at) = :report_date
+                WHERE DATE(ld.created_at AT TIME ZONE :tz) = :report_date
                   AND (ld.invoice_id IS NULL OR i.cancelled_at IS NULL)
                 GROUP BY {$shiftExprL}
             ";
             $stmtL = $this->conn->prepare($sqlL);
             $stmtL->execute([
                 ':report_date' => $reportDate,
+                ':tz'          => $this->tz,
                 ':m_start'     => $mStart,
                 ':m_end'       => $mEnd,
             ]);

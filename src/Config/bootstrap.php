@@ -91,7 +91,8 @@ spl_autoload_register(function (string $class): void {
     }
 });
 
-date_default_timezone_set(getenv('APP_TIMEZONE') ?: 'UTC');
+// المنطقة الزمنية الافتراضية: Asia/Aden (UTC+3) - يمكن تجاوزها عبر APP_TIMEZONE
+date_default_timezone_set(getenv('APP_TIMEZONE') ?: 'Asia/Aden');
 
 $debugMode = filter_var(getenv('APP_DEBUG') ?: 'false', FILTER_VALIDATE_BOOLEAN);
 ini_set('display_errors', $debugMode ? '1' : '0');

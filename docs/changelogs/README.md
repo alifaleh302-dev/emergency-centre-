@@ -7,6 +7,7 @@
 | الملف | الموضوع |
 |------|--------|
 | [CHANGES_DAILY_INFO_REBUILD.md](CHANGES_DAILY_INFO_REBUILD.md) | إعادة بناء جدول المعلومات اليومية |
+| [CHANGES_DAILY_INFO_FIXES_TZ_AND_TOTALS.md](CHANGES_DAILY_INFO_FIXES_TZ_AND_TOTALS.md) | إصلاحات المعلومية اليومية: التوقيت المحلي + تسلسل التذاكر + حساب الإجماليات + استمارات الفحوصات (ص/م/ج) |
 | [CHANGES_DOUBLE_SUBMIT_AND_ACTIVE_VISIT.md](CHANGES_DOUBLE_SUBMIT_AND_ACTIVE_VISIT.md) | منع الإرسال المزدوج وإدارة الزيارة النشطة |
 | [CHANGES_FINANCE_HUB_M1_M2.md](CHANGES_FINANCE_HUB_M1_M2.md) | المركز المالي - المراحل M1 و M2 |
 | [CHANGES_FINANCE_HUB_M4.md](CHANGES_FINANCE_HUB_M4.md) | المركز المالي - المرحلة M4 |

@@ -569,37 +569,75 @@ const DailyInfo = {
             return row1 + row2 + row3;
         };
 
-        const sumSections = (firstKey, secondKey) => {
+        // ✨ الحسابات الإجمالية:
+        //   - إجمالي الإيرادات مشاركة والمشتركة = (مشاركة المجتمع/center) + (المشتركة/ministry)
+        //   - إجمالي الإيرادات المحصلة والإعفاء = مشاركة والمشتركة + الإعفاءات
+        //     ⇒ أي (center + ministry + exempt) — وليس (center + exempt) فقط كما كان
+        const sumSections = (...keys) => {
             const result = {};
-            const keys = new Set([
-                ...Object.keys(T[firstKey] || {}),
-                ...Object.keys(T[secondKey] || {}),
-            ]);
-            keys.forEach((k) => {
-                result[k] = Number((T[firstKey] || {})[k] || 0) + Number((T[secondKey] || {})[k] || 0);
+            const allKeys = new Set();
+            keys.forEach((k) => Object.keys(T[k] || {}).forEach((kk) => allKeys.add(kk)));
+            allKeys.forEach((k) => {
+                result[k] = keys.reduce((acc, sec) => acc + Number((T[sec] || {})[k] || 0), 0);
             });
             return result;
         };
 
         const participationAndJoint = sumSections('center', 'ministry');
-        const collectedAndExempt = sumSections('center', 'exempt');
+        const collectedAndExempt    = sumSections('center', 'ministry', 'exempt');
 
+        // 🆕 (مشكلة #4) استمارات الفحوصات تظهر الآن بصفوف منفصلة لكل فترة (ص/م/ج)
         const labSerial = buildSerialPerShift(SR.L);
-        const lTotal   = labSerial.total || { from: '', to: '', count: '' };
-        const lFrom    = lTotal.from != null ? lTotal.from : '';
-        const lTo      = lTotal.to   != null ? lTotal.to   : '';
-        const lCount   = lTotal.count ? fmt(lTotal.count) : '';
+        const lMorning  = pickSerial(labSerial, 'morning');
+        const lEvening  = pickSerial(labSerial, 'evening');
+        const lTotal    = pickSerial(labSerial, 'total');
 
+        // عدد الأعمدة الوسطى = العمود الأيمن (نوع الإيرادات) + البيان + الفترة + خدمات + الإجمالي
+        // العمود الأيمن سندمجه هنا (نوع الإيرادات) في rowspan=3 على صفوف استمارات الفحوصات.
+        const examRow1 = `
+            <tr class="bg-row">
+                <td class="di-cat bg-cat" rowspan="3">استمارات الفحوصات</td>
+                <td class="di-bayan">استمارات الفحوصات المختبرية</td>
+                <td class="di-period">ص</td>
+                <td colspan="${cols.length + 1}"></td>
+                <td>${lMorning.from}</td>
+                <td>${lMorning.to}</td>
+                <td><strong>${lMorning.count}</strong></td>
+                <td rowspan="3" class="di-cat">استمارات الفحوصات</td>
+            </tr>`;
+        const examRow2 = `
+            <tr class="bg-row">
+                <td class="di-bayan">استمارات الفحوصات المختبرية</td>
+                <td class="di-period">م</td>
+                <td colspan="${cols.length + 1}"></td>
+                <td>${lEvening.from}</td>
+                <td>${lEvening.to}</td>
+                <td><strong>${lEvening.count}</strong></td>
+            </tr>`;
+        const examRow3 = `
+            <tr class="bg-subtotal" style="font-weight:700;">
+                <td class="di-bayan">إجمالي استمارات الفحوصات المختبرية</td>
+                <td class="di-period">ج</td>
+                <td colspan="${cols.length + 1}"></td>
+                <td>${lTotal.from}</td>
+                <td>${lTotal.to}</td>
+                <td><strong>${lTotal.count}</strong></td>
+            </tr>`;
+
+        // صف فارغ فاصل قبل صفوف الإجماليات النهائية
+        const spacerRow = `
+            <tr class="bg-row di-spacer" aria-hidden="true">
+                <td colspan="${cols.length + 8}" style="height:10px; border-left:0; border-right:0;">&nbsp;</td>
+            </tr>`;
+
+        // الصفوف الإجمالية النهائية (بـ (ج) فقط — كما طلب المستخدم)
         const grandRow1 = `
             <tr class="bg-grand" style="font-weight:800;">
                 <td class="di-cat bg-grand" colspan="2" style="text-align:right; padding-right:10px;">إجمالي الإيرادات مشاركة والمشتركة</td>
                 <td class="di-period">ج</td>
                 ${cols.map((c) => `<td>${fmt(participationAndJoint[c.key])}</td>`).join('')}
                 <td><strong>${fmt(participationAndJoint.total)}</strong></td>
-                <td rowspan="2">${lFrom}</td>
-                <td rowspan="2">${lTo}</td>
-                <td rowspan="2"><strong>${lCount}</strong></td>
-                <td rowspan="2" class="di-cat">استمارات الفحوصات</td>
+                <td colspan="4"></td>
             </tr>`;
 
         const grandRow2 = `
@@ -608,6 +646,7 @@ const DailyInfo = {
                 <td class="di-period">ج</td>
                 ${cols.map((c) => `<td>${fmt(collectedAndExempt[c.key])}</td>`).join('')}
                 <td><strong>${fmt(collectedAndExempt.total)}</strong></td>
+                <td colspan="4"></td>
             </tr>`;
 
         const headerCols = cols.map((c) => `<th class="bg-svc-hdr di-th-svc">${c.label}</th>`).join('');
@@ -644,6 +683,10 @@ const DailyInfo = {
                 </thead>
                 <tbody>
                     ${categories.map(buildCategoryRows).join('')}
+                    ${examRow1}
+                    ${examRow2}
+                    ${examRow3}
+                    ${spacerRow}
                     ${grandRow1}
                     ${grandRow2}
                 </tbody>
