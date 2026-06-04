@@ -509,8 +509,304 @@ class AdminModel
             throw new InvalidArgumentException('السجل المطلوب حذفه غير موجود.');
         }
 
+        // 🔁 معالجة خاصة لحذف السندات (الفواتير):
+        //   عند حذف فاتورة يجب:
+        //     (1) إنقاص رقم التسلسل بمقدار 1 لكل الفواتير اللاحقة من نفس "مجموعة التسلسل"
+        //         (A بمفرده، B و C يتشاركان تسلسلاً واحداً يُخزَّن تحت سجل doc_name='B').
+        //     (2) إنقاص العداد current_serial في document_types بمقدار 1 لسجل التسلسل المعني.
+        if (strtolower($table) === 'invoices') {
+            $this->deleteInvoiceWithSerialAdjustment((int) $id);
+            return;
+        }
+
         $stmt = $this->conn->prepare('DELETE FROM ' . $this->quoteIdentifier($table) . ' WHERE ' . $this->quoteIdentifier($pk) . ' = :id');
         $stmt->execute([':id' => (string) $id]);
+    }
+
+    /**
+     * 🆕 حذف فاتورة (سند) مع تطبيق الإجراءات التلقائية:
+     *   • إنقاص serial_number لكل الفواتير اللاحقة من نفس مجموعة التسلسل (-1).
+     *   • إنقاص current_serial في جدول document_types (-1).
+     *
+     * مجموعات التسلسل المستخدمة في النظام:
+     *   - A (كاش): يستخدم عداد doc_name='A' ويشمل سجلات doc_type=A فقط.
+     *   - B/C (إعفاء): يتشاركان عداد doc_name='B' ويشملان سجلات doc_type IN (B, C).
+     *   - T (تذاكر معاينة): مستقل (لا يمر عبر deleteRecord لأنه على جدول examination_tickets).
+     *   - L (مستندات مختبر): مستقل أيضاً.
+     *
+     * يُنفَّذ ضمن معاملة + FOR UPDATE على سجل document_types لمنع التسابق.
+     * يستخدم تأجيل قيد UNIQUE (DEFERRABLE) عبر تنفيذ التحديثات بترتيب تنازلي
+     * للحفاظ على فرادة (doc_type_id, serial_number) أثناء عملية إعادة الترقيم.
+     *
+     * المنطق:
+     *   - حذف الفاتورة أولاً (يحرّر الرقم التسلسلي للفاتورة).
+     *   - إعادة ترقيم الفواتير اللاحقة من الأصغر إلى الأكبر يميناً (kept+1 -> kept).
+     *   - تحديث العداد في document_types.
+     */
+    public function deleteInvoiceWithSerialAdjustment(int $invoiceId): void
+    {
+        if ($this->conn->inTransaction()) {
+            // المعاملة الحالية تكفي
+            $this->performInvoiceDeleteWithAdjustment($invoiceId);
+            return;
+        }
+
+        $this->conn->beginTransaction();
+        try {
+            $this->performInvoiceDeleteWithAdjustment($invoiceId);
+            $this->conn->commit();
+        } catch (Throwable $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    private function performInvoiceDeleteWithAdjustment(int $invoiceId): void
+    {
+        // 1) جلب بيانات الفاتورة قبل الحذف
+        $infoStmt = $this->conn->prepare(
+            'SELECT i.invoice_id, i.serial_number, i.doc_type_id, i.related_invoice_id, dt.doc_name
+             FROM invoices i
+             LEFT JOIN document_types dt ON dt.doc_type_id = i.doc_type_id
+             WHERE i.invoice_id = :id
+             FOR UPDATE'
+        );
+        $infoStmt->execute([':id' => (string) $invoiceId]);
+        $invoice = $infoStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$invoice) {
+            throw new InvalidArgumentException('الفاتورة المطلوب حذفها غير موجودة.');
+        }
+
+        $serialNumber = $invoice['serial_number'] !== null ? (int) $invoice['serial_number'] : null;
+        $docTypeId    = $invoice['doc_type_id']  !== null ? (int) $invoice['doc_type_id']  : null;
+        $docName      = $invoice['doc_name'] !== null ? (string) $invoice['doc_name'] : '';
+
+        // 2) قائمة السندات المرتبطة (B↔A بحالة الإعفاء الجزئي) - تُحذف تلقائياً عبر CASCADE
+        $relatedInvoiceId = $invoice['related_invoice_id'] !== null ? (int) $invoice['related_invoice_id'] : null;
+        $relatedInfo = null;
+        if ($relatedInvoiceId !== null) {
+            $relStmt = $this->conn->prepare(
+                'SELECT i.invoice_id, i.serial_number, i.doc_type_id, dt.doc_name
+                 FROM invoices i
+                 LEFT JOIN document_types dt ON dt.doc_type_id = i.doc_type_id
+                 WHERE i.invoice_id = :id
+                 FOR UPDATE'
+            );
+            $relStmt->execute([':id' => (string) $relatedInvoiceId]);
+            $rel = $relStmt->fetch(PDO::FETCH_ASSOC);
+            if ($rel) {
+                $relatedInfo = [
+                    'invoice_id'   => (int) $rel['invoice_id'],
+                    'serial_number'=> $rel['serial_number'] !== null ? (int) $rel['serial_number'] : null,
+                    'doc_type_id'  => $rel['doc_type_id']  !== null ? (int) $rel['doc_type_id']  : null,
+                    'doc_name'     => (string) ($rel['doc_name'] ?? ''),
+                ];
+            }
+        }
+
+        // 3) حذف الفاتورة (CASCADE يحذف invoice_details والفاتورة المرتبطة عبر FK)
+        $delStmt = $this->conn->prepare('DELETE FROM invoices WHERE invoice_id = :id');
+        $delStmt->execute([':id' => (string) $invoiceId]);
+
+        // 4) تطبيق إعادة الترقيم للسند المحذوف (إن كان يحمل رقماً تسلسلياً)
+        if ($docTypeId !== null && $serialNumber !== null && $serialNumber > 0 && $docName !== '') {
+            $this->adjustSerialsAfterDeletion($docName, $serialNumber);
+        }
+
+        // 5) تطبيق إعادة الترقيم للسند المرتبط (إن وُجد ولم يكن قد حُذف ضمن CASCADE)
+        if ($relatedInfo !== null) {
+            // بعد CASCADE قد يكون السجل قد حُذف، نتحقق:
+            $check = $this->conn->prepare('SELECT 1 FROM invoices WHERE invoice_id = :id LIMIT 1');
+            $check->execute([':id' => (string) $relatedInfo['invoice_id']]);
+            $stillExists = (bool) $check->fetchColumn();
+            // CASCADE في FK related_invoice_id يحذف السجل المرتبط تلقائياً
+            // فنُطبق إعادة الترقيم بناءً على بياناته المحفوظة
+            if (!$stillExists && $relatedInfo['doc_type_id'] !== null && $relatedInfo['serial_number'] !== null && $relatedInfo['doc_name'] !== '') {
+                $this->adjustSerialsAfterDeletion($relatedInfo['doc_name'], $relatedInfo['serial_number']);
+            }
+        }
+    }
+
+    /**
+     * يطبّق إعادة الترقيم بعد حذف سند برقم تسلسلي محدد:
+     *   - يخفّض رقم كل سند لاحق ضمن نفس مجموعة التسلسل بمقدار 1.
+     *   - يخفّض عداد document_types.current_serial بمقدار 1.
+     *
+     * @param string $docName اسم نوع السند المحذوف (A | B | C | T | L ...)
+     * @param int    $deletedSerial الرقم التسلسلي للسند الذي تم حذفه
+     */
+    private function adjustSerialsAfterDeletion(string $docName, int $deletedSerial): void
+    {
+        // تحديد مجموعة التسلسل + سجل العداد في document_types
+        // A: مجموعة [A]، العداد على سجل A
+        // B/C: مجموعة [B, C]، العداد على سجل B (مشترك)
+        // T/L وغيرها: مجموعة [نفسها]، العداد على سجلها
+        $serialDocName = ($docName === 'C') ? 'B' : $docName;
+
+        // جلب معرفات أنواع المستندات في نفس المجموعة + قفل سجل العداد
+        $counterStmt = $this->conn->prepare(
+            "SELECT doc_type_id, current_serial FROM document_types
+             WHERE doc_name = :doc_name FOR UPDATE"
+        );
+        $counterStmt->execute([':doc_name' => $serialDocName]);
+        $counterRow = $counterStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$counterRow) {
+            // لا يوجد سجل عداد — لا شيء لنفعله
+            return;
+        }
+        $counterDocTypeId = (int) $counterRow['doc_type_id'];
+        $currentSerial    = (int) $counterRow['current_serial'];
+
+        // جلب جميع doc_type_id في نفس المجموعة
+        if ($serialDocName === 'B') {
+            $groupStmt = $this->conn->prepare(
+                "SELECT doc_type_id FROM document_types WHERE doc_name IN ('B','C')"
+            );
+            $groupStmt->execute();
+        } else {
+            $groupStmt = $this->conn->prepare(
+                "SELECT doc_type_id FROM document_types WHERE doc_name = :doc_name"
+            );
+            $groupStmt->execute([':doc_name' => $serialDocName]);
+        }
+        $groupTypeIds = array_map(static fn($r) => (int) $r['doc_type_id'], $groupStmt->fetchAll(PDO::FETCH_ASSOC));
+        if (empty($groupTypeIds)) {
+            return;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($groupTypeIds), '?'));
+
+        // إعادة ترقيم الفواتير اللاحقة: من الأصغر إلى الأكبر، كل واحدة تأخذ (serial_number - 1)
+        // ترتيب تصاعدي يضمن عدم خرق قيد UNIQUE(doc_type_id, serial_number) أثناء التحديث.
+        $selStmt = $this->conn->prepare(
+            "SELECT invoice_id, serial_number FROM invoices
+             WHERE doc_type_id IN ($placeholders) AND serial_number > ?
+             ORDER BY serial_number ASC"
+        );
+        $selStmt->execute(array_merge($groupTypeIds, [$deletedSerial]));
+        $rowsToShift = $selStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (!empty($rowsToShift)) {
+            $updateStmt = $this->conn->prepare(
+                'UPDATE invoices SET serial_number = :new_serial WHERE invoice_id = :id'
+            );
+            foreach ($rowsToShift as $row) {
+                $oldSerial = (int) $row['serial_number'];
+                $newSerial = $oldSerial - 1;
+                if ($newSerial <= 0) {
+                    // حماية: لا نسمح بقيم غير صالحة
+                    continue;
+                }
+                $updateStmt->execute([
+                    ':new_serial' => $newSerial,
+                    ':id'         => (string) $row['invoice_id'],
+                ]);
+            }
+        }
+
+        // إنقاص العداد بمقدار 1 (مع حماية ضد الذهاب تحت الصفر)
+        if ($currentSerial > 0) {
+            $decStmt = $this->conn->prepare(
+                'UPDATE document_types SET current_serial = current_serial - 1, updated_at = NOW()
+                 WHERE doc_type_id = :id AND current_serial > 0'
+            );
+            $decStmt->execute([':id' => (string) $counterDocTypeId]);
+        }
+    }
+
+    /**
+     * 🆕 إعادة فتح الفترة المالية الأخيرة
+     *
+     * القواعد:
+     *   • يُسمح بإعادة فتح "الإقفال الأخير" فقط (آخر سجل في shifts_closures).
+     *   • عند إعادة الفتح:
+     *      - يُحذف السند الإجمالي (A) المرتبط بهذا الإقفال،
+     *        مع تطبيق إجراءات حذف السندات (تحديث التسلسل + العداد).
+     *      - تُفصل التذاكر عن الإقفال (shift_closure_id = NULL) لتعود قابلة للإقفال مجدداً.
+     *      - يُحذف سجل الإقفال من shifts_closures.
+     *
+     * @return array بيانات وصفية عن الفترة التي أُعيد فتحها
+     */
+    public function reopenLatestShift(int $closureId, int $userId): array
+    {
+        $this->conn->beginTransaction();
+        try {
+            // 1) قفل وجلب بيانات الإقفال المطلوب
+            $stmt = $this->conn->prepare(
+                "SELECT id, shift_type, shift_date, closing_invoice_id, closed_at, status
+                 FROM shifts_closures WHERE id = :id FOR UPDATE"
+            );
+            $stmt->execute([':id' => (string) $closureId]);
+            $closure = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$closure) {
+                throw new InvalidArgumentException('الفترة المطلوب إعادة فتحها غير موجودة.');
+            }
+
+            // 2) التأكد من أنه الإقفال الأخير (لا يوجد إقفال أحدث منه)
+            $latestStmt = $this->conn->prepare(
+                "SELECT id, shift_type, shift_date, closed_at FROM shifts_closures
+                 ORDER BY closed_at DESC, id DESC LIMIT 1"
+            );
+            $latestStmt->execute();
+            $latest = $latestStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$latest || (int) $latest['id'] !== (int) $closure['id']) {
+                throw new InvalidArgumentException(
+                    'لا يمكن إعادة فتح هذه الفترة لأنها ليست الفترة الأخيرة. يُسمح بإعادة فتح آخر فترة مُقفلة فقط.'
+                );
+            }
+
+            $closingInvoiceId = $closure['closing_invoice_id'] !== null ? (int) $closure['closing_invoice_id'] : null;
+
+            // 3) فك ارتباط التذاكر بهذا الإقفال (تعود قابلة للإقفال مجدداً)
+            $unbindStmt = $this->conn->prepare(
+                'UPDATE examination_tickets SET shift_closure_id = NULL
+                 WHERE shift_closure_id = :cid'
+            );
+            $unbindStmt->execute([':cid' => (string) $closureId]);
+            $ticketsUnbound = $unbindStmt->rowCount();
+
+            // 4) حذف سجل الإقفال أولاً لتفادي تعارض FK closing_invoice_id
+            //    (FK في invoices.shift_closure_id لها ON DELETE SET NULL)
+            $delClosure = $this->conn->prepare('DELETE FROM shifts_closures WHERE id = :id');
+            $delClosure->execute([':id' => (string) $closureId]);
+
+            // 5) حذف سند التحصيل الإجمالي (A) المرتبط بهذه الفترة
+            //    مع تطبيق إجراءات حذف السندات (تحديث التسلسل + عداد document_types).
+            $deletedInvoice = null;
+            if ($closingInvoiceId !== null) {
+                // التحقق من وجود الفاتورة (قد تكون محذوفة سابقاً)
+                $existsStmt = $this->conn->prepare('SELECT serial_number FROM invoices WHERE invoice_id = :id');
+                $existsStmt->execute([':id' => (string) $closingInvoiceId]);
+                $row = $existsStmt->fetch(PDO::FETCH_ASSOC);
+                if ($row) {
+                    $deletedInvoice = [
+                        'invoice_id'    => $closingInvoiceId,
+                        'serial_number' => (int) $row['serial_number'],
+                    ];
+                    // داخل نفس المعاملة
+                    $this->performInvoiceDeleteWithAdjustment($closingInvoiceId);
+                }
+            }
+
+            $this->conn->commit();
+
+            return [
+                'closure_id'        => (int) $closure['id'],
+                'shift_type'        => (string) $closure['shift_type'],
+                'shift_date'        => (string) $closure['shift_date'],
+                'tickets_unbound'   => (int) $ticketsUnbound,
+                'deleted_invoice'   => $deletedInvoice,
+                'reopened_by'       => $userId,
+            ];
+        } catch (Throwable $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $e;
+        }
     }
 
     private function getTableMeta(string $table): array

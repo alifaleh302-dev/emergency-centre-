@@ -655,8 +655,26 @@ const DailyJournal = {
             html += this.renderInvoiceRow(inv, rowNum++, 'b');
         }
 
+        // 🆕 تحديد الإقفال الأخير لإظهار زر "إعادة فتح":
+        // نعتبر أن "الأخير" في سياق اليوم المعروض هو الإقفال صاحب أحدث closed_at
+        // (الباكإند سيفرض القاعدة الصحيحة على مستوى كافة الإقفالات)
+        let latestClosureId = null;
+        if (closures && closures.length > 0) {
+            const sorted = [...closures].sort((a, b) => {
+                const ka = String(a.closed_at || '');
+                const kb = String(b.closed_at || '');
+                if (ka !== kb) return ka < kb ? 1 : -1;
+                return (Number(b.id) || 0) - (Number(a.id) || 0);
+            });
+            latestClosureId = sorted[0]?.id ?? null;
+        }
+
         for (const c of closures) {
             const lbl = c.shift_type === 'morning' ? 'الصباحية' : 'المسائية';
+            const isLatest = (latestClosureId !== null) && (Number(c.id) === Number(latestClosureId));
+            const reopenBtn = isLatest
+                ? `<button class="dj-reopen-btn" style="margin-inline-start:8px;background:#dc3545;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.85em;" onclick="DailyJournal.reopenShift(${Number(c.id)}, this)">🔓 إعادة فتح</button>`
+                : '';
             html += `
                 <tr class="dj-row-closed">
                     <td colspan="8">
@@ -666,6 +684,7 @@ const DailyJournal = {
                         | حصة الوزارة: ${this.fmtMoney(c.ministry_share)}
                         | سند التحصيل رقم: ${c.closing_serial ?? '—'}
                         | بواسطة: ${this.escape(c.closed_by_name ?? '—')}
+                        ${reopenBtn}
                     </td>
                 </tr>
             `;
@@ -780,6 +799,52 @@ const DailyJournal = {
 
     closeModal() {
         document.getElementById('dj-modal-bg')?.classList.remove('show');
+    },
+
+    /**
+     * 🆕 إعادة فتح الفترة المالية الأخيرة:
+     *   - يستدعي نقطة accounting/reopen_shift
+     *   - الباكإند يفرض أن يكون closure_id هو الأخير فعلاً
+     */
+    async reopenShift(closureId, btn) {
+        if (!closureId || closureId <= 0) {
+            Core.showAlert('معرف الإقفال غير صالح.', 'error');
+            return;
+        }
+        if (!confirm('⚠️ تحذير: عند إعادة فتح هذه الفترة:\n' +
+            '   • سيتم حذف سند التحصيل الإجمالي (سند A) المرتبط بها.\n' +
+            '   • ستُعاد ترقيم السندات اللاحقة تلقائياً.\n' +
+            '   • ستعود تذاكر الفترة قابلة للإقفال مجدداً.\n\n' +
+            'هل أنت متأكد؟')) {
+            return;
+        }
+
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ جاري إعادة الفتح...';
+        }
+
+        try {
+            const res = await Core.apiCall('accounting/reopen_shift', 'POST', { closure_id: Number(closureId) });
+            if (!res || !res.success) {
+                const msg = (res && res.message) ? res.message : 'تعذر إعادة فتح الفترة.';
+                Core.showAlert(msg, 'error');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '🔓 إعادة فتح';
+                }
+                return;
+            }
+            Core.showAlert(res.message || 'تمت إعادة فتح الفترة بنجاح.', 'success');
+            await this.load();
+        } catch (error) {
+            console.error('daily_journal reopen shift error:', error);
+            Core.showAlert('حدث خطأ أثناء إعادة فتح الفترة.', 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '🔓 إعادة فتح';
+            }
+        }
     },
 
     async closeShift(shiftType, btn) {

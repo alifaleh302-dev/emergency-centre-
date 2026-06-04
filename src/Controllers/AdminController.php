@@ -327,6 +327,41 @@ class AdminController extends BaseController
         }
     }
 
+    /**
+     * 🆕 POST /api/admin/reopen_shift
+     * body: { closure_id: int }
+     *
+     * إعادة فتح الفترة المالية الأخيرة (فقط):
+     *   • يحذف سند التحصيل الإجمالي (مع تحديث تسلسل السندات)
+     *   • يفصل التذاكر عن الإقفال
+     *   • يحذف سجل الإقفال
+     */
+    public function reopenShift($data): void
+    {
+        try {
+            $closureId = $this->sanitizeIdentifier($this->getField($data, 'closure_id'), 'closure_id');
+            $result = $this->model->reopenLatestShift((int) $closureId, (int) $this->userId);
+            $this->audit->log(
+                $this->userId,
+                $this->username,
+                'REOPEN',
+                'shifts_closures',
+                (string) $closureId,
+                null,
+                $result
+            );
+            $this->success($result, 'تمت إعادة فتح الفترة بنجاح وحذف سند التحصيل المرتبط.');
+        } catch (InvalidArgumentException $e) {
+            $this->error($e->getMessage(), 422);
+        } catch (PDOException $e) {
+            error_log('admin/reopen_shift PDO: ' . $e->getMessage());
+            $this->error('تعذر إعادة فتح الفترة بسبب قيد في قاعدة البيانات.', 409);
+        } catch (Throwable $e) {
+            error_log('admin/reopen_shift: ' . $e->getMessage());
+            $this->error('تعذر إعادة فتح الفترة حالياً.', 500);
+        }
+    }
+
     // -------------------- Broadcast --------------------
     public function broadcastNotification($data): void
     {

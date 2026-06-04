@@ -489,4 +489,48 @@ class AccountingController extends BaseController
             $this->error('تعذر إقفال الفترة حالياً.', 500);
         }
     }
+
+    /**
+     * 🆕 POST /api/accounting/reopen_shift
+     * body: { closure_id: int }
+     *
+     * إعادة فتح الفترة المالية الأخيرة (أمين صندوق).
+     * ينفّذ بواسطة AdminModel::reopenLatestShift لضمان وحدة السلوك.
+     */
+    public function reopenShift($data): void
+    {
+        try {
+            $closureId = isset($data->closure_id) ? (int) $data->closure_id : 0;
+            if ($closureId <= 0) {
+                throw new InvalidArgumentException('معرف الإقفال غير صالح.');
+            }
+
+            // نستخدم منطق AdminModel لأنه يملك إجراءات حذف السندات (إعادة الترقيم)
+            require_once dirname(__DIR__) . '/Models/AdminModel.php';
+            $adminModel = new AdminModel($this->conn);
+            $result = $adminModel->reopenLatestShift($closureId, $this->cashier_id);
+
+            // إشعار للمدير
+            try {
+                $notif = new NotificationModel($this->conn);
+                $shiftLabel = $result['shift_type'] === 'morning' ? 'الصباحية' : 'المسائية';
+                $notif->create(
+                    'مدير',
+                    'تمت إعادة فتح الفترة ' . $shiftLabel,
+                    'بواسطة أمين صندوق — تاريخ: ' . $result['shift_date'],
+                    'shift_reopen',
+                    $result['closure_id']
+                );
+            } catch (Throwable $e) {
+                // لا نوقف العملية
+            }
+
+            $this->success($result, 'تمت إعادة فتح الفترة بنجاح.');
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            error_log('accounting/reopen_shift: ' . $exception->getMessage());
+            $this->error('تعذر إعادة فتح الفترة حالياً.', 500);
+        }
+    }
 }

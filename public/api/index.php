@@ -138,6 +138,7 @@ $routes = [
     'accounting/daily_journal'    => ['methods' => ['GET'],  'handler' => fn () => $accountingHandler('getDailyJournal', false)],
     'accounting/invoice_services' => ['methods' => ['GET'],  'handler' => fn () => $accountingHandler('getInvoiceServices', false)],
     'accounting/close_shift'      => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('closeShift')],
+    'accounting/reopen_shift'     => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('reopenShift')],
     'accounting/previous_shift_check' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('checkPreviousShift', false)],
 
     'admin/schema'           => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getSchema', false)],
@@ -156,6 +157,7 @@ $routes = [
     'admin/toggle_user'      => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('toggleUser')],
     'admin/cancel_invoice'   => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('cancelInvoice')],
     'admin/cancel_visit'     => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('cancelVisit')],
+    'admin/reopen_shift'     => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('reopenShift')],
     'admin/broadcast'        => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('broadcastNotification')],
     'admin/audit_log'        => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('getAuditLog')],
     'admin/reports/revenue'  => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('reportRevenue')],

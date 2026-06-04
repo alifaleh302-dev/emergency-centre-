@@ -82,25 +82,77 @@ class AccountingModel
             $this->getShiftPendingInvoices($prev['shift_type'], $prev['shift_date'], 20),
             static fn($row) => (int) $row['invoice_id'] !== $invoiceId
         ));
-
-        if (empty($pendingList) && $this->settings->allowsZeroPreviousImplicitClose()) {
-            return null;
-        }
-        if (empty($pendingList)) {
-            return null;
-        }
-
+        $pendingCount = count($pendingList);
         $pendingTotal = array_sum(array_map(static fn($r) => (float) $r['total'], $pendingList));
+
+        // 🔒 ضابط صارم (Migration: إقفال الفترة السابقة)
+        //   لا يكفي أن تكون فواتير الفترة السابقة مسددة — يجب أيضاً أن تكون
+        //   الفترة السابقة مُقفلة رسمياً (وجود سجل في shifts_closures).
+        $closureStmt = $this->conn->prepare(
+            "SELECT id, status, closed_at FROM shifts_closures
+             WHERE shift_type = :st AND shift_date = :sd
+             LIMIT 1"
+        );
+        $closureStmt->execute([':st' => $prev['shift_type'], ':sd' => $prev['shift_date']]);
+        $prevClosure = $closureStmt->fetch(PDO::FETCH_ASSOC);
+        $prevShiftIsLocked = ($prevClosure && (string) $prevClosure['status'] === 'locked');
+
+        // 📦 حالة خاصة: إذا لم توجد أي تذاكر في الفترة السابقة إطلاقاً،
+        //   فلا حاجة لإقفال، لأن closeShift يرفض إقفال فترة فارغة.
+        $hasAnyTicketsInPrev = $this->prevShiftHasAnyTickets($prev['shift_type'], $prev['shift_date']);
+
+        // السبب المسبب للحجب
+        $reasonCode = null;
+        $reasonMessage = null;
+
+        if ($pendingCount > 0) {
+            $reasonCode    = 'previous_pending_invoices';
+            $reasonMessage = \sprintf(
+                'لا يمكن تسديد هذه الفاتورة قبل إكمال تسديد فواتير %s (%d فاتورة معلّقة).',
+                $this->settings->describeShift($prev['shift_type'], $prev['shift_date']),
+                $pendingCount
+            );
+        } elseif ($hasAnyTicketsInPrev && !$prevShiftIsLocked) {
+            // لا توجد فواتير معلقة، لكن الفترة غير مُقفلة
+            $reasonCode    = 'previous_shift_not_closed';
+            $reasonMessage = \sprintf(
+                'لا يمكن تسديد أي فاتورة في الفترة الحالية قبل إقفال %s.',
+                $this->settings->describeShift($prev['shift_type'], $prev['shift_date'])
+            );
+        }
+
+        // لا حجب — الفترة السابقة مستوفاة (إما مُقفلة أو فارغة)
+        if ($reasonCode === null) {
+            return null;
+        }
 
         return [
             'current_shift'  => $currentShift,
             'previous_shift' => array_merge($prev, [
-                'label' => $this->settings->describeShift($prev['shift_type'], $prev['shift_date']),
+                'label'    => $this->settings->describeShift($prev['shift_type'], $prev['shift_date']),
+                'locked'   => $prevShiftIsLocked,
             ]),
-            'pending_count'  => count($pendingList),
+            'pending_count'  => $pendingCount,
             'pending_total'  => round($pendingTotal, 2),
             'pending_sample' => array_slice($pendingList, 0, 10),
+            'reason_code'    => $reasonCode,
+            'reason'         => $reasonMessage,
         ];
+    }
+
+    /**
+     * يتحقق ما إذا وجدت أي تذاكر في الفترة السابقة (سواء أُقفلت أم لا).
+     * يُستخدم لتجنب حجب التسديد عندما تكون الفترة السابقة فارغة تماماً.
+     */
+    private function prevShiftHasAnyTickets(string $shiftType, string $shiftDate): bool
+    {
+        $stmt = $this->conn->prepare(
+            "SELECT 1 FROM examination_tickets
+             WHERE ticket_type = :st AND DATE(created_at) = :sd
+             LIMIT 1"
+        );
+        $stmt->execute([':st' => $shiftType, ':sd' => $shiftDate]);
+        return (bool) $stmt->fetchColumn();
     }
 
     private function activeInvoiceCondition(string $alias = 'i'): string
