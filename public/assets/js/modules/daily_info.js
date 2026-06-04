@@ -333,7 +333,7 @@ const DailyInfo = {
             <div class="di-report-header">
                 <div>
                     <div class="di-report-title">نموذج المعلومية اليومية</div>
-                    <div class="di-report-subtitle">عرض حي داخل النظام مع الحفاظ على تنسيق الطباعة الرسمي.</div>
+                    
                 </div>
                 <div class="d-flex flex-wrap gap-2">
                     <span class="di-report-chip"><i class="bi bi-calendar3"></i>${gregDate}</span>
@@ -343,9 +343,7 @@ const DailyInfo = {
             </div>
             <div class="p-3 p-md-4">
                 <div id="di-printable">
-                    <div class="report-header">
-                        ${this.renderHeaderBlock(header, dayName, gregDate, hijriDate)}
-                    </div>
+                    
                     <div class="di-scroll">
                         ${this.renderMainTable(data)}
                     </div>
@@ -364,40 +362,7 @@ const DailyInfo = {
         const directorate = header.header_directorate || '';
         const center = header.header_center || 'مركز طوارئ الطرق';
 
-        return `
-        <div style="border:2px solid #4b5563; margin-bottom:12px;">
-            <table style="width:100%; border-collapse:collapse; table-layout:fixed;">
-                <tr>
-                    <td class="bg-header" style="border:1px solid #4b5563; width:22%; text-align:center; font-weight:700; font-size:20px; padding:14px 10px;">
-                        ${center}
-                    </td>
-                    <td class="bg-header" style="border:1px solid #4b5563; width:56%; text-align:center; padding:8px 10px; line-height:1.7;">
-                        <div style="font-weight:700; font-size:15px;">${country}</div>
-                        <div style="font-weight:700; font-size:15px;">${ministry}</div>
-                        ${office ? `<div style="font-weight:700; font-size:14px;">${office}</div>` : ''}
-                        ${directorate ? `<div style="font-weight:700; font-size:14px;">${directorate}</div>` : ''}
-                        <div style="font-weight:800; font-size:16px; margin-top:4px;">المعلومية اليومية بإجمالي إيرادات مشاركة المجتمع والمشتركة</div>
-                    </td>
-                    <td style="border:1px solid #4b5563; width:22%; padding:0; vertical-align:top;">
-                        <table style="width:100%; border-collapse:collapse; height:100%;">
-                            <tr>
-                                <td style="border:1px solid #4b5563; width:38%; font-weight:700; text-align:center; padding:6px;">اليوم</td>
-                                <td style="border:1px solid #4b5563; text-align:center; padding:6px; font-weight:700;">${dayName}</td>
-                            </tr>
-                            <tr>
-                                <td style="border:1px solid #4b5563; font-weight:700; text-align:center; padding:6px;">التاريخ</td>
-                                <td style="border:1px solid #4b5563; text-align:center; padding:6px; font-weight:700;">${hijriDate || '—'} هـ</td>
-                            </tr>
-                            <tr>
-                                <td style="border:1px solid #4b5563; font-weight:700; text-align:center; padding:6px;">الموافق</td>
-                                <td style="border:1px solid #4b5563; text-align:center; padding:6px; font-weight:700;">${gregDate} م</td>
-                            </tr>
-                        </table>
-                    </td>
-                </tr>
-            </table>
-        </div>`;
-    },
+    }
 
     renderMainTable(data) {
         const cols = [
