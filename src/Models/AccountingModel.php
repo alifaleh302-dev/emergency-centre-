@@ -5,11 +5,102 @@ class AccountingModel
 {
     private PDO $conn;
     private string $driver;
+    private SettingsService $settings;
 
     public function __construct(PDO $db, string $driver = 'pgsql')
     {
         $this->conn = $db;
         $this->driver = $driver;
+        $this->settings = new SettingsService($db);
+    }
+
+    public function getInvoiceShift(int $invoiceId): ?array
+    {
+        $stmt = $this->conn->prepare('SELECT created_at FROM invoices WHERE invoice_id = :id LIMIT 1');
+        $stmt->execute([':id' => $invoiceId]);
+        $createdAt = $stmt->fetchColumn();
+        if (!$createdAt) {
+            return null;
+        }
+
+        return $this->settings->resolveShiftFor(new DateTimeImmutable((string) $createdAt));
+    }
+
+    public function getShiftPendingInvoices(string $shiftType, string $shiftDate, int $limit = 20): array
+    {
+        $sql = "SELECT i.invoice_id,
+                       i.created_at,
+                       i.total,
+                       p.full_name AS patient_name
+                FROM invoices i
+                LEFT JOIN visits v ON v.visit_id = i.visit_id
+                LEFT JOIN patients p ON p.patient_id = v.patient_id
+                WHERE i.doc_type_id IS NULL
+                  AND i.accountant_id IS NULL
+                  AND i.cancelled_at IS NULL
+                  AND i.created_at >= :start_at
+                  AND i.created_at < :end_at
+                ORDER BY i.created_at ASC";
+
+        $rangeStart = (new DateTimeImmutable($shiftDate))->modify('-1 day')->format('Y-m-d') . ' 00:00:00';
+        $rangeEnd   = (new DateTimeImmutable($shiftDate))->modify('+2 day')->format('Y-m-d') . ' 00:00:00';
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':start_at' => $rangeStart, ':end_at' => $rangeEnd]);
+        $rows = $stmt->fetchAll();
+
+        $matched = [];
+        foreach ($rows as $row) {
+            $shift = $this->settings->resolveShiftFor(new DateTimeImmutable((string) $row['created_at']));
+            if ($shift['shift_type'] === $shiftType && $shift['shift_date'] === $shiftDate) {
+                $matched[] = [
+                    'invoice_id'   => (int) $row['invoice_id'],
+                    'patient_name' => (string) ($row['patient_name'] ?? ''),
+                    'total'        => (float) $row['total'],
+                    'created_at'   => (string) $row['created_at'],
+                ];
+            }
+        }
+
+        usort($matched, static fn($a, $b) => strcmp($a['created_at'], $b['created_at']));
+        return array_slice($matched, 0, max(1, $limit));
+    }
+
+    public function findBlockingPreviousShift(int $invoiceId): ?array
+    {
+        if (!$this->settings->isPaymentOrderEnforced()) {
+            return null;
+        }
+
+        $currentShift = $this->getInvoiceShift($invoiceId);
+        if ($currentShift === null) {
+            return null;
+        }
+
+        $prev = $this->settings->getPreviousShift($currentShift['shift_type'], $currentShift['shift_date']);
+        $pendingList = array_values(array_filter(
+            $this->getShiftPendingInvoices($prev['shift_type'], $prev['shift_date'], 20),
+            static fn($row) => (int) $row['invoice_id'] !== $invoiceId
+        ));
+
+        if (empty($pendingList) && $this->settings->allowsZeroPreviousImplicitClose()) {
+            return null;
+        }
+        if (empty($pendingList)) {
+            return null;
+        }
+
+        $pendingTotal = array_sum(array_map(static fn($r) => (float) $r['total'], $pendingList));
+
+        return [
+            'current_shift'  => $currentShift,
+            'previous_shift' => array_merge($prev, [
+                'label' => $this->settings->describeShift($prev['shift_type'], $prev['shift_date']),
+            ]),
+            'pending_count'  => count($pendingList),
+            'pending_total'  => round($pendingTotal, 2),
+            'pending_sample' => array_slice($pendingList, 0, 10),
+        ];
     }
 
     private function activeInvoiceCondition(string $alias = 'i'): string
@@ -83,8 +174,22 @@ class AccountingModel
      *      مستوى قاعدة البيانات (ON DELETE CASCADE) ليُعامل السندان
      *      كعملية مالية واحدة في التقارير والحسابات.
      */
-    public function processPayment(int $invoiceId, float $netAmount, float $exemptionValue, string $docTypeName, int $accountantId): array
+    public function processPayment(int $invoiceId, float $netAmount, float $exemptionValue, string $docTypeName, int $accountantId, bool $bypassShiftOrder = false): array
     {
+        if (!$bypassShiftOrder) {
+            $blocker = $this->findBlockingPreviousShift($invoiceId);
+            if ($blocker !== null) {
+                throw new ShiftOrderViolationException(
+                    sprintf(
+                        'لا يمكن تسديد هذه الفاتورة قبل إكمال تسديد فواتير %s (%d فاتورة معلّقة).',
+                        $blocker['previous_shift']['label'],
+                        $blocker['pending_count']
+                    ),
+                    $blocker
+                );
+            }
+        }
+
         try {
             $this->conn->beginTransaction();
 
@@ -680,6 +785,8 @@ class AccountingModel
                 throw new RuntimeException('الفترة الحالية مُقفلة بالفعل.');
             }
 
+            $this->assertPreviousShiftClosedOrEmpty($shiftType, $shiftDate);
+
             // جلب التذاكر مع قفل الصف (لمنع إصدار تذاكر متوازية خلال الإقفال)
             $dateExpr = $this->driver === 'pgsql'
                 ? "DATE(created_at AT TIME ZONE 'UTC')"
@@ -795,6 +902,38 @@ class AccountingModel
             }
             throw $e;
         }
+    }
+
+    private function assertPreviousShiftClosedOrEmpty(string $shiftType, string $shiftDate): void
+    {
+        $prev = $this->settings->getPreviousShift($shiftType, $shiftDate);
+
+        $stmt = $this->conn->prepare(
+            "SELECT 1 FROM shifts_closures
+             WHERE shift_type = :st AND shift_date = :sd AND status = 'locked' LIMIT 1"
+        );
+        $stmt->execute([':st' => $prev['shift_type'], ':sd' => $prev['shift_date']]);
+        if ($stmt->fetchColumn()) {
+            return;
+        }
+
+        $dateExpr = $this->driver === 'pgsql'
+            ? "DATE(created_at AT TIME ZONE 'UTC')"
+            : 'DATE(created_at)';
+        $cntStmt = $this->conn->prepare(
+            "SELECT COUNT(*) FROM examination_tickets
+             WHERE ticket_type = :st
+               AND shift_closure_id IS NULL
+               AND {$dateExpr} = :sd"
+        );
+        $cntStmt->execute([':st' => $prev['shift_type'], ':sd' => $prev['shift_date']]);
+        if ((int) $cntStmt->fetchColumn() === 0) {
+            return;
+        }
+
+        throw new RuntimeException(
+            'لا يمكن إقفال هذه الفترة قبل إقفال ' . $this->settings->describeShift($prev['shift_type'], $prev['shift_date']) . '.'
+        );
     }
 
     /**

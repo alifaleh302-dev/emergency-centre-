@@ -547,14 +547,7 @@ class DoctorController extends BaseController
             return 'هذا المريض مسجل مسبقاً بنفس الاسم والعنوان.';
         }
 
-        // 🆕 رسائل إقفال الفترة (RuntimeException من ExaminationTicketModel)
-        // نعيد الرسالة كما هي لأنها واضحة وعربية.
-        if (
-            str_contains($message, 'إقفال الفترة') ||
-            str_contains($message, 'إصدار تذاكر')
-        ) {
-            return $message;
-        }
+        // 🔧 Migration 014: الطبيب لم يعد يتأثر بإقفال/ترتيب الفترات.
 
         // في وضع التطوير: أظهر رسالة الخطأ الحقيقية لتسهيل التشخيص
         // (يمكن إخفاؤها في الإنتاج عبر APP_DEBUG=false)

@@ -77,7 +77,8 @@ class AccountingController extends BaseController
                 $netAmount,
                 $exemptionValue,
                 $docType,
-                $this->cashier_id
+                $this->cashier_id,
+                false
             );
 
             // إشعار للطبيب بأن الفاتورة تم تحصيلها
@@ -114,9 +115,35 @@ class AccountingController extends BaseController
             $this->respond($response);
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage(), 422);
+        } catch (ShiftOrderViolationException $exception) {
+            $this->error($exception->getMessage(), 409, [
+                'code' => 'shift_order_violation',
+                'blocking' => $exception->getDetails(),
+            ]);
         } catch (Throwable $exception) {
             error_log('accounting/pay_invoice: ' . $exception->getMessage());
             $this->error('تعذر تنفيذ عملية السداد حالياً.', 500);
+        }
+    }
+
+    public function checkPreviousShift(): void
+    {
+        try {
+            $invoiceId = isset($_GET['invoice_id']) ? $this->extractId($_GET['invoice_id'], 'invoice_id') : 0;
+            if ($invoiceId <= 0) {
+                throw new InvalidArgumentException('رقم الفاتورة غير صالح.');
+            }
+
+            $blocker = $this->model->findBlockingPreviousShift($invoiceId);
+            $this->success([
+                'blocked' => $blocker !== null,
+                'blocking' => $blocker,
+            ]);
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage(), 422);
+        } catch (Throwable $exception) {
+            error_log('accounting/check_previous_shift: ' . $exception->getMessage());
+            $this->error('تعذر التحقق من الفترة السابقة حالياً.', 500);
         }
     }
 

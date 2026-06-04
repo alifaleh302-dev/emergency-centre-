@@ -392,4 +392,80 @@ class AdminController extends BaseController
         if (is_object($value)) return json_decode(json_encode($value, JSON_UNESCAPED_UNICODE), true) ?: [];
         return [];
     }
+
+    public function payInvoiceOverride($data): void
+    {
+        try {
+            $this->requireFields($data, ['Invoice_id', 'net_amount', 'exemption_value', 'doc_type', 'reason']);
+
+            $invoiceId = $this->extractId($this->getField($data, 'Invoice_id'), 'Invoice_id');
+            $netAmount = $this->sanitizeAmount($this->getField($data, 'net_amount'), 'net_amount');
+            $exemptionValue = $this->sanitizeAmount($this->getField($data, 'exemption_value'), 'exemption_value');
+            $docType = $this->ensureAllowedValue($this->getField($data, 'doc_type'), ['A', 'B', 'C'], 'doc_type');
+            $reason = $this->sanitizeText($this->getField($data, 'reason'), 'reason', 500, false);
+
+            $settings = new SettingsService($this->conn);
+            if (!$settings->allowsAdminPaymentOverride()) {
+                $this->error('تجاوز قيد الفترات معطّل في الإعدادات.', 403);
+                return;
+            }
+
+            $database = new Database();
+            $accounting = new AccountingModel($this->conn, $database->getDriver());
+
+            $pendingInvoice = $accounting->getPendingInvoiceById($invoiceId);
+            if (!$pendingInvoice) {
+                throw new InvalidArgumentException('الفاتورة المطلوبة غير موجودة أو تم تحصيلها مسبقاً.');
+            }
+            $total = round((float) $pendingInvoice['total'], 2);
+            if ($docType === 'A') {
+                if ($netAmount !== $total || $exemptionValue !== 0.0) {
+                    throw new InvalidArgumentException('بيانات السداد غير صحيحة لحالة الدفع الكامل.');
+                }
+            } elseif ($docType === 'B') {
+                if ($netAmount <= 0 || $netAmount >= $total || round($netAmount + $exemptionValue, 2) !== $total) {
+                    throw new InvalidArgumentException('بيانات السداد غير صحيحة لحالة الإعفاء الجزئي.');
+                }
+            } elseif ($docType === 'C') {
+                if ($netAmount !== 0.0 || $exemptionValue !== $total) {
+                    throw new InvalidArgumentException('بيانات السداد غير صحيحة لحالة الإعفاء الكلي.');
+                }
+            }
+
+            $blocker = $accounting->findBlockingPreviousShift($invoiceId);
+
+            $result = $accounting->processPayment(
+                $invoiceId,
+                $netAmount,
+                $exemptionValue,
+                $docType,
+                (int) $this->userId,
+                true
+            );
+
+            $this->audit->log(
+                $this->userId,
+                $this->username,
+                'PAYMENT_OVERRIDE',
+                'invoices',
+                $invoiceId,
+                null,
+                [
+                    'reason' => $reason,
+                    'doc_type' => $docType,
+                    'net_amount' => $netAmount,
+                    'exemption_value' => $exemptionValue,
+                    'blocking_shift' => $blocker,
+                    'result' => $result,
+                ]
+            );
+
+            $this->success($result, 'تم تنفيذ التسديد بتجاوز إداري مع تسجيل العملية.');
+        } catch (InvalidArgumentException $e) {
+            $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            error_log('admin/pay_invoice_override: ' . $e->getMessage());
+            $this->error('تعذر تنفيذ التجاوز الإداري حالياً.', 500);
+        }
+    }
 }

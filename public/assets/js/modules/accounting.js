@@ -260,9 +260,117 @@ const Accountant = {
 
             // تحديث الجدول لإخفاء الفاتورة المسددة
             this.loadPendingInvoices();
+        } else if (response && response.code === 'shift_order_violation' && response.blocking) {
+            this.showShiftOrderBlocker(response.blocking, response.message);
         } else {
             Core.showAlert(response ? response.message : 'حدث خطأ أثناء السداد', 'error');
         }
+    },
+
+    showShiftOrderBlocker: function(blocking, message) {
+        const paymentModalEl = document.getElementById('paymentModal');
+        if (paymentModalEl) {
+            const paymentModal = bootstrap.Modal.getInstance(paymentModalEl);
+            if (paymentModal) paymentModal.hide();
+        }
+
+        const oldModal = document.getElementById('shiftOrderBlockerModal');
+        if (oldModal) oldModal.remove();
+
+        const prev = blocking.previous_shift || {};
+        const sample = Array.isArray(blocking.pending_sample) ? blocking.pending_sample : [];
+        const rows = sample.map(item => `
+            <tr>
+                <td>${item.invoice_id}</td>
+                <td>${item.patient_name || '-'}</td>
+                <td class="fw-bold text-primary">${Number(item.total || 0).toLocaleString('ar-EG')} ريال</td>
+                <td class="small text-muted">${(item.created_at || '').replace('T', ' ')}</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-success" onclick="Accountant.payFromBlocker(${item.invoice_id})">
+                        <i class="bi bi-cash-coin ms-1"></i>تسديد الآن
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+
+        const html = `
+            <div class="modal fade" id="shiftOrderBlockerModal" tabindex="-1" data-bs-backdrop="static">
+                <div class="modal-dialog modal-lg modal-dialog-centered">
+                    <div class="modal-content border-0 shadow-lg">
+                        <div class="modal-header bg-warning text-dark border-0">
+                            <h5 class="modal-title fw-bold"><i class="bi bi-exclamation-triangle-fill ms-1"></i>ترتيب الفترات يمنع التسديد</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body p-4">
+                            <div class="alert alert-warning mb-3">${message || 'يجب إكمال تسديد فواتير الفترة السابقة أولاً.'}</div>
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-6">
+                                    <div class="border rounded p-3 bg-light">
+                                        <div class="small text-muted">الفترة السابقة المانعة</div>
+                                        <div class="fw-bold">${prev.label || '-'}</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="border rounded p-3 bg-light text-center">
+                                        <div class="small text-muted">عدد الفواتير</div>
+                                        <div class="fw-bold text-danger fs-5">${blocking.pending_count || 0}</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="border rounded p-3 bg-light text-center">
+                                        <div class="small text-muted">الإجمالي المعلّق</div>
+                                        <div class="fw-bold text-primary fs-6">${Number(blocking.pending_total || 0).toLocaleString('ar-EG')} ريال</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="table-responsive" style="max-height: 320px; overflow:auto;">
+                                <table class="table table-sm table-hover align-middle">
+                                    <thead class="table-light sticky-top">
+                                        <tr>
+                                            <th>#</th>
+                                            <th>المريض</th>
+                                            <th>المبلغ</th>
+                                            <th>وقت الإنشاء</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${rows || '<tr><td colspan="5" class="text-center text-muted py-4">لا توجد بيانات تفصيلية</td></tr>'}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="modal-footer border-0">
+                            <button class="btn btn-outline-secondary" data-bs-dismiss="modal">إغلاق</button>
+                            <button class="btn btn-primary" onclick="Accountant.loadPendingInvoices()">
+                                <i class="bi bi-arrow-repeat ms-1"></i>تحديث القائمة
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+
+        document.body.insertAdjacentHTML('beforeend', html);
+        const modalEl = document.getElementById('shiftOrderBlockerModal');
+        modalEl.addEventListener('hidden.bs.modal', () => modalEl.remove(), { once: true });
+        new bootstrap.Modal(modalEl).show();
+    },
+
+    payFromBlocker: async function(invoiceId) {
+        const blockerEl = document.getElementById('shiftOrderBlockerModal');
+        if (blockerEl) {
+            const blockerModal = bootstrap.Modal.getInstance(blockerEl);
+            if (blockerModal) blockerModal.hide();
+        }
+
+        await this.loadPendingInvoices();
+        const list = (window.AccountantData && AccountantData.pending_invoices) || [];
+        const target = list.find(item => String(item.Invoice_id).replace(/\D+/g, '') === String(invoiceId));
+        if (!target) {
+            Core.showAlert('تم تحديث القائمة، والفاتورة المطلوبة لم تعد متاحة أو لم تعد معلّقة.', 'info');
+            return;
+        }
+        this.showPaymentModal(target);
     },
   
 

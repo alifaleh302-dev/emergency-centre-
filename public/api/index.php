@@ -137,8 +137,10 @@ $routes = [
     'accounting/daily_journal'    => ['methods' => ['GET'],  'handler' => fn () => $accountingHandler('getDailyJournal', false)],
     'accounting/invoice_services' => ['methods' => ['GET'],  'handler' => fn () => $accountingHandler('getInvoiceServices', false)],
     'accounting/close_shift'      => ['methods' => ['POST'], 'handler' => fn () => $accountingHandler('closeShift')],
+    'accounting/previous_shift_check' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('checkPreviousShift', false)],
 
     'admin/schema'           => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getSchema', false)],
+    'admin/pay_invoice_override'  => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('payInvoiceOverride')],
     'admin/dashboard'        => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getDashboard', false)],
     'admin/dashboard_charts' => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getDashboardCharts', false)],
     'admin/reference_options'=> ['methods' => ['POST'], 'handler' => fn () => $adminHandler('getReferenceOptions')],
