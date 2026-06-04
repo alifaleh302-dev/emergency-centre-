@@ -393,6 +393,14 @@ class ReportsModel
         ]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+        // جلب حصص الوزارة (المشتركة) لكل فترة من إعدادات النظام
+        // المبلغ الكلّي للتذكرة يُقسّم إلى: حصة الوزارة (مشتركة) + حصة المركز (مشاركة مجتمع)
+        $ticketShare = $this->getTicketMinistryShareSettings();
+        $ministryPerTicket = [
+            'morning' => (float) ($ticketShare['ticket_ministry_share_morning'] ?? 0.0),
+            'evening' => (float) ($ticketShare['ticket_ministry_share_evening'] ?? 0.0),
+        ];
+
         $emptyShift = static fn () => [
             'count'           => 0,
             'amount'          => 0.0,
@@ -409,16 +417,50 @@ class ReportsModel
 
         foreach ($rows as $row) {
             $shift = ((string) $row['shift']) === 'morning' ? 'morning' : 'evening';
-            $result[$shift]['count']           = (int) $row['ticket_count'];
-            $result[$shift]['amount']          = (float) $row['ticket_amount'];
-            // تذاكر المعاينة بالكامل تذهب لحصة المركز (لا حصة وزارة عليها هنا)
-            $result[$shift]['center_amount']   = (float) $row['ticket_amount'];
-            $result[$shift]['ministry_amount'] = 0.0;
+            $count        = (int) $row['ticket_count'];
+            $totalAmount  = (float) $row['ticket_amount'];
+            // حصة الوزارة (مشتركة) = عدد التذاكر × حصة الوزارة للتذكرة الواحدة
+            $ministryAmt  = round($ministryPerTicket[$shift] * $count, 2);
+            if ($ministryAmt > $totalAmount) {
+                $ministryAmt = $totalAmount;
+            }
+            // حصة المركز (مشاركة المجتمع) = الإجمالي - حصة الوزارة
+            $centerAmt    = max($totalAmount - $ministryAmt, 0.0);
+
+            $result[$shift]['count']           = $count;
+            $result[$shift]['amount']          = $totalAmount;
+            $result[$shift]['center_amount']   = $centerAmt;
+            $result[$shift]['ministry_amount'] = $ministryAmt;
             $result[$shift]['serial_from']     = $row['serial_from'];
             $result[$shift]['serial_to']       = $row['serial_to'];
         }
 
         return $result;
+    }
+
+    /**
+     * جلب حصص الوزارة (المشتركة) من تذاكر المعاينة من إعدادات النظام.
+     * تُستخدم لتقسيم مبلغ التذكرة بين (مشاركة المجتمع = حصة المركز)
+     * و (المشتركة = حصة الوزارة) في تقرير المعلومية اليومية.
+     */
+    private function getTicketMinistryShareSettings(): array
+    {
+        $sql = "SELECT setting_key, setting_value
+                FROM system_settings
+                WHERE setting_key IN (
+                    'ticket_ministry_share_morning',
+                    'ticket_ministry_share_evening'
+                )";
+        $stmt = $this->conn->query($sql);
+        $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+        $out = [
+            'ticket_ministry_share_morning' => 0.0,
+            'ticket_ministry_share_evening' => 0.0,
+        ];
+        foreach ($rows as $r) {
+            $out[$r['setting_key']] = (float) $r['setting_value'];
+        }
+        return $out;
     }
 
     /**

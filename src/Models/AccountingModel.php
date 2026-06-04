@@ -387,19 +387,48 @@ class AccountingModel
 
     /**
      * يعيد آخر معرف تم إدراجه (متوافق مع PostgreSQL و MySQL).
+     *
+     * في PostgreSQL يحتاج PDO إلى اسم sequence الصحيح في lastInsertId().
+     * نستخدم اسم العمود لتحديد الجدول، ثم نستخرج sequence اسمه من PostgreSQL.
      */
-    private function insertedIdFromLastStmt(string $column = 'id'): int
+    private function insertedIdFromLastStmt(string $column = 'invoice_id'): int
     {
         if ($this->driver === 'pgsql') {
-            // في PostgreSQL: lastInsertId() يحتاج sequence name. بديل آمن:
-            // نستعلم الفاتورة الأحدث لمحاسب حالي في نفس الثواني (لأننا داخل معاملة).
-            // أفضل منها: جرّب lastInsertId('invoices_invoice_id_seq')
-            try {
-                return (int) $this->conn->lastInsertId('invoices_invoice_id_seq');
-            } catch (Throwable $e) {
-                $row = $this->conn->query('SELECT MAX(invoice_id) FROM invoices')->fetchColumn();
-                return (int) $row;
+            // خريطة العمود → اسم الـ sequence الصحيح
+            $sequenceMap = [
+                'invoice_id'  => 'invoices_invoice_id_seq',
+                'id'          => null, // قد يكون لعدة جداول؛ نُعالج أدناه
+                'visit_id'    => 'visits_visit_id_seq',
+                'patient_id'  => 'patients_patient_id_seq',
+                'detail_id'   => 'invoice_details_detail_id_seq',
+                'ticket_id'   => 'examination_tickets_ticket_id_seq',
+            ];
+
+            $sequenceName = $sequenceMap[$column] ?? null;
+
+            // محاولة 1: إذا كان لدينا اسم sequence معروف، استخدمه مباشرة
+            if ($sequenceName !== null) {
+                try {
+                    $val = (int) $this->conn->lastInsertId($sequenceName);
+                    if ($val > 0) {
+                        return $val;
+                    }
+                } catch (Throwable $e) {
+                    // تجاهل، نُجرّب الطرق الأخرى أدناه
+                }
             }
+
+            // محاولة 2: lastInsertId() بدون معامل (يُعيد آخر sequence استُخدم في الجلسة)
+            try {
+                $val = (int) $this->conn->lastInsertId();
+                if ($val > 0) {
+                    return $val;
+                }
+            } catch (Throwable $e) {
+                // تجاهل
+            }
+
+            return 0;
         }
         return (int) $this->conn->lastInsertId();
     }
@@ -837,9 +866,27 @@ class AccountingModel
                 ':cs' => $centerShare, ':ms' => $ministryShare, ':total' => $totalAmount,
                 ':uid' => $closedBy,
             ]);
-            $closureId = (int) $this->insertedIdFromLastStmt('id');
-            if ($closureId <= 0 && $this->driver === 'pgsql') {
-                $closureId = (int) $this->conn->lastInsertId('shifts_closures_id_seq');
+            // الحصول على معرّف الإقفال الجديد باستخدام sequence الصحيح في PostgreSQL
+            $closureId = 0;
+            if ($this->driver === 'pgsql') {
+                try {
+                    $closureId = (int) $this->conn->lastInsertId('shifts_closures_id_seq');
+                } catch (Throwable $e) {
+                    $closureId = 0;
+                }
+            } else {
+                $closureId = (int) $this->conn->lastInsertId();
+            }
+            if ($closureId <= 0) {
+                // احتياطياً: استعلام صريح للسجل الذي أُدرج للتو في نفس المعاملة
+                $idStmt = $this->conn->prepare(
+                    'SELECT id FROM shifts_closures WHERE shift_type = :st AND shift_date = :sd ORDER BY id DESC LIMIT 1'
+                );
+                $idStmt->execute([':st' => $shiftType, ':sd' => $shiftDate]);
+                $closureId = (int) $idStmt->fetchColumn();
+            }
+            if ($closureId <= 0) {
+                throw new RuntimeException('تعذّر الحصول على معرّف إقفال الفترة بعد الإدراج.');
             }
 
             // إنشاء سند A إجمالي مرتبط بالإقفال
@@ -869,6 +916,9 @@ class AccountingModel
             $newInvoiceId = (int) $this->insertedIdFromLastStmt('invoice_id');
             if ($newInvoiceId <= 0 && $this->driver === 'pgsql') {
                 $newInvoiceId = (int) $this->conn->lastInsertId('invoices_invoice_id_seq');
+            }
+            if ($newInvoiceId <= 0) {
+                throw new RuntimeException('تعذّر الحصول على معرّف السند بعد الإدراج.');
             }
 
             // تحديث سجل الإقفال ليربط بسند التحصيل
