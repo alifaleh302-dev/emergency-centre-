@@ -283,6 +283,20 @@ class DoctorController extends BaseController
         }
     }
 
+    /**
+     * يرجع أنواع الحالات النشطة فقط من جدول Emergency_Case_Types
+     * مرتبة أبجدياً (أ - ي) لتعبئة حقل "نوع الحالة".
+     */
+    public function getCaseTypes(): void
+    {
+        try {
+            $rows = $this->model->getCaseTypes();
+            $this->success($rows);
+        } catch (Throwable $exception) {
+            $this->error('تعذر جلب أنواع الحالات.', 500);
+        }
+    }
+
     public function getServicesList(): void
     {
         try {

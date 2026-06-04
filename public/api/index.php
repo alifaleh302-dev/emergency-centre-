@@ -122,6 +122,7 @@ $routes = [
     'doctor/final_diagnosis' => ['methods' => ['POST'], 'handler' => fn () => $doctorHandler('finalDiagnosis')],
     'doctor/sent_orders' => ['methods' => ['GET'], 'handler' => fn () => $doctorHandler('getSentOrders', false)],
     'doctor/services_list' => ['methods' => ['GET'], 'handler' => fn () => $doctorHandler('getServicesList', false)],
+    'doctor/case_types' => ['methods' => ['GET'], 'handler' => fn () => $doctorHandler('getCaseTypes', false)],
     'doctor/medical_archive' => ['methods' => ['GET'], 'handler' => fn () => $doctorHandler('getMedicalArchive', false)],
     'doctor/visit_close_data' => ['methods' => ['POST'], 'handler' => fn () => $doctorHandler('getVisitCloseData')],
     // مسار قديم (موقوف) - يعيد 410 Gone لأي عميل لم يحدّث

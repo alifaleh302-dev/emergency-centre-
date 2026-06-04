@@ -21,7 +21,9 @@ const DoctorData = {
     data_patients: [],
     sent_orders: [],
 
-    caseTypes: ["طوارئ باطنية", "تسمم", "سقوط", "حوادث سير", "حروق", "نوبة قلبية", "ضيق تنفس", "إصابة عمل", "نزيف", "أخرى"],
+    // أنواع الحالات تُجلب ديناميكياً من جدول Emergency_Case_Types عبر API
+    // (مرتبة أبجدياً أ-ي، النشطة فقط). انظر initDoctorModule().
+    caseTypes: [],
     districts: ["السبعين", "الوحدة", "عمران", "التحرير", "بني الحارث"],
     availableServices: [],
 
@@ -30,6 +32,210 @@ const DoctorData = {
 };
 
 const Doctor = {
+
+    // ============================================================
+    // 0) مكوّن Combobox بحثي ذكي لحقل "نوع الحالة"
+    //    - يستعلم بياناته من DoctorData.caseTypes (أتت من جدول Emergency_Case_Types بواسطة API).
+    //    - مرتّب أبجدياً (أ - ي) من الخادم.
+    //    - input نصي + قائمة منسدلة مفلترة بحيّة، مع تنسيق خفيف مشابه لـ select.
+    // ============================================================
+    renderCaseTypeCombobox: function(fieldId) {
+        // إعادة HTML للـ markup فقط؛ يجب استدعاء bindCaseTypeCombobox(fieldId)
+        // بعد إدراجه في DOM لربط الأحداث وبناء القائمة.
+        return `
+            <div class="case-combobox" data-case-combobox="${fieldId}">
+                <div class="case-combobox__input-wrap">
+                    <input type="text"
+                           id="${fieldId}"
+                           class="form-control form-select shadow-none case-combobox__input"
+                           autocomplete="off"
+                           spellcheck="false"
+                           placeholder="ابحث أو اختر نوع الحالة...">
+                </div>
+                <div class="case-combobox__menu" role="listbox" aria-hidden="true"></div>
+            </div>`;
+    },
+
+    bindCaseTypeCombobox: function(fieldId) {
+        const wrap  = document.querySelector(`[data-case-combobox="${fieldId}"]`);
+        if (!wrap) return;
+        const input = wrap.querySelector('.case-combobox__input');
+        const menu  = wrap.querySelector('.case-combobox__menu');
+
+        // البيانات مرتّبة أصلاً من الخادم (أ-ي)، ولكن نضمن ذلك محلياً أيضاً.
+        const items = (Array.isArray(DoctorData.caseTypes) ? DoctorData.caseTypes.slice() : [])
+            .map(item => (typeof item === 'string' ? { case_name: item } : item))
+            .filter(item => item && item.case_name)
+            .sort((a, b) => String(a.case_name).localeCompare(String(b.case_name), 'ar'));
+
+        let activeIndex = -1;
+        let filtered = items.slice();
+
+        const highlight = (text, query) => {
+            if (!query) return text;
+            const q = query.trim();
+            if (!q) return text;
+            const idx = text.indexOf(q);
+            if (idx < 0) return text;
+            return text.slice(0, idx) + '<mark>' + text.slice(idx, idx + q.length) + '</mark>' + text.slice(idx + q.length);
+        };
+
+        const buildMenu = (query = '') => {
+            const q = (query || '').trim();
+            filtered = q
+                ? items.filter(it => it.case_name.includes(q))
+                : items.slice();
+
+            if (filtered.length === 0) {
+                menu.innerHTML = `<div class="case-combobox__empty">لا توجد نتائج مطابقة</div>`;
+                return;
+            }
+
+            menu.innerHTML = filtered.map((it, i) => `
+                <div class="case-combobox__option ${i === activeIndex ? 'is-active' : ''}"
+                     role="option"
+                     data-index="${i}"
+                     data-value="${it.case_name.replace(/"/g, '&quot;')}">
+                    <span class="case-combobox__option-text">${highlight(it.case_name, q)}</span>
+                </div>
+            `).join('');
+        };
+
+        const openMenu = () => {
+            buildMenu(input.value);
+            menu.classList.add('is-open');
+            menu.setAttribute('aria-hidden', 'false');
+            wrap.classList.add('is-open');
+        };
+        const closeMenu = () => {
+            menu.classList.remove('is-open');
+            menu.setAttribute('aria-hidden', 'true');
+            wrap.classList.remove('is-open');
+            activeIndex = -1;
+        };
+        const chooseIndex = (i) => {
+            if (i < 0 || i >= filtered.length) return;
+            input.value = filtered[i].case_name;
+            input.dataset.selected = '1';
+            closeMenu();
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+
+        input.addEventListener('focus', openMenu);
+        input.addEventListener('click', openMenu);
+        input.addEventListener('input', () => {
+            input.dataset.selected = '';
+            activeIndex = -1;
+            openMenu();
+        });
+        input.addEventListener('keydown', (e) => {
+            if (!menu.classList.contains('is-open')) {
+                if (['ArrowDown', 'Enter'].includes(e.key)) { openMenu(); e.preventDefault(); }
+                return;
+            }
+            if (e.key === 'ArrowDown') {
+                activeIndex = Math.min(activeIndex + 1, filtered.length - 1);
+                buildMenu(input.value);
+                e.preventDefault();
+            } else if (e.key === 'ArrowUp') {
+                activeIndex = Math.max(activeIndex - 1, 0);
+                buildMenu(input.value);
+                e.preventDefault();
+            } else if (e.key === 'Enter') {
+                if (activeIndex >= 0) {
+                    chooseIndex(activeIndex);
+                } else if (filtered.length > 0) {
+                    chooseIndex(0);
+                }
+                e.preventDefault();
+            } else if (e.key === 'Escape') {
+                closeMenu();
+            }
+        });
+
+        menu.addEventListener('mousedown', (e) => {
+            const opt = e.target.closest('.case-combobox__option');
+            if (!opt) return;
+            e.preventDefault(); // لمنع فقدان التركيز قبل الاختيار
+            const i = parseInt(opt.dataset.index, 10);
+            chooseIndex(i);
+        });
+
+        document.addEventListener('mousedown', (e) => {
+            if (!wrap.contains(e.target)) closeMenu();
+        });
+
+        // حقن الـ CSS مرة واحدة
+        Doctor.injectCaseComboboxStyles();
+    },
+
+    injectCaseComboboxStyles: function() {
+        if (document.getElementById('caseComboboxStyles')) return;
+        const css = `
+        .case-combobox { position: relative; }
+        .case-combobox__input {
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23555' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: left 0.75rem center;
+            background-size: 14px 14px;
+            padding-left: 2.25rem;
+            cursor: text;
+            transition: border-color .15s ease, box-shadow .15s ease;
+        }
+        .case-combobox.is-open .case-combobox__input {
+            border-color: #86b7fe;
+            box-shadow: 0 0 0 0.2rem rgba(13,110,253,.15);
+        }
+        .case-combobox__menu {
+            position: absolute;
+            top: calc(100% + 4px);
+            inset-inline-start: 0;
+            inset-inline-end: 0;
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 0.5rem;
+            box-shadow: 0 8px 24px rgba(0,0,0,.08);
+            max-height: 240px;
+            overflow-y: auto;
+            z-index: 1080;
+            display: none;
+            padding: 4px;
+        }
+        .case-combobox__menu.is-open { display: block; }
+        .case-combobox__option {
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.92rem;
+            color: #212529;
+            transition: background-color .12s ease, color .12s ease;
+            user-select: none;
+        }
+        .case-combobox__option:hover,
+        .case-combobox__option.is-active {
+            background: #e7f1ff;
+            color: #0d6efd;
+        }
+        .case-combobox__option mark {
+            background: #fff3cd;
+            color: inherit;
+            padding: 0 1px;
+            border-radius: 2px;
+        }
+        .case-combobox__empty {
+            padding: 10px 12px;
+            color: #6c757d;
+            font-size: 0.88rem;
+            text-align: center;
+        }
+        /* إلغاء سهم form-select الأصلي (لأننا نستخدم input نصي) */
+        .case-combobox__input.form-select { background-position: left 0.75rem center; }
+        `;
+        const styleEl = document.createElement('style');
+        styleEl.id = 'caseComboboxStyles';
+        styleEl.textContent = css;
+        document.head.appendChild(styleEl);
+    },
 
     // ============================================================
     // 1) واجهة: حالة جديدة (New Case)
@@ -146,7 +352,7 @@ const Doctor = {
         const existing = document.getElementById('newPatientModal');
         if (existing) existing.remove();
 
-        const caseOptions = DoctorData.caseTypes.map(c => `<option value="${c}">${c}</option>`).join('');
+        const caseTypeField = Doctor.renderCaseTypeCombobox('np_type_case');
 
         const modalHTML = `
         <div class="modal fade" id="newPatientModal" tabindex="-1">
@@ -165,7 +371,7 @@ const Doctor = {
                             <div class="col-md-6"><label class="form-label small fw-bold">الحي</label><input type="text" id="np_place2" class="form-control shadow-none"></div>
 
                             <div class="col-12 mt-3"><hr></div>
-                            <div class="col-md-6"><label class="form-label small fw-bold text-danger">نوع الحالة</label><select id="np_type_case" class="form-select shadow-none">${caseOptions}</select></div>
+                            <div class="col-md-6"><label class="form-label small fw-bold text-danger">نوع الحالة</label>${caseTypeField}</div>
                             <div class="col-md-6"><label class="form-label small fw-bold text-primary">التشخيص المبدئي</label><input type="text" id="np_diagnosis" class="form-control shadow-none"></div>
                             <div class="col-12"><label class="form-label small fw-bold">ملاحظة</label><textarea id="np_note" class="form-control shadow-none" rows="2"></textarea></div>
                         </div>
@@ -183,6 +389,7 @@ const Doctor = {
         </div>`;
         document.body.insertAdjacentHTML('beforeend', modalHTML);
         new bootstrap.Modal(document.getElementById('newPatientModal')).show();
+        Doctor.bindCaseTypeCombobox('np_type_case');
     },
 
     saveNewPatient: async function() {
@@ -212,7 +419,7 @@ const Doctor = {
         const existing = document.getElementById('openVisitModal');
         if (existing) existing.remove();
 
-        const caseOptions = DoctorData.caseTypes.map(c => `<option value="${c}">${c}</option>`).join('');
+        const caseTypeField = Doctor.renderCaseTypeCombobox('v_type_case');
 
         const modalHTML = `
         <div class="modal fade" id="openVisitModal" tabindex="-1">
@@ -223,7 +430,7 @@ const Doctor = {
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body p-4 bg-light">
-                        <div class="mb-3"><label class="form-label small fw-bold text-danger">نوع الحالة</label><select id="v_type_case" class="form-select shadow-none">${caseOptions}</select></div>
+                        <div class="mb-3"><label class="form-label small fw-bold text-danger">نوع الحالة</label>${caseTypeField}</div>
                         <div class="mb-3"><label class="form-label small fw-bold text-primary">التشخيص المبدئي</label><input type="text" id="v_diagnosis" class="form-control shadow-none"></div>
                         <div class="mb-3"><label class="form-label small fw-bold">ملاحظة</label><textarea id="v_note" class="form-control shadow-none" rows="2"></textarea></div>
                         <div class="alert alert-info small mb-0">
@@ -239,6 +446,7 @@ const Doctor = {
         </div>`;
         document.body.insertAdjacentHTML('beforeend', modalHTML);
         new bootstrap.Modal(document.getElementById('openVisitModal')).show();
+        Doctor.bindCaseTypeCombobox('v_type_case');
     },
 
     saveExistingPatientVisit: async function(id_pat) {
@@ -1530,6 +1738,14 @@ async function initDoctorModule() {
     const servicesResponse = await Core.apiCall('doctor/services_list', 'GET');
     if (servicesResponse && servicesResponse.success) {
         DoctorData.availableServices = servicesResponse.data;
+    }
+
+    // جلب أنواع الحالات من جدول Emergency_Case_Types (مرتبة أبجدياً أ-ي)
+    const caseTypesResponse = await Core.apiCall('doctor/case_types', 'GET');
+    if (caseTypesResponse && caseTypesResponse.success && Array.isArray(caseTypesResponse.data)) {
+        DoctorData.caseTypes = caseTypesResponse.data;
+    } else {
+        DoctorData.caseTypes = [];
     }
 
     // جلب إعدادات الترويسة (تخزين محلي - الترويسة ديناميكية ويعدّلها الأدمن)

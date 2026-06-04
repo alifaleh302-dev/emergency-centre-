@@ -119,6 +119,33 @@ class DoctorModel
         return $row ? (int) $row['case_type_id'] : null;
     }
 
+    /**
+     * يجلب قائمة أنواع الحالات النشطة من جدول Emergency_Case_Types
+     * مرتبة أبجدياً (أ - ي) لتعبئة حقل "نوع الحالة" في واجهة الطبيب.
+     *
+     * @return array<int, array{case_type_id:int, case_code:int, case_name:string}>
+     */
+    public function getCaseTypes(): array
+    {
+        // الترتيب الأبجدي العربي مدعوم بشكل جيد عبر COLLATE الافتراضي في PostgreSQL
+        // مع UTF-8 لمعظم البيئات. نستخدم ORDER BY case_name لضمان (أ - ي).
+        $sql = 'SELECT case_type_id, case_code, case_name
+                FROM Emergency_Case_Types
+                WHERE is_active = TRUE
+                ORDER BY case_name ASC';
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute();
+        $rows = $stmt->fetchAll();
+
+        return array_map(static function ($row): array {
+            return [
+                'case_type_id' => (int) $row['case_type_id'],
+                'case_code'    => (int) $row['case_code'],
+                'case_name'    => (string) $row['case_name'],
+            ];
+        }, $rows ?: []);
+    }
+
     public function createVisit(int $patientId, int $doctorId, int $caseTypeId, string $diagnosis, string $notes, string $typeCaseName): int
     {
         $sql = "INSERT INTO Visits (patient_id, doctor_id, case_type_id, type_case, diagnosis, notes, status)
