@@ -81,10 +81,16 @@ const DailyInfo = {
             }
 
             #di-printable { direction: rtl; color: #1f2937; background: #fff; }
-            #di-printable .di-scroll { overflow: auto; }
+            #di-printable .di-scroll {
+                overflow-x: auto;
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+                max-width: 100%;
+                border-radius: 14px;
+            }
             #di-printable .di-table {
                 width: 100%;
-                min-width: 1420px;
+                min-width: 1180px;
                 border-collapse: collapse;
                 font-size: 12px;
                 table-layout: fixed;
@@ -110,11 +116,24 @@ const DailyInfo = {
             #di-printable .di-th-cat { min-width: 110px; }
             #di-printable .di-th-bayan { min-width: 220px; }
             #di-printable .di-th-period { min-width: 50px; }
-            #di-printable .di-th-svc { min-width: 80px; }
+            #di-printable .di-th-svc { min-width: 56px; width: 56px; }
             #di-printable .di-th-total { min-width: 95px; }
-            #di-printable .di-th-serial { min-width: 80px; }
-            #di-printable .di-th-count { min-width: 70px; }
-            #di-printable .di-th-doc { min-width: 150px; }
+            #di-printable .di-th-serial { min-width: 70px; }
+            #di-printable .di-th-count { min-width: 60px; }
+            #di-printable .di-th-doc { min-width: 130px; }
+
+            /* تدوير نصوص رؤوس الأقسام/الخدمات 90 درجة لعرض أنيق */
+            #di-printable .di-th-svc .di-th-rotate {
+                display: inline-block;
+                writing-mode: vertical-rl;
+                transform: rotate(180deg);
+                white-space: nowrap;
+                line-height: 1.2;
+                padding: 4px 2px;
+                font-weight: 700;
+                min-height: 90px;
+            }
+            #di-printable .di-th-svc { height: 120px; vertical-align: middle; padding: 6px 2px; }
 
             @media screen {
                 #di-wrapper .report-header { display: none !important; }
@@ -143,6 +162,8 @@ const DailyInfo = {
                 #di-printable .di-table { min-width: 100%; font-size: 10px; }
                 #di-printable .di-table th,
                 #di-printable .di-table td { padding: 4px 5px; font-size: 10.5px; }
+                #di-printable .di-th-svc { height: auto; }
+                #di-printable .di-th-svc .di-th-rotate { writing-mode: horizontal-tb; transform: none; min-height: 0; padding: 0; }
                 #di-printable .bg-cat { background: #f4b9c8 !important; }
                 #di-printable .bg-header { background: #f4b9c8 !important; }
                 #di-printable .bg-svc-hdr { background: #f7e59d !important; }
@@ -192,6 +213,10 @@ const DailyInfo = {
                 #di-wrapper .di-toolbar-grid { grid-template-columns: 1fr; }
                 #di-wrapper .di-surface-stack { padding: 14px; }
                 #di-wrapper .di-report-header { padding: 12px 14px; }
+                #di-printable .di-table { font-size: 11px; }
+                #di-printable .di-table th, #di-printable .di-table td { padding: 6px 4px; }
+                #di-printable .di-th-svc { height: 100px; }
+                #di-printable .di-th-svc .di-th-rotate { min-height: 75px; font-size: 11px; }
             }
 
             @page { size: A4 landscape; margin: 0.5cm; }
@@ -400,10 +425,19 @@ const DailyInfo = {
             return n > 0 ? Math.round(n).toLocaleString('ar-YE') : '';
         };
 
-        const ticketSerialAll = this.mergeRanges(
-            TS.morning?.serial_from ? { from: TS.morning.serial_from, to: TS.morning.serial_to, count: TS.morning.count } : null,
-            TS.evening?.serial_from ? { from: TS.evening.serial_from, to: TS.evening.serial_to, count: TS.evening.count } : null,
-        );
+        // بناء نطاقات تذاكر المعاينة لكل فترة + الإجمالي (من أول تذكرة إلى آخر تذكرة)
+        const ticketMorningRange = TS.morning?.serial_from ? {
+            from: TS.morning.serial_from, to: TS.morning.serial_to, count: TS.morning.count
+        } : null;
+        const ticketEveningRange = TS.evening?.serial_from ? {
+            from: TS.evening.serial_from, to: TS.evening.serial_to, count: TS.evening.count
+        } : null;
+        const ticketSerialAll = this.mergeRanges(ticketMorningRange, ticketEveningRange);
+        const ticketSerials = {
+            morning: ticketMorningRange,
+            evening: ticketEveningRange,
+            total: ticketSerialAll,
+        };
 
         const getSection = (shiftKey, sectionKey) => {
             if (shiftKey === 'morning') return M[sectionKey] || {};
@@ -413,6 +447,25 @@ const DailyInfo = {
 
         const buildBodyCells = (section) => cols.map((c) => `<td>${fmt(section[c.key])}</td>`).join('');
 
+        // دالة مساعدة لتحويل بنية SR إلى أشكال لكل فترة
+        const buildSerialPerShift = (sr) => {
+            if (!sr) return { morning: null, evening: null, total: null };
+            // البنية الجديدة: { morning, evening, total, from, to, count }
+            if (sr.morning !== undefined || sr.evening !== undefined || sr.total !== undefined) {
+                return {
+                    morning: sr.morning || null,
+                    evening: sr.evening || null,
+                    total:   sr.total   || (sr.from != null ? { from: sr.from, to: sr.to, count: sr.count } : null),
+                };
+            }
+            // توافق عكسي مع البنية القديمة
+            return {
+                morning: null,
+                evening: null,
+                total: (sr.from != null) ? { from: sr.from, to: sr.to, count: sr.count } : null,
+            };
+        };
+
         const categories = [
             {
                 catLabel: 'المترددين على الخدمات',
@@ -420,7 +473,7 @@ const DailyInfo = {
                 bayan: 'عدد المترددين بسند تحصيل وتذاكر معاينة',
                 bayanTotal: 'إجمالي عدد المترددين بسند تحصيل وتذاكر معاينة',
                 docLabel: 'تذاكر معاينة',
-                serial: ticketSerialAll,
+                serial: ticketSerials,
                 subtotalClass: 'bg-subtotal',
             },
             {
@@ -429,7 +482,7 @@ const DailyInfo = {
                 bayan: 'إيرادات مشاركة المجتمع',
                 bayanTotal: 'إجمالي إيرادات مشاركة المجتمع',
                 docLabel: 'اسناد تحصيل مشاركة مجتمع',
-                serial: SR.A,
+                serial: buildSerialPerShift(SR.A),
                 subtotalClass: 'bg-subtotal',
             },
             {
@@ -438,7 +491,7 @@ const DailyInfo = {
                 bayan: 'إيرادات مشتركة',
                 bayanTotal: 'إجمالي الإيرادات المشتركة',
                 docLabel: 'قسائم تحصيل موارد مشتركة',
-                serial: null,
+                serial: { morning: null, evening: null, total: null },
                 subtotalClass: 'bg-subtotal',
             },
             {
@@ -447,20 +500,32 @@ const DailyInfo = {
                 bayan: 'الإعفاء',
                 bayanTotal: 'إجمالي الإعفاءات',
                 docLabel: 'سندات الإعفاء',
-                serial: SR.EXEMPT || SR.C,
+                serial: buildSerialPerShift(SR.EXEMPT || SR.C),
                 subtotalClass: 'bg-exempt',
             },
         ];
+
+        // دالة مساعدة للحصول على نطاق تسلسلي حسب الفترة
+        const pickSerial = (serialObj, shift) => {
+            if (!serialObj) return { from: '', to: '', count: '' };
+            const r = serialObj[shift] || null;
+            if (!r || r.from == null) return { from: '', to: '', count: '' };
+            return {
+                from: r.from != null ? r.from : '',
+                to:   r.to   != null ? r.to   : '',
+                count: r.count ? fmt(r.count) : '',
+            };
+        };
 
         const buildCategoryRows = (cat) => {
             const morningSec = getSection('morning', cat.sectionKey);
             const eveningSec = getSection('evening', cat.sectionKey);
             const totalSec = getSection('total', cat.sectionKey);
 
-            const serial = cat.serial || {};
-            const sFrom = serial.from != null ? serial.from : '';
-            const sTo = serial.to != null ? serial.to : '';
-            const sCount = serial.count ? fmt(serial.count) : '';
+            // نطاقات المستندات لكل فترة + الإجمالي
+            const sMorning = pickSerial(cat.serial, 'morning');
+            const sEvening = pickSerial(cat.serial, 'evening');
+            const sTotal   = pickSerial(cat.serial, 'total');
 
             const mTotal = Number(morningSec.total || 0);
             const eTotal = Number(eveningSec.total || 0);
@@ -473,9 +538,9 @@ const DailyInfo = {
                     <td class="di-period">ص</td>
                     ${buildBodyCells(morningSec)}
                     <td><strong>${fmt(mTotal)}</strong></td>
-                    <td rowspan="3">${sFrom}</td>
-                    <td rowspan="3">${sTo}</td>
-                    <td rowspan="3"><strong>${sCount}</strong></td>
+                    <td>${sMorning.from}</td>
+                    <td>${sMorning.to}</td>
+                    <td><strong>${sMorning.count}</strong></td>
                     <td rowspan="3" class="di-cat">${cat.docLabel}</td>
                 </tr>`;
 
@@ -485,6 +550,9 @@ const DailyInfo = {
                     <td class="di-period">م</td>
                     ${buildBodyCells(eveningSec)}
                     <td><strong>${fmt(eTotal)}</strong></td>
+                    <td>${sEvening.from}</td>
+                    <td>${sEvening.to}</td>
+                    <td><strong>${sEvening.count}</strong></td>
                 </tr>`;
 
             const row3 = `
@@ -493,6 +561,9 @@ const DailyInfo = {
                     <td class="di-period">ج</td>
                     ${buildBodyCells(totalSec)}
                     <td><strong>${fmt(tTotal)}</strong></td>
+                    <td>${sTotal.from}</td>
+                    <td>${sTotal.to}</td>
+                    <td><strong>${sTotal.count}</strong></td>
                 </tr>`;
 
             return row1 + row2 + row3;
@@ -513,10 +584,11 @@ const DailyInfo = {
         const participationAndJoint = sumSections('center', 'ministry');
         const collectedAndExempt = sumSections('center', 'exempt');
 
-        const labL = SR.L || {};
-        const lFrom = labL.from != null ? labL.from : '';
-        const lTo = labL.to != null ? labL.to : '';
-        const lCount = labL.count ? fmt(labL.count) : '';
+        const labSerial = buildSerialPerShift(SR.L);
+        const lTotal   = labSerial.total || { from: '', to: '', count: '' };
+        const lFrom    = lTotal.from != null ? lTotal.from : '';
+        const lTo      = lTotal.to   != null ? lTotal.to   : '';
+        const lCount   = lTotal.count ? fmt(lTotal.count) : '';
 
         const grandRow1 = `
             <tr class="bg-grand" style="font-weight:800;">
@@ -602,13 +674,17 @@ const DailyInfo = {
             <head>
                 <meta charset="UTF-8">
                 <title>المعلومية اليومية</title>
+                <link rel="preconnect" href="https://fonts.googleapis.com">
+                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;600;700;800&display=swap" rel="stylesheet">
                 <style>
                     * { box-sizing: border-box; }
-                    body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; direction: rtl; color:#111; margin:0; padding:6mm; }
+                    body { font-family: 'Noto Sans Arabic', 'Segoe UI', Tahoma, Arial, sans-serif; direction: rtl; color:#111; margin:0; padding:6mm; }
                     table { width: 100%; border-collapse: collapse; table-layout: fixed; }
                     th, td { border: 1px solid #333; padding: 4px 5px; text-align:center; vertical-align: middle; font-size: 10.5px; word-wrap: break-word; }
                     .di-bayan { text-align: right; padding-right: 8px; }
                     .di-cat { font-weight: 800; }
+                    .di-th-rotate { display: inline-block; font-weight: 700; }
                     .report-header { display: block; }
                     .bg-cat, .bg-header { background: #f4b9c8 !important; }
                     .bg-svc-hdr { background: #f7e59d !important; }
@@ -623,7 +699,7 @@ const DailyInfo = {
                     }
                 </style>
             </head>
-            <body>${printable.innerHTML}</body>
+            <body dir="rtl">${printable.innerHTML}</body>
             </html>
         `);
         win.document.close();

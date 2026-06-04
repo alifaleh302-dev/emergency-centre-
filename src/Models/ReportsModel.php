@@ -343,14 +343,17 @@ class ReportsModel
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = [
-            'morning' => ['count' => 0, 'amount' => 0.0, 'serial_from' => null, 'serial_to' => null],
-            'evening' => ['count' => 0, 'amount' => 0.0, 'serial_from' => null, 'serial_to' => null],
+            'morning' => ['count' => 0, 'amount' => 0.0, 'center_amount' => 0.0, 'ministry_amount' => 0.0, 'serial_from' => null, 'serial_to' => null],
+            'evening' => ['count' => 0, 'amount' => 0.0, 'center_amount' => 0.0, 'ministry_amount' => 0.0, 'serial_from' => null, 'serial_to' => null],
         ];
 
         foreach ($rows as $row) {
             $shift = ($row['shift'] === 'morning') ? 'morning' : 'evening';
             $result[$shift]['count']       = (int) $row['ticket_count'];
             $result[$shift]['amount']      = (float) $row['ticket_amount'];
+            // تذاكر المعاينة بالكامل تذهب لحصة المركز (لا حصة وزارة عليها هنا)
+            $result[$shift]['center_amount']   = (float) $row['ticket_amount'];
+            $result[$shift]['ministry_amount'] = 0.0;
             $result[$shift]['serial_from'] = $row['serial_from'];
             $result[$shift]['serial_to']   = $row['serial_to'];
         }
@@ -360,12 +363,26 @@ class ReportsModel
 
     /**
      * نطاقات الأرقام التسلسلية للسندات
+     *
+     * يُعيد لكل نوع سند (A/B/C/L والإعفاء المركّب EXEMPT) ثلاثة نطاقات:
+     *   - morning : السندات الصادرة في الفترة الصباحية فقط
+     *   - evening : السندات الصادرة في الفترة المسائية فقط
+     *   - total   : من أول سند في اليوم إلى آخر سند (دمج الفترتين)
+     *
+     * بالإضافة إلى مفاتيح المستوى الأعلى (from/to/count) المبقاة
+     * للتوافق العكسي مع الواجهات القديمة — وهي مطابقة لـ total.
      */
-    public function getSerialRanges(string $reportDate): array
+    public function getSerialRanges(string $reportDate, int $mStart = 5, int $mEnd = 12): array
     {
+        // CASE تعبير SQL يحدد الفترة بناءً على ساعة الدفع
+        $shiftExpr = "CASE WHEN EXTRACT(HOUR FROM i.paid_at) >= :m_start
+                              AND EXTRACT(HOUR FROM i.paid_at) <  :m_end
+                         THEN 'morning' ELSE 'evening' END";
+
         $sql = "
             SELECT
                 dt.doc_name,
+                {$shiftExpr} AS shift,
                 MIN(i.serial_number) AS serial_from,
                 MAX(i.serial_number) AS serial_to,
                 COUNT(*) AS doc_count
@@ -374,27 +391,74 @@ class ReportsModel
             WHERE {$this->activeInvoiceCondition('i')}
               AND DATE(i.paid_at) = :report_date
               AND dt.doc_name IN ('A', 'B', 'C')
-            GROUP BY dt.doc_name
+            GROUP BY dt.doc_name, {$shiftExpr}
         ";
 
         $stmt = $this->conn->prepare($sql);
-        $stmt->execute([':report_date' => $reportDate]);
+        $stmt->execute([
+            ':report_date' => $reportDate,
+            ':m_start'     => $mStart,
+            ':m_end'       => $mEnd,
+        ]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $result = ['A' => null, 'B' => null, 'C' => null, 'L' => null, 'EXEMPT' => null];
+        $emptyShiftMap = static fn () => [
+            'morning' => null,
+            'evening' => null,
+            'total'   => null,
+            // مفاتيح التوافق العكسي (تشير لـ total)
+            'from'    => null,
+            'to'      => null,
+            'count'   => 0,
+        ];
+
+        $result = [
+            'A'      => $emptyShiftMap(),
+            'B'      => $emptyShiftMap(),
+            'C'      => $emptyShiftMap(),
+            'L'      => $emptyShiftMap(),
+            'EXEMPT' => $emptyShiftMap(),
+        ];
+
         foreach ($rows as $row) {
-            $result[$row['doc_name']] = [
+            $docName = (string) $row['doc_name'];
+            $shift   = ((string) $row['shift']) === 'morning' ? 'morning' : 'evening';
+            if (!isset($result[$docName])) {
+                continue;
+            }
+            $result[$docName][$shift] = [
                 'from'  => $row['serial_from'],
                 'to'    => $row['serial_to'],
                 'count' => (int) $row['doc_count'],
             ];
         }
 
-        $result['EXEMPT'] = $this->mergeRanges($result['B'], $result['C']);
+        // حساب total لكل نوع = دمج النطاقات (من أول سند إلى آخر سند)
+        foreach (['A', 'B', 'C'] as $docName) {
+            $total = $this->mergeRanges($result[$docName]['morning'], $result[$docName]['evening']);
+            $result[$docName]['total'] = $total;
+            $result[$docName]['from']  = $total['from']  ?? null;
+            $result[$docName]['to']    = $total['to']    ?? null;
+            $result[$docName]['count'] = $total['count'] ?? 0;
+        }
 
+        // EXEMPT = دمج B و C لكل فترة
+        $result['EXEMPT']['morning'] = $this->mergeRanges($result['B']['morning'], $result['C']['morning']);
+        $result['EXEMPT']['evening'] = $this->mergeRanges($result['B']['evening'], $result['C']['evening']);
+        $exemptTotal = $this->mergeRanges($result['EXEMPT']['morning'], $result['EXEMPT']['evening']);
+        $result['EXEMPT']['total'] = $exemptTotal;
+        $result['EXEMPT']['from']  = $exemptTotal['from']  ?? null;
+        $result['EXEMPT']['to']    = $exemptTotal['to']    ?? null;
+        $result['EXEMPT']['count'] = $exemptTotal['count'] ?? 0;
+
+        // L: استمارات المختبر (لكل فترة + الإجمالي = من أول سند إلى آخر سند)
         try {
+            $shiftExprL = "CASE WHEN EXTRACT(HOUR FROM ld.created_at) >= :m_start
+                                   AND EXTRACT(HOUR FROM ld.created_at) <  :m_end
+                              THEN 'morning' ELSE 'evening' END";
             $sqlL = "
                 SELECT
+                    {$shiftExprL} AS shift,
                     MIN(ld.serial_number) AS serial_from,
                     MAX(ld.serial_number) AS serial_to,
                     COUNT(*) AS doc_count
@@ -402,18 +466,30 @@ class ReportsModel
                 LEFT JOIN invoices i ON ld.invoice_id = i.invoice_id
                 WHERE DATE(ld.created_at) = :report_date
                   AND (ld.invoice_id IS NULL OR i.cancelled_at IS NULL)
+                GROUP BY {$shiftExprL}
             ";
             $stmtL = $this->conn->prepare($sqlL);
-            $stmtL->execute([':report_date' => $reportDate]);
-            $rowL = $stmtL->fetch(PDO::FETCH_ASSOC);
+            $stmtL->execute([
+                ':report_date' => $reportDate,
+                ':m_start'     => $mStart,
+                ':m_end'       => $mEnd,
+            ]);
+            $rowsL = $stmtL->fetchAll(PDO::FETCH_ASSOC);
 
-            if ($rowL && $rowL['serial_from'] !== null) {
-                $result['L'] = [
+            foreach ($rowsL as $rowL) {
+                if ($rowL['serial_from'] === null) continue;
+                $shift = ((string) $rowL['shift']) === 'morning' ? 'morning' : 'evening';
+                $result['L'][$shift] = [
                     'from'  => $rowL['serial_from'],
                     'to'    => $rowL['serial_to'],
                     'count' => (int) $rowL['doc_count'],
                 ];
             }
+            $lTotal = $this->mergeRanges($result['L']['morning'], $result['L']['evening']);
+            $result['L']['total'] = $lTotal;
+            $result['L']['from']  = $lTotal['from']  ?? null;
+            $result['L']['to']    = $lTotal['to']    ?? null;
+            $result['L']['count'] = $lTotal['count'] ?? 0;
         } catch (\Throwable $e) {
             // جدول المختبر قد لا يكون موجوداً في بعض البيئات.
         }

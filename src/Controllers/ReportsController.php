@@ -44,7 +44,7 @@ class ReportsController extends BaseController
             $headerSettings = $this->model->getHeaderSettings();
             $invoiceData    = $this->model->getInvoiceData($date, $mStart, $mEnd);
             $ticketData     = $this->model->getTicketData($date);
-            $serialRanges   = $this->model->getSerialRanges($date);
+            $serialRanges   = $this->model->getSerialRanges($date, $mStart, $mEnd);
 
             foreach (['morning', 'evening'] as $shift) {
                 $invoiceData[$shift]['visitors']['tickets'] = (float) $ticketData[$shift]['count'];

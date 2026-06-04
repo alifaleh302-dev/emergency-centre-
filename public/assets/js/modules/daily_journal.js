@@ -87,24 +87,34 @@ const DailyJournal = {
             #dj-wrapper .dj-chip.dj-chip-closed { background: #dcfce7; color: #166534; }
             #dj-wrapper .dj-surface-stack { display: flex; flex-direction: column; gap: 16px; padding: 18px; }
             #dj-wrapper .dj-table-wrap {
-                overflow: auto;
+                overflow-x: auto;
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
                 border: 1px solid #e2e8f0;
                 border-radius: 20px;
                 background: #fff;
+                max-width: 100%;
             }
             #dj-wrapper .dj-table {
                 width: 100%;
-                min-width: 930px;
+                min-width: 1050px;
                 border-collapse: separate;
                 border-spacing: 0;
                 font-size: 13px;
                 background: #fff;
+                white-space: nowrap;
             }
             #dj-wrapper .dj-table th, #dj-wrapper .dj-table td {
                 border-bottom: 1px solid #e2e8f0;
                 padding: 12px 10px;
                 text-align: center;
                 vertical-align: middle;
+            }
+            #dj-wrapper .dj-table td.dj-cell-patient {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                max-width: 240px;
             }
             #dj-wrapper .dj-table thead th {
                 background: linear-gradient(135deg, #4160e0 0%, #2b4196 100%);
@@ -267,6 +277,9 @@ const DailyJournal = {
                 #dj-wrapper .dj-legend { justify-content: flex-start; }
                 #dj-wrapper .dj-shift-line { flex-direction: column; align-items: stretch; }
                 #dj-wrapper .dj-close-btn { width: 100%; }
+                #dj-wrapper .dj-table { font-size: 12px; }
+                #dj-wrapper .dj-table th, #dj-wrapper .dj-table td { padding: 9px 8px; }
+                #dj-wrapper .dj-table td.dj-cell-patient { max-width: 160px; }
             }
 
             @media print {
@@ -524,10 +537,11 @@ const DailyJournal = {
     renderInvoiceRow(inv, idx, group) {
         const docClass = inv.doc_name === 'A' ? 'dj-badge-a' : inv.doc_name === 'B' ? 'dj-badge-b' : 'dj-badge-c';
         const safePatient = encodeURIComponent(String(inv.patient_name || ''));
+        const patientName = this.escape(inv.patient_name);
         return `
             <tr class="dj-row-${group}">
                 <td>${idx}</td>
-                <td>${this.escape(inv.patient_name)}</td>
+                <td class="dj-cell-patient" title="${patientName}">${patientName}</td>
                 <td><strong>${inv.serial_number}</strong> <small class="text-muted">(${inv.doc_name})</small></td>
                 <td><span class="dj-badge dj-badge-dept">${this.escape(inv.department_name || '—')}</span></td>
                 <td><span class="dj-badge ${docClass}">${this.escape(inv.type_label)}</span></td>
