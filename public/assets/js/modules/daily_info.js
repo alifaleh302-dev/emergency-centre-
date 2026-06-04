@@ -594,42 +594,9 @@ const DailyInfo = {
 
         // عدد الأعمدة الوسطى = العمود الأيمن (نوع الإيرادات) + البيان + الفترة + خدمات + الإجمالي
         // العمود الأيمن سندمجه هنا (نوع الإيرادات) في rowspan=3 على صفوف استمارات الفحوصات.
-        const examRow1 = `
-            <tr class="bg-row">
-                <td class="di-cat bg-cat" rowspan="3">استمارات الفحوصات</td>
-                <td class="di-bayan">استمارات الفحوصات المختبرية</td>
-                <td class="di-period">ص</td>
-                <td colspan="${cols.length + 1}"></td>
-                <td>${lMorning.from}</td>
-                <td>${lMorning.to}</td>
-                <td><strong>${lMorning.count}</strong></td>
-                <td rowspan="3" class="di-cat">استمارات الفحوصات</td>
-            </tr>`;
-        const examRow2 = `
-            <tr class="bg-row">
-                <td class="di-bayan">استمارات الفحوصات المختبرية</td>
-                <td class="di-period">م</td>
-                <td colspan="${cols.length + 1}"></td>
-                <td>${lEvening.from}</td>
-                <td>${lEvening.to}</td>
-                <td><strong>${lEvening.count}</strong></td>
-            </tr>`;
-        const examRow3 = `
-            <tr class="bg-subtotal" style="font-weight:700;">
-                <td class="di-bayan">إجمالي استمارات الفحوصات المختبرية</td>
-                <td class="di-period">ج</td>
-                <td colspan="${cols.length + 1}"></td>
-                <td>${lTotal.from}</td>
-                <td>${lTotal.to}</td>
-                <td><strong>${lTotal.count}</strong></td>
-            </tr>`;
 
-        // صف فارغ فاصل قبل صفوف الإجماليات النهائية
-        const spacerRow = `
-            <tr class="bg-row di-spacer" aria-hidden="true">
-                <td colspan="${cols.length + 8}" style="height:10px; border-left:0; border-right:0;">&nbsp;</td>
-            </tr>`;
 
+        
         // الصفوف الإجمالية النهائية (بـ (ج) فقط — كما طلب المستخدم)
         const grandRow1 = `
             <tr class="bg-grand" style="font-weight:800;">
@@ -637,7 +604,10 @@ const DailyInfo = {
                 <td class="di-period">ج</td>
                 ${cols.map((c) => `<td>${fmt(participationAndJoint[c.key])}</td>`).join('')}
                 <td><strong>${fmt(participationAndJoint.total)}</strong></td>
-                <td colspan="4"></td>
+                <td>${lMorning.from}</td>
+                <td>${lMorning.to}</td>
+               <td><strong>${lMorning.count}</strong></td>
+                <td rowspan="3">استمارات الفحوصات</td>
             </tr>`;
 
         const grandRow2 = `
@@ -646,8 +616,19 @@ const DailyInfo = {
                 <td class="di-period">ج</td>
                 ${cols.map((c) => `<td>${fmt(collectedAndExempt[c.key])}</td>`).join('')}
                 <td><strong>${fmt(collectedAndExempt.total)}</strong></td>
-                <td colspan="4"></td>
+                <td>${lEvening.from}</td>
+                <td>${lEvening.to}</td>
+                <td><strong>${lEvening.count}</strong></td>
+                
             </tr>`;
+        const spacerRow = `
+            <tr class="bg-row di-spacer" aria-hidden="true">
+                <td colspan="${cols.length + 5}" style="height:10px; border-left:0; border-right:0;">&nbsp;</td>
+                <td>${lTotal.from}</td>
+                <td>${lTotal.to}</td>
+                <td><strong>${lTotal.count}</strong></td>
+            </tr>`;
+        
 
         const headerCols = cols.map((c) => `<th class="bg-svc-hdr di-th-svc">${c.label}</th>`).join('');
 
@@ -683,12 +664,9 @@ const DailyInfo = {
                 </thead>
                 <tbody>
                     ${categories.map(buildCategoryRows).join('')}
-                    ${examRow1}
-                    ${examRow2}
-                    ${examRow3}
-                    ${spacerRow}
                     ${grandRow1}
                     ${grandRow2}
+                    ${spacerRow}
                 </tbody>
             </table>`;
     },
