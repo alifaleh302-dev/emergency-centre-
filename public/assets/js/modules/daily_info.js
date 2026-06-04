@@ -356,13 +356,9 @@ const DailyInfo = {
     },
 
     renderHeaderBlock(header, dayName, gregDate, hijriDate) {
-        const country = header.header_country || 'الجمهورية اليمنية';
-        const ministry = header.header_ministry || 'وزارة الصحة العامة والسكان';
-        const office = header.header_office || '';
-        const directorate = header.header_directorate || '';
-        const center = header.header_center || 'مركز طوارئ الطرق';
+        
 
-    }
+    },
 
     renderMainTable(data) {
         const cols = [
