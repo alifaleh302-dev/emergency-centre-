@@ -7,6 +7,7 @@ class AdminModel
     private string $driver;
     private ?array $schemaCache = null;
     private ?SchemaCache $persistentCache = null;
+    private ?bool $settingsGroupColumnExists = null;
 
     private array $tableLabels = [
         'users' => 'المستخدمون',
@@ -23,6 +24,7 @@ class AdminModel
         'medical_results' => 'النتائج الطبية',
         'notifications' => 'الإشعارات',
         'examination_tickets' => 'تذاكر المعاينة',
+        'system_settings' => 'إعدادات النظام',
     ];
 
     private array $columnLabels = [
@@ -83,6 +85,11 @@ class AdminModel
         'ticket_type' => 'نوع التذكرة',
         'amount' => 'المبلغ',
         'current_serial' => 'آخر تسلسل',
+        'setting_key' => 'مفتاح الإعداد',
+        'setting_value' => 'القيمة',
+        'setting_group' => 'تصنيف الإعداد',
+        'description' => 'الوصف',
+        'updated_by' => 'آخر تعديل بواسطة',
     ];
 
     public function __construct(PDO $db, string $driver = 'pgsql')
@@ -612,6 +619,465 @@ class AdminModel
         }
 
         return $this->getReferenceOptions($column['foreign']['table'], $column['foreign']['column']);
+    }
+
+    public function getSystemSettingsCatalog(): array
+    {
+        $rows = $this->getExistingSystemSettings();
+        $definitions = $this->systemSettingDefinitions();
+        $groupMeta = $this->systemSettingGroups();
+        $settings = [];
+        $groupCounts = [];
+        $lastUpdatedAt = null;
+
+        foreach ($rows as $row) {
+            $key = (string) $row['setting_key'];
+            $definition = $definitions[$key] ?? [];
+            $groupKey = $this->inferSettingGroup($key, isset($row['setting_group']) ? (string) $row['setting_group'] : null);
+            $group = $groupMeta[$groupKey] ?? $groupMeta['general'];
+            $control = (string) ($definition['control'] ?? $this->inferSettingControl($key, (string) ($row['setting_value'] ?? '')));
+            $value = (string) ($row['setting_value'] ?? '');
+            $description = trim((string) ($row['description'] ?? ''));
+            $updatedAt = isset($row['updated_at']) ? (string) $row['updated_at'] : null;
+
+            $settings[] = [
+                'key' => $key,
+                'label' => (string) ($definition['label'] ?? $this->humanize($key)),
+                'group' => $groupKey,
+                'group_label' => (string) $group['label'],
+                'value' => $value,
+                'raw_value' => $value,
+                'description' => $description !== '' ? $description : (string) ($definition['hint'] ?? ''),
+                'hint' => (string) ($definition['hint'] ?? $description),
+                'control' => $control,
+                'unit' => (string) ($definition['unit'] ?? ''),
+                'placeholder' => (string) ($definition['placeholder'] ?? ''),
+                'min' => $definition['min'] ?? null,
+                'max' => $definition['max'] ?? null,
+                'step' => $definition['step'] ?? null,
+                'allow_empty' => (bool) ($definition['allow_empty'] ?? true),
+                'options' => array_values($definition['options'] ?? []),
+                'updated_at' => $updatedAt,
+                'updated_by' => $row['updated_by'] ?? null,
+            ];
+
+            $groupCounts[$groupKey] = ($groupCounts[$groupKey] ?? 0) + 1;
+            if ($updatedAt !== null && ($lastUpdatedAt === null || strcmp($updatedAt, $lastUpdatedAt) > 0)) {
+                $lastUpdatedAt = $updatedAt;
+            }
+        }
+
+        usort($settings, function (array $a, array $b) use ($groupMeta): int {
+            $aGroup = $groupMeta[$a['group']]['order'] ?? 999;
+            $bGroup = $groupMeta[$b['group']]['order'] ?? 999;
+            if ($aGroup === $bGroup) {
+                return strcmp($a['label'], $b['label']);
+            }
+            return $aGroup <=> $bGroup;
+        });
+
+        $groups = [];
+        foreach ($groupMeta as $key => $meta) {
+            $groups[] = [
+                'key' => $key,
+                'label' => $meta['label'],
+                'description' => $meta['description'],
+                'icon' => $meta['icon'],
+                'accent' => $meta['accent'],
+                'count' => $groupCounts[$key] ?? 0,
+                'order' => $meta['order'],
+            ];
+        }
+
+        usort($groups, fn(array $a, array $b): int => ($a['order'] ?? 999) <=> ($b['order'] ?? 999));
+
+        return [
+            'groups' => $groups,
+            'settings' => $settings,
+            'stats' => [
+                'total_settings' => count($settings),
+                'groups_count' => count(array_filter($groups, fn(array $group): bool => ($group['count'] ?? 0) > 0)),
+                'last_updated_at' => $lastUpdatedAt,
+                'has_group_column' => $this->systemSettingsHasGroupColumn(),
+            ],
+        ];
+    }
+
+    public function getSystemSettingsSnapshot(array $keys = []): array
+    {
+        $rows = $this->getExistingSystemSettings($keys);
+        $snapshot = [];
+        foreach ($rows as $row) {
+            $snapshot[(string) $row['setting_key']] = [
+                'value' => (string) ($row['setting_value'] ?? ''),
+                'description' => (string) ($row['description'] ?? ''),
+                'group' => $this->inferSettingGroup((string) $row['setting_key'], isset($row['setting_group']) ? (string) $row['setting_group'] : null),
+            ];
+        }
+        ksort($snapshot);
+        return $snapshot;
+    }
+
+    public function saveSystemSettings(array $items, int|string|null $updatedBy = null): array
+    {
+        if (empty($items)) {
+            throw new InvalidArgumentException('لا توجد إعدادات مطلوبة للحفظ.');
+        }
+
+        $definitions = $this->systemSettingDefinitions();
+        $existing = $this->getExistingSystemSettings(array_keys($items));
+        $hasGroupColumn = $this->systemSettingsHasGroupColumn();
+        $saved = [];
+
+        $this->conn->beginTransaction();
+        try {
+            foreach ($items as $key => $value) {
+                if (!is_string($key) || trim($key) === '') {
+                    throw new InvalidArgumentException('مفتاح الإعداد غير صالح.');
+                }
+
+                $normalizedKey = trim($key);
+                $definition = $definitions[$normalizedKey] ?? $this->buildFallbackSettingDefinition($normalizedKey, $existing[$normalizedKey]['setting_value'] ?? null, $existing[$normalizedKey]['setting_group'] ?? null);
+                $normalizedValue = $this->normalizeSystemSettingValue($definition, $value);
+                $groupKey = (string) ($definition['group'] ?? $this->inferSettingGroup($normalizedKey, $existing[$normalizedKey]['setting_group'] ?? null));
+                $description = (string) ($definition['hint'] ?? ($existing[$normalizedKey]['description'] ?? ''));
+
+                if (isset($existing[$normalizedKey])) {
+                    if ($hasGroupColumn) {
+                        $stmt = $this->conn->prepare(
+                            'UPDATE system_settings
+                             SET setting_value = :value,
+                                 setting_group = :setting_group,
+                                 updated_at = NOW(),
+                                 updated_by = :updated_by
+                             WHERE setting_key = :key'
+                        );
+                        $stmt->execute([
+                            ':value' => $normalizedValue,
+                            ':setting_group' => $groupKey,
+                            ':updated_by' => $updatedBy === null ? null : (string) $updatedBy,
+                            ':key' => $normalizedKey,
+                        ]);
+                    } else {
+                        $stmt = $this->conn->prepare(
+                            'UPDATE system_settings
+                             SET setting_value = :value,
+                                 updated_at = NOW(),
+                                 updated_by = :updated_by
+                             WHERE setting_key = :key'
+                        );
+                        $stmt->execute([
+                            ':value' => $normalizedValue,
+                            ':updated_by' => $updatedBy === null ? null : (string) $updatedBy,
+                            ':key' => $normalizedKey,
+                        ]);
+                    }
+                } else {
+                    if ($hasGroupColumn) {
+                        $stmt = $this->conn->prepare(
+                            'INSERT INTO system_settings (setting_key, setting_value, description, setting_group, updated_at, updated_by)
+                             VALUES (:key, :value, :description, :setting_group, NOW(), :updated_by)'
+                        );
+                        $stmt->execute([
+                            ':key' => $normalizedKey,
+                            ':value' => $normalizedValue,
+                            ':description' => $description,
+                            ':setting_group' => $groupKey,
+                            ':updated_by' => $updatedBy === null ? null : (string) $updatedBy,
+                        ]);
+                    } else {
+                        $stmt = $this->conn->prepare(
+                            'INSERT INTO system_settings (setting_key, setting_value, description, updated_at, updated_by)
+                             VALUES (:key, :value, :description, NOW(), :updated_by)'
+                        );
+                        $stmt->execute([
+                            ':key' => $normalizedKey,
+                            ':value' => $normalizedValue,
+                            ':description' => $description,
+                            ':updated_by' => $updatedBy === null ? null : (string) $updatedBy,
+                        ]);
+                    }
+                }
+
+                $saved[$normalizedKey] = [
+                    'value' => $normalizedValue,
+                    'group' => $groupKey,
+                    'description' => $description,
+                ];
+            }
+
+            $this->conn->commit();
+        } catch (Throwable $exception) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $exception;
+        }
+
+        ksort($saved);
+
+        return [
+            'saved' => $saved,
+            'updated_count' => count($saved),
+        ];
+    }
+
+    private function systemSettingGroups(): array
+    {
+        return [
+            'shifts' => [
+                'label' => 'الفترات والإقفال',
+                'description' => 'حدود الفترات، ترتيب السداد، وسياسات التجاوز الإداري.',
+                'icon' => 'bi-clock-history',
+                'accent' => 'primary',
+                'order' => 1,
+            ],
+            'tickets' => [
+                'label' => 'التذاكر والتسعير',
+                'description' => 'أسعار التذاكر، ساعات الصباح، وحصص التذكرة.',
+                'icon' => 'bi-ticket-perforated',
+                'accent' => 'success',
+                'order' => 2,
+            ],
+            'finance' => [
+                'label' => 'المركز المالي',
+                'description' => 'إعدادات العرض، التصدير، ووحدة العملة.',
+                'icon' => 'bi-cash-stack',
+                'accent' => 'warning',
+                'order' => 3,
+            ],
+            'header' => [
+                'label' => 'الترويسة والطباعة',
+                'description' => 'بيانات النماذج المطبوعة والترويسة الرسمية.',
+                'icon' => 'bi-card-heading',
+                'accent' => 'info',
+                'order' => 4,
+            ],
+            'general' => [
+                'label' => 'عام',
+                'description' => 'إعدادات عامة أو غير مصنفة.',
+                'icon' => 'bi-sliders2',
+                'accent' => 'secondary',
+                'order' => 5,
+            ],
+        ];
+    }
+
+    private function systemSettingDefinitions(): array
+    {
+        return [
+            'shift_morning_start' => ['label' => 'بداية الفترة الصباحية', 'group' => 'shifts', 'control' => 'time', 'hint' => 'مثال: 05:00', 'allow_empty' => false],
+            'shift_morning_end' => ['label' => 'نهاية الفترة الصباحية', 'group' => 'shifts', 'control' => 'time', 'hint' => 'مثال: 12:00', 'allow_empty' => false],
+            'shift_evening_start' => ['label' => 'بداية الفترة المسائية', 'group' => 'shifts', 'control' => 'time', 'hint' => 'مثال: 12:00', 'allow_empty' => false],
+            'shift_evening_end' => ['label' => 'نهاية الفترة المسائية', 'group' => 'shifts', 'control' => 'time', 'hint' => 'مثال: 23:00', 'allow_empty' => false],
+            'shift_overnight_belongs_to' => [
+                'label' => 'ربط الفترة الليلية',
+                'group' => 'shifts',
+                'control' => 'select',
+                'hint' => 'يوصى بخيار المسائية لليوم السابق وفق السياسة الحالية.',
+                'options' => [
+                    ['value' => 'evening_prev_day', 'label' => 'المسائية لليوم السابق'],
+                    ['value' => 'morning_same_day', 'label' => 'الصباحية لليوم نفسه'],
+                    ['value' => 'dead_zone', 'label' => 'منطقة غير محسوبة'],
+                ],
+                'allow_empty' => false,
+            ],
+            'enforce_shift_payment_order' => ['label' => 'فرض ترتيب السداد بين الفترات', 'group' => 'shifts', 'control' => 'toggle', 'hint' => 'منع تسديد فترة لاحقة قبل استكمال الفترة السابقة.', 'allow_empty' => false],
+            'allow_zero_invoices_implicit_close' => ['label' => 'اعتبار الفترة الفارغة مغلقة تلقائياً', 'group' => 'shifts', 'control' => 'toggle', 'hint' => 'يسمح بالسداد الفوري إذا كانت الفترة السابقة بلا فواتير.', 'allow_empty' => false],
+            'allow_admin_payment_override' => ['label' => 'السماح بتجاوز المدير', 'group' => 'shifts', 'control' => 'toggle', 'hint' => 'مع تسجيل إلزامي في سجل التدقيق.', 'allow_empty' => false],
+            'ticket_price_morning' => ['label' => 'سعر التذكرة الصباحية', 'group' => 'tickets', 'control' => 'number', 'unit' => 'ريال', 'min' => 0, 'step' => 1, 'allow_empty' => false],
+            'ticket_price_evening' => ['label' => 'سعر التذكرة المسائية', 'group' => 'tickets', 'control' => 'number', 'unit' => 'ريال', 'min' => 0, 'step' => 1, 'allow_empty' => false],
+            'ticket_morning_start_hour' => ['label' => 'ساعة بداية التذكرة الصباحية', 'group' => 'tickets', 'control' => 'number', 'min' => 0, 'max' => 23, 'step' => 1, 'allow_empty' => false],
+            'ticket_morning_end_hour' => ['label' => 'ساعة نهاية التذكرة الصباحية', 'group' => 'tickets', 'control' => 'number', 'min' => 0, 'max' => 23, 'step' => 1, 'allow_empty' => false],
+            'ticket_ministry_share_morning' => ['label' => 'حصة الوزارة من التذكرة الصباحية', 'group' => 'tickets', 'control' => 'number', 'unit' => 'ريال', 'min' => 0, 'step' => 1, 'allow_empty' => false],
+            'ticket_ministry_share_evening' => ['label' => 'حصة الوزارة من التذكرة المسائية', 'group' => 'tickets', 'control' => 'number', 'unit' => 'ريال', 'min' => 0, 'step' => 1, 'allow_empty' => false],
+            'finance_hub_default_page_size' => ['label' => 'عدد السجلات الافتراضي', 'group' => 'finance', 'control' => 'number', 'min' => 10, 'max' => 200, 'step' => 5, 'allow_empty' => false],
+            'finance_hub_export_limit' => ['label' => 'حد التصدير الأقصى', 'group' => 'finance', 'control' => 'number', 'min' => 100, 'max' => 100000, 'step' => 100, 'allow_empty' => false],
+            'finance_hub_currency_label' => ['label' => 'اسم العملة المعروضة', 'group' => 'finance', 'control' => 'text', 'placeholder' => 'مثال: ريال', 'allow_empty' => false],
+            'header_country' => ['label' => 'اسم الدولة', 'group' => 'header', 'control' => 'text', 'allow_empty' => false],
+            'header_ministry' => ['label' => 'اسم الوزارة', 'group' => 'header', 'control' => 'text', 'allow_empty' => false],
+            'header_office' => ['label' => 'اسم المكتب / المحافظة', 'group' => 'header', 'control' => 'text', 'allow_empty' => false],
+            'header_directorate' => ['label' => 'اسم المديرية', 'group' => 'header', 'control' => 'text', 'allow_empty' => false],
+            'header_center' => ['label' => 'اسم المركز', 'group' => 'header', 'control' => 'text', 'allow_empty' => false],
+            'header_admin' => ['label' => 'الإدارة المسؤولة', 'group' => 'header', 'control' => 'text', 'allow_empty' => false],
+            'header_form_title' => ['label' => 'عنوان النموذج', 'group' => 'header', 'control' => 'text', 'allow_empty' => false],
+            'header_logo_url' => ['label' => 'رابط الشعار', 'group' => 'header', 'control' => 'url', 'placeholder' => 'https://example.com/logo.png', 'allow_empty' => true],
+            'header_footer_note' => ['label' => 'ملاحظة أسفل النموذج', 'group' => 'header', 'control' => 'textarea', 'allow_empty' => true],
+            'header_side_note' => ['label' => 'ملاحظة جانبية', 'group' => 'header', 'control' => 'textarea', 'allow_empty' => true],
+        ];
+    }
+
+    private function getExistingSystemSettings(array $keys = []): array
+    {
+        $columns = ['setting_key', 'setting_value', 'description', 'updated_at', 'updated_by'];
+        if ($this->systemSettingsHasGroupColumn()) {
+            $columns[] = 'setting_group';
+        }
+
+        $sql = 'SELECT ' . implode(', ', array_map(fn(string $column): string => $this->quoteIdentifier($column), $columns))
+            . ' FROM system_settings';
+        $params = [];
+        if (!empty($keys)) {
+            $placeholders = [];
+            foreach (array_values($keys) as $index => $key) {
+                $placeholder = ':key_' . $index;
+                $placeholders[] = $placeholder;
+                $params[$placeholder] = (string) $key;
+            }
+            $sql .= ' WHERE setting_key IN (' . implode(', ', $placeholders) . ')';
+        }
+        $sql .= ' ORDER BY ' . ($this->systemSettingsHasGroupColumn() ? $this->quoteIdentifier('setting_group') . ', ' : '') . $this->quoteIdentifier('setting_key') . ' ASC';
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute($params);
+
+        $rows = [];
+        foreach ($stmt->fetchAll() ?: [] as $row) {
+            $rows[(string) $row['setting_key']] = $row;
+        }
+
+        return $rows;
+    }
+
+    private function systemSettingsHasGroupColumn(): bool
+    {
+        if ($this->settingsGroupColumnExists !== null) {
+            return $this->settingsGroupColumnExists;
+        }
+
+        $stmt = $this->conn->prepare(
+            "SELECT 1
+             FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'system_settings'
+               AND column_name = 'setting_group'
+             LIMIT 1"
+        );
+        $stmt->execute();
+        $this->settingsGroupColumnExists = (bool) $stmt->fetchColumn();
+
+        return $this->settingsGroupColumnExists;
+    }
+
+    private function inferSettingGroup(string $key, ?string $storedGroup = null): string
+    {
+        $candidate = trim((string) ($storedGroup ?? ''));
+        $groups = $this->systemSettingGroups();
+        if ($candidate !== '' && isset($groups[$candidate])) {
+            return $candidate;
+        }
+
+        if (str_starts_with($key, 'header_')) {
+            return 'header';
+        }
+        if (str_starts_with($key, 'ticket_')) {
+            return 'tickets';
+        }
+        if (str_starts_with($key, 'finance_hub_')) {
+            return 'finance';
+        }
+        if (str_starts_with($key, 'shift_') || in_array($key, ['enforce_shift_payment_order', 'allow_zero_invoices_implicit_close', 'allow_admin_payment_override'], true)) {
+            return 'shifts';
+        }
+
+        return 'general';
+    }
+
+    private function inferSettingControl(string $key, string $value): string
+    {
+        if (preg_match('/^(true|false)$/i', trim($value))) {
+            return 'toggle';
+        }
+        if (preg_match('/^\d{1,2}:\d{2}$/', trim($value))) {
+            return 'time';
+        }
+        if (is_numeric($value)) {
+            return 'number';
+        }
+        if (str_contains($key, 'url')) {
+            return 'url';
+        }
+        if (str_contains($key, 'note') || str_contains($key, 'description')) {
+            return 'textarea';
+        }
+        return 'text';
+    }
+
+    private function buildFallbackSettingDefinition(string $key, mixed $value = null, mixed $group = null): array
+    {
+        $stringValue = $value === null ? '' : (string) $value;
+        return [
+            'label' => $this->humanize($key),
+            'group' => $this->inferSettingGroup($key, is_string($group) ? $group : null),
+            'control' => $this->inferSettingControl($key, $stringValue),
+            'hint' => '',
+            'allow_empty' => true,
+        ];
+    }
+
+    private function normalizeSystemSettingValue(array $definition, mixed $value): string
+    {
+        $control = (string) ($definition['control'] ?? 'text');
+        $allowEmpty = (bool) ($definition['allow_empty'] ?? true);
+
+        if ($control === 'toggle') {
+            $boolValue = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($boolValue === null) {
+                throw new InvalidArgumentException('قيمة الإعداد ' . ($definition['label'] ?? '') . ' يجب أن تكون نعم أو لا.');
+            }
+            return $boolValue ? 'true' : 'false';
+        }
+
+        $stringValue = trim((string) ($value ?? ''));
+        if ($stringValue === '') {
+            if ($allowEmpty) {
+                return '';
+            }
+            throw new InvalidArgumentException('الإعداد ' . ($definition['label'] ?? '') . ' لا يقبل قيمة فارغة.');
+        }
+
+        if ($control === 'time') {
+            if (!preg_match('/^(\d{1,2}):(\d{2})$/', $stringValue, $matches)) {
+                throw new InvalidArgumentException('تنسيق الوقت غير صحيح في ' . ($definition['label'] ?? '') . '.');
+            }
+            $hour = (int) $matches[1];
+            $minute = (int) $matches[2];
+            if ($hour < 0 || $hour > 23 || $minute < 0 || $minute > 59) {
+                throw new InvalidArgumentException('قيمة الوقت غير صحيحة في ' . ($definition['label'] ?? '') . '.');
+            }
+            return sprintf('%02d:%02d', $hour, $minute);
+        }
+
+        if ($control === 'number') {
+            if (!is_numeric($stringValue)) {
+                throw new InvalidArgumentException('الإعداد ' . ($definition['label'] ?? '') . ' يجب أن يكون رقمياً.');
+            }
+            $number = (float) $stringValue;
+            $min = isset($definition['min']) ? (float) $definition['min'] : null;
+            $max = isset($definition['max']) ? (float) $definition['max'] : null;
+            if ($min !== null && $number < $min) {
+                throw new InvalidArgumentException('قيمة ' . ($definition['label'] ?? '') . ' أقل من الحد الأدنى المسموح.');
+            }
+            if ($max !== null && $number > $max) {
+                throw new InvalidArgumentException('قيمة ' . ($definition['label'] ?? '') . ' أعلى من الحد الأقصى المسموح.');
+            }
+            $step = $definition['step'] ?? null;
+            if ($step === 1 || $step === '1') {
+                return (string) ((int) round($number));
+            }
+            $formatted = rtrim(rtrim(number_format($number, 2, '.', ''), '0'), '.');
+            return $formatted === '' ? '0' : $formatted;
+        }
+
+        if ($control === 'select') {
+            $allowed = array_map(fn(array $option): string => (string) ($option['value'] ?? ''), $definition['options'] ?? []);
+            if (!in_array($stringValue, $allowed, true)) {
+                throw new InvalidArgumentException('القيمة المختارة في ' . ($definition['label'] ?? '') . ' غير مدعومة.');
+            }
+            return $stringValue;
+        }
+
+        return $stringValue;
     }
 
     private function getReferenceOptions(string $table, string $idColumn): array

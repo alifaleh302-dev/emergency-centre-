@@ -30,7 +30,11 @@ const AdminData = {
     page: 1,
     perPage: 15,
     chartInstances: {}, // لمنع تراكم Chart.js
-    currentView: 'dashboard', // dashboard | table | audit | reports | broadcast
+    settingsCatalog: null,
+    settingsDraft: {},
+    settingsDirty: false,
+    settingsActiveGroup: 'shifts',
+    currentView: 'dashboard', // dashboard | table | audit | reports | broadcast | settings
 };
 
 const Admin = {
@@ -126,6 +130,8 @@ const Admin = {
             // قسم: أدوات الإدارة
             { title: 'المركز المالي والسندي', icon: 'bi-bank2', url: 'javascript:void(0)',
               action: 'Admin.openFinanceHub()', active: AdminData.currentView === 'finance_hub' },
+            { title: 'إعدادات النظام', icon: 'bi-sliders2-vertical', url: 'javascript:void(0)',
+              action: 'Admin.viewSettings()', active: AdminData.currentView === 'settings' },
             { title: 'التقارير المتقدمة', icon: 'bi-graph-up-arrow', url: 'javascript:void(0)',
               action: 'Admin.viewReports()', active: AdminData.currentView === 'reports' },
             { title: 'بث إشعار', icon: 'bi-megaphone', url: 'javascript:void(0)',
@@ -147,9 +153,314 @@ const Admin = {
             document_types: 'bi-file-earmark-text', services_master: 'bi-bandaid',
             service_categories: 'bi-diagram-3', departments: 'bi-building', emergency_case_types: 'bi-heart-pulse',
             medical_results: 'bi-clipboard2-data', notifications: 'bi-bell',
-            examination_tickets: 'bi-ticket-perforated', audit_logs: 'bi-shield-check',
+            examination_tickets: 'bi-ticket-perforated', audit_logs: 'bi-shield-check', system_settings: 'bi-sliders2-vertical',
         };
         return map[tableName] || 'bi-table';
+    },
+
+    // =================================================================
+    //   ⚙️ System Settings
+    // =================================================================
+    viewSettings: async function(activeGroup = null) {
+        AdminData.currentView = 'settings';
+        AdminData.currentTable = null;
+        this.renderSidebar();
+        this.destroyCharts();
+
+        Core.navigateTo('Admin.viewSettings', async () => {
+            document.getElementById('mainContent').innerHTML = this.renderLoadingState('إعدادات النظام');
+            const response = await Core.apiCall('admin/settings', 'GET');
+            if (!response?.success) {
+                document.getElementById('mainContent').innerHTML = this.renderErrorState(response?.message || 'تعذر تحميل إعدادات النظام.');
+                return;
+            }
+
+            AdminData.settingsCatalog = response.data || { groups: [], settings: [], stats: {} };
+            AdminData.settingsDraft = Object.fromEntries((AdminData.settingsCatalog.settings || []).map(setting => [
+                setting.key,
+                setting.raw_value ?? setting.value ?? ''
+            ]));
+            AdminData.settingsDirty = false;
+
+            const groupsWithItems = (AdminData.settingsCatalog.groups || []).filter(group => Number(group.count || 0) > 0);
+            AdminData.settingsActiveGroup = activeGroup || groupsWithItems[0]?.key || 'general';
+            this.renderSettingsScreen(AdminData.settingsCatalog);
+        });
+    },
+
+    renderSettingsScreen: function(catalog) {
+        const groups = (catalog.groups || []).filter(group => Number(group.count || 0) > 0);
+        const settings = catalog.settings || [];
+        const stats = catalog.stats || {};
+        const groupedSettings = groups.map(group => ({
+            ...group,
+            items: settings.filter(setting => setting.group === group.key),
+        }));
+
+        const statusTone = AdminData.settingsDirty ? 'warning' : 'success';
+        const statusIcon = AdminData.settingsDirty ? 'bi-exclamation-circle' : 'bi-check-circle';
+        const statusText = AdminData.settingsDirty ? 'هناك تعديلات غير محفوظة.' : 'جميع التغييرات محفوظة ومزامنة.';
+
+        const quickCards = [
+            { label: 'إجمالي الإعدادات', value: stats.total_settings || settings.length || 0, icon: 'bi-sliders2', tone: 'primary' },
+            { label: 'التصنيفات النشطة', value: stats.groups_count || groups.length || 0, icon: 'bi-collection', tone: 'success' },
+            { label: 'آخر تحديث', value: stats.last_updated_at ? this.formatDateTime(stats.last_updated_at) : '—', icon: 'bi-clock-history', tone: 'warning' },
+        ];
+
+        const quickCardsHtml = quickCards.map(card => `
+            <div class="col-12 col-md-4">
+                <div class="card border-0 shadow-sm rounded-4 h-100">
+                    <div class="card-body p-4 d-flex align-items-center gap-3">
+                        <div class="rounded-circle d-flex align-items-center justify-content-center bg-${card.tone}-subtle text-${card.tone}" style="width:56px;height:56px;font-size:1.3rem;">
+                            <i class="bi ${card.icon}"></i>
+                        </div>
+                        <div>
+                            <div class="text-muted small mb-1">${card.label}</div>
+                            <div class="fw-bold fs-5 text-dark">${this.escapeHtml(String(card.value))}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+
+        const navigationHtml = groups.map(group => {
+            const active = AdminData.settingsActiveGroup === group.key;
+            return `
+                <button class="btn ${active ? 'btn-primary' : 'btn-outline-secondary'} rounded-pill px-3 py-2" onclick="Admin.jumpToSettingsGroup('${group.key}')">
+                    <i class="bi ${group.icon} ms-1"></i>${this.escapeHtml(group.label)}
+                    <span class="badge bg-light text-dark ms-2">${group.count}</span>
+                </button>
+            `;
+        }).join('');
+
+        const sectionsHtml = groupedSettings.map(group => this.renderSettingsGroupSection(group)).join('');
+
+        document.getElementById('mainContent').innerHTML = `
+            ${Core.renderHeaderWithTools('إعدادات النظام', 'لوحة حديثة لإدارة الفترات، التذاكر، المالية، والترويسة.', [
+                { label: 'تحديث البيانات', icon: 'bi-arrow-clockwise', action: 'Admin.viewSettings(AdminData.settingsActiveGroup)' },
+                { label: 'إعادة تحميل بدون حفظ', icon: 'bi-bootstrap-reboot', action: 'Admin.resetSystemSettingsDraft()' },
+            ])}
+
+            <div class="card border-0 shadow-sm rounded-4 overflow-hidden mb-4" style="background:linear-gradient(135deg,#0d6efd 0%,#6f42c1 100%);">
+                <div class="card-body p-4 p-lg-5 text-white">
+                    <div class="row g-4 align-items-center">
+                        <div class="col-lg-8">
+                            <div class="d-inline-flex align-items-center gap-2 px-3 py-2 rounded-pill bg-white bg-opacity-10 mb-3 small fw-semibold">
+                                <i class="bi bi-stars"></i>
+                                تجربة إعدادات حديثة وسريعة
+                            </div>
+                            <h2 class="fw-bold mb-2">تحكم مركزي في إعدادات النظام</h2>
+                            <p class="mb-0 text-white text-opacity-75">يمكنك تعديل القيم الأساسية من مكان واحد مع تصنيف واضح، وصف لكل إعداد، وحفظ فوري مع سجل تدقيق.</p>
+                        </div>
+                        <div class="col-lg-4">
+                            <div class="card border-0 rounded-4 bg-white bg-opacity-10 text-white">
+                                <div class="card-body p-4">
+                                    <div class="d-flex align-items-center gap-2 mb-2 fw-bold"><i class="bi ${statusIcon}"></i> حالة النموذج</div>
+                                    <div id="settings-save-indicator" class="badge rounded-pill bg-${statusTone}-subtle text-${statusTone} border border-${statusTone}-subtle mb-3">${statusText}</div>
+                                    <div class="small text-white text-opacity-75">الحفظ يتم لكل الإعدادات المعدلة فقط، ويتم تسجيل العملية في سجل التدقيق.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">${quickCardsHtml}</div>
+
+            <div class="card border-0 shadow-sm rounded-4 mb-4">
+                <div class="card-body p-3 p-lg-4 d-flex flex-wrap gap-2 align-items-center justify-content-between">
+                    <div>
+                        <div class="fw-bold text-dark mb-1">تنقل سريع بين التصنيفات</div>
+                        <div class="text-muted small">اختر القسم المطلوب للوصول السريع، ثم احفظ التعديلات مرة واحدة.</div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2">${navigationHtml}</div>
+                </div>
+            </div>
+
+            <div class="d-flex flex-column gap-4">${sectionsHtml}</div>
+
+            <div class="card border-0 shadow-sm rounded-4 mt-4 position-sticky" style="bottom:16px; z-index:20;">
+                <div class="card-body p-3 p-lg-4 d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
+                    <div>
+                        <div class="fw-bold text-dark">جاهز للحفظ</div>
+                        <div class="text-muted small">بعد الحفظ ستُحدَّث القيم مباشرة في قاعدة البيانات مع توثيق العملية.</div>
+                    </div>
+                    <div class="d-flex gap-2 w-100 w-lg-auto">
+                        <button class="btn btn-outline-secondary rounded-pill px-4 flex-fill flex-lg-grow-0" onclick="Admin.resetSystemSettingsDraft()">
+                            <i class="bi bi-arrow-counterclockwise ms-1"></i>تراجع عن التغييرات
+                        </button>
+                        <button id="settings-save-button" class="btn btn-primary rounded-pill px-4 flex-fill flex-lg-grow-0" onclick="return Admin.saveSystemSettings(event)">
+                            <i class="bi bi-floppy ms-1"></i>حفظ الإعدادات
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        this.refreshSettingsSaveState();
+    },
+
+    renderSettingsGroupSection: function(group) {
+        const settingsHtml = (group.items || []).map(setting => this.renderSystemSettingField(setting)).join('');
+        return `
+            <section id="settings-group-${group.key}" class="card border-0 shadow-sm rounded-4 overflow-hidden">
+                <div class="card-header border-0 bg-${group.accent}-subtle p-4">
+                    <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
+                        <div>
+                            <div class="d-inline-flex align-items-center gap-2 rounded-pill px-3 py-2 bg-white shadow-sm small fw-semibold text-${group.accent}">
+                                <i class="bi ${group.icon}"></i>
+                                ${this.escapeHtml(group.label)}
+                            </div>
+                            <h4 class="fw-bold text-dark mt-3 mb-2">${this.escapeHtml(group.label)}</h4>
+                            <p class="text-muted mb-0">${this.escapeHtml(group.description || '')}</p>
+                        </div>
+                        <div class="text-start text-lg-end">
+                            <div class="badge rounded-pill bg-white text-dark border px-3 py-2">${group.count} إعداد</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body p-4">
+                    <div class="row g-3">${settingsHtml}</div>
+                </div>
+            </section>
+        `;
+    },
+
+    renderSystemSettingField: function(setting) {
+        const value = AdminData.settingsDraft?.[setting.key] ?? setting.value ?? '';
+        const escapedLabel = this.escapeHtml(setting.label || setting.key);
+        const escapedHint = this.escapeHtml(setting.description || setting.hint || '');
+        const escapedPlaceholder = this.escapeHtml(setting.placeholder || '');
+        const escapedUnit = this.escapeHtml(setting.unit || '');
+        const control = setting.control || 'text';
+        const inputId = `setting-${setting.key}`;
+        let fieldHtml = '';
+
+        if (control === 'toggle') {
+            const checked = String(value).toLowerCase() === 'true' ? 'checked' : '';
+            fieldHtml = `
+                <div class="form-check form-switch d-flex align-items-center justify-content-between gap-3 px-1 py-2">
+                    <div>
+                        <div class="fw-semibold text-dark">${checked ? 'مفعّل' : 'متوقف'}</div>
+                        <div class="text-muted small">يمكن تعديل الحالة من المفتاح الجانبي.</div>
+                    </div>
+                    <input id="${inputId}" class="form-check-input" style="width:3rem;height:1.6rem;" type="checkbox" ${checked} onchange="Admin.updateSystemSetting('${setting.key}', 'toggle', this)">
+                </div>
+            `;
+        } else if (control === 'select') {
+            const optionsHtml = (setting.options || []).map(option => `
+                <option value="${this.escapeHtml(String(option.value))}" ${String(value) === String(option.value) ? 'selected' : ''}>${this.escapeHtml(option.label || option.value)}</option>
+            `).join('');
+            fieldHtml = `
+                <select id="${inputId}" class="form-select rounded-3" onchange="Admin.updateSystemSetting('${setting.key}', 'select', this)">
+                    ${optionsHtml}
+                </select>
+            `;
+        } else if (control === 'textarea') {
+            fieldHtml = `
+                <textarea id="${inputId}" class="form-control rounded-3" rows="3" placeholder="${escapedPlaceholder}" oninput="Admin.updateSystemSetting('${setting.key}', 'textarea', this)">${this.escapeHtml(String(value))}</textarea>
+            `;
+        } else {
+            const inputType = control === 'number' ? 'number' : (control === 'time' ? 'time' : (control === 'url' ? 'url' : 'text'));
+            const minAttr = setting.min !== null && setting.min !== undefined ? `min="${setting.min}"` : '';
+            const maxAttr = setting.max !== null && setting.max !== undefined ? `max="${setting.max}"` : '';
+            const stepAttr = setting.step !== null && setting.step !== undefined ? `step="${setting.step}"` : '';
+            const inputHtml = `
+                <input id="${inputId}" type="${inputType}" class="form-control rounded-3" value="${this.escapeHtml(String(value))}" placeholder="${escapedPlaceholder}" ${minAttr} ${maxAttr} ${stepAttr} ${control === 'number' ? 'onchange' : 'oninput'}="Admin.updateSystemSetting('${setting.key}', '${control}', this)">
+            `;
+            fieldHtml = escapedUnit
+                ? `<div class="input-group">${inputHtml}<span class="input-group-text rounded-start-3">${escapedUnit}</span></div>`
+                : inputHtml;
+        }
+
+        return `
+            <div class="col-12 col-xl-6">
+                <div class="card border h-100 rounded-4 shadow-sm-hover" style="border-color:rgba(13,110,253,.08)!important;">
+                    <div class="card-body p-4">
+                        <div class="d-flex align-items-start justify-content-between gap-3 mb-3">
+                            <div>
+                                <h6 class="fw-bold text-dark mb-1">${escapedLabel}</h6>
+                                <div class="text-muted small">${escapedHint || '—'}</div>
+                            </div>
+                            <span class="badge rounded-pill bg-light text-secondary border">${this.escapeHtml(setting.key)}</span>
+                        </div>
+                        ${fieldHtml}
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
+    updateSystemSetting: function(key, control, element) {
+        if (!element) return;
+        let value = '';
+        if (control === 'toggle') {
+            value = element.checked ? 'true' : 'false';
+        } else {
+            value = element.value;
+        }
+        AdminData.settingsDraft[key] = value;
+        AdminData.settingsDirty = true;
+        this.refreshSettingsSaveState();
+    },
+
+    refreshSettingsSaveState: function() {
+        const indicator = document.getElementById('settings-save-indicator');
+        const button = document.getElementById('settings-save-button');
+        const dirty = !!AdminData.settingsDirty;
+
+        if (indicator) {
+            indicator.className = `badge rounded-pill ${dirty ? 'bg-warning-subtle text-warning border border-warning-subtle' : 'bg-success-subtle text-success border border-success-subtle'} mb-3`;
+            indicator.innerHTML = dirty
+                ? '<i class="bi bi-exclamation-circle ms-1"></i>هناك تعديلات غير محفوظة.'
+                : '<i class="bi bi-check-circle ms-1"></i>جميع التغييرات محفوظة ومزامنة.';
+        }
+
+        if (button) {
+            button.disabled = !dirty;
+        }
+    },
+
+    saveSystemSettings: async function(buttonOrEvent = null) {
+        const runner = async () => {
+            if (!AdminData.settingsDirty) {
+                Core.showAlert('لا توجد تعديلات جديدة لحفظها.', 'info');
+                return false;
+            }
+            const response = await Core.apiCall('admin/settings/save', 'POST', {
+                settings: AdminData.settingsDraft,
+            });
+            if (!response?.success) {
+                Core.showAlert(response?.message || 'تعذر حفظ الإعدادات.', 'error');
+                return false;
+            }
+            Core.showAlert(response.message || 'تم حفظ إعدادات النظام.', 'success');
+            await this.viewSettings(AdminData.settingsActiveGroup);
+            return true;
+        };
+
+        if (buttonOrEvent) {
+            return Core.guard(buttonOrEvent, runner);
+        }
+        return runner();
+    },
+
+    resetSystemSettingsDraft: function() {
+        if (!AdminData.settingsDirty) {
+            Core.showAlert('لا توجد تعديلات لإلغائها.', 'info');
+            return;
+        }
+        this.viewSettings(AdminData.settingsActiveGroup);
+    },
+
+    jumpToSettingsGroup: function(groupKey) {
+        AdminData.settingsActiveGroup = groupKey;
+        if (AdminData.settingsCatalog) {
+            this.renderSettingsScreen(AdminData.settingsCatalog);
+            setTimeout(() => {
+                document.getElementById(`settings-group-${groupKey}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 60);
+        }
     },
 
     // =================================================================

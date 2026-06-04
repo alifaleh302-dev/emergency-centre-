@@ -140,6 +140,8 @@ $routes = [
     'accounting/previous_shift_check' => ['methods' => ['GET'], 'handler' => fn () => $accountingHandler('checkPreviousShift', false)],
 
     'admin/schema'           => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getSchema', false)],
+    'admin/settings'         => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getSystemSettings', false)],
+    'admin/settings/save'    => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('saveSystemSettings')],
     'admin/pay_invoice_override'  => ['methods' => ['POST'], 'handler' => fn () => $adminHandler('payInvoiceOverride')],
     'admin/dashboard'        => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getDashboard', false)],
     'admin/dashboard_charts' => ['methods' => ['GET'],  'handler' => fn () => $adminHandler('getDashboardCharts', false)],

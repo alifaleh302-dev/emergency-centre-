@@ -55,6 +55,47 @@ class AdminController extends BaseController
         }
     }
 
+    public function getSystemSettings(): void
+    {
+        try {
+            $this->success($this->model->getSystemSettingsCatalog());
+        } catch (Throwable $e) {
+            error_log('admin/settings: ' . $e->getMessage());
+            $this->error('تعذر جلب إعدادات النظام.', 500);
+        }
+    }
+
+    public function saveSystemSettings($data): void
+    {
+        try {
+            $settings = $this->toArray($this->getField($data, 'settings', []));
+            if (empty($settings)) {
+                throw new InvalidArgumentException('لا توجد إعدادات مطلوبة للحفظ.');
+            }
+
+            $oldValues = $this->model->getSystemSettingsSnapshot(array_keys($settings));
+            $result = $this->model->saveSystemSettings($settings, $this->userId);
+            $newValues = $this->model->getSystemSettingsSnapshot(array_keys($settings));
+
+            $this->audit->log(
+                $this->userId,
+                $this->username,
+                'UPDATE',
+                'system_settings',
+                null,
+                $oldValues,
+                $newValues
+            );
+
+            $this->success($result, 'تم حفظ إعدادات النظام بنجاح.');
+        } catch (InvalidArgumentException $e) {
+            $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            error_log('admin/save_settings: ' . $e->getMessage());
+            $this->error('تعذر حفظ إعدادات النظام.', 500);
+        }
+    }
+
     public function getReferenceOptions($data): void
     {
         try {
