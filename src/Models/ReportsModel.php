@@ -202,12 +202,24 @@ class ReportsModel
      *
      * تنبيه: نستخدم DATE(... AT TIME ZONE :tz) لاختيار الفواتير التي
      * يقع تاريخها المحلي (لا UTC) ضمن تاريخ التقرير.
+     *
+     * إصلاح هام (2026-06): "عدد المترددين" (visitors) لكل قسم/خدمة
+     * يُحسب الآن بعدد الزيارات المميزة (DISTINCT visit_id) التي
+     * استلمت خدمة من هذا القسم خلال الفترة، بدلاً من جمع كميات
+     * الخدمات (quantity). فمريض واحد قد يجري عدة فحوصات مختبر
+     * في زيارة واحدة، ويجب أن يُحسب مترددًا واحدًا على المختبر،
+     * لا عدة مترددين بعدد الفحوصات.
+     * بالنسبة للفواتير التجميعية التي لا ترتبط بزيارة
+     * (visit_id IS NULL — سندات إغلاق الفترة)، نُبقي على عدّ
+     * الكميات (quantity) كاحتياط لأنها لا تمثل زيارة واحدة
+     * بل تجميع لعدة عمليات.
      */
     public function getInvoiceData(string $reportDate, int $mStart, int $mEnd): array
     {
         $sql = "
             SELECT
                 i.invoice_id,
+                i.visit_id,
                 i.paid_at,
                 (i.paid_at AT TIME ZONE :tz) AS paid_at_local,
                 i.net_amount,
@@ -249,6 +261,7 @@ class ReportsModel
             if (!isset($grouped[$invoiceId])) {
                 $grouped[$invoiceId] = [
                     'invoice_id'         => $invoiceId,
+                    'visit_id'           => $row['visit_id'] !== null ? (int) $row['visit_id'] : null,
                     'paid_at_local'      => (string) $row['paid_at_local'],
                     'doc_name'           => (string) $row['doc_name'],
                     'net_amount'         => (float) $row['net_amount'],
@@ -274,12 +287,27 @@ class ReportsModel
             ];
         }
 
+        // مجموعات لمتابعة عدد المترددين (الزيارات المميزة) لكل (فترة × عمود)
+        // وكذلك لكل (فترة × total) لاحتساب "إجمالي المترددين على الخدمات".
+        // المفتاح: shift => col => [visit_id => true]
+        $visitorVisits = [
+            'morning' => [],
+            'evening' => [],
+        ];
+        // أعداد إضافية من السندات التجميعية (visit_id IS NULL) — نُبقي
+        // على عدّ الكميات لها كاحتياط لأنها لا تخص زيارة مفردة.
+        $visitorBulk = [
+            'morning' => [],
+            'evening' => [],
+        ];
+
         foreach ($grouped as $invoice) {
             // ⚠️ paid_at_local هو timestamp بدون منطقة زمنية (محول إلى التوقيت المحلي)
             // لذا نمرّره مع DateTimeZone::UTC حتى لا يعيد PHP تحويله ثم نسأل عن الساعة مباشرة.
-            $shift = $this->getShiftFromLocalString($invoice['paid_at_local'], $mStart, $mEnd);
-            $doc   = $invoice['doc_name'];
-            $lines = $invoice['lines'];
+            $shift   = $this->getShiftFromLocalString($invoice['paid_at_local'], $mStart, $mEnd);
+            $doc     = $invoice['doc_name'];
+            $lines   = $invoice['lines'];
+            $visitId = $invoice['visit_id'];
 
             $grossTotal       = array_sum(array_map(static fn ($line) => $line['gross'], $lines));
             $rawCenterTotal   = array_sum(array_map(static fn ($line) => $line['raw_center'], $lines));
@@ -325,8 +353,36 @@ class ReportsModel
                     $exemptSvc   = $line['gross'];
                 }
 
-                $result[$shift]['visitors'][$col]    += $line['quantity'];
-                $result[$shift]['visitors']['total'] += $line['quantity'];
+                // ---- عدد المترددين: زيارات مميزة لكل عمود ----
+                // إذا كان للفاتورة visit_id (الحالة المعتادة): نسجّل الزيارة
+                // في مجموعة العمود وفي مجموعة الإجمالي (total) لتلك الفترة،
+                // فلا يُحسب المريض مرتين لنفس العمود مهما تعدّدت سطور الفاتورة.
+                // إذا كانت الفاتورة تجميعية (visit_id = NULL): نضيف الكمية
+                // مباشرة إلى العدّاد الاحتياطي.
+                if ($visitId !== null) {
+                    if (!isset($visitorVisits[$shift][$col])) {
+                        $visitorVisits[$shift][$col] = [];
+                    }
+                    $visitorVisits[$shift][$col][$visitId] = true;
+
+                    if (!isset($visitorVisits[$shift]['total'])) {
+                        $visitorVisits[$shift]['total'] = [];
+                    }
+                    // ملاحظة: "total" لكل فترة يجمع المترددين عبر جميع الأقسام
+                    // مع تكرار من زار أكثر من قسم (متعارف عليه إحصائياً كـ
+                    // "إجمالي حالات التردد على الخدمات"). لذلك نستخدم مفتاحاً
+                    // مركّباً (visit_id|col) كي لا تُدمج الأعمدة لنفس الزيارة.
+                    $visitorVisits[$shift]['total'][$visitId . '|' . $col] = true;
+                } else {
+                    if (!isset($visitorBulk[$shift][$col])) {
+                        $visitorBulk[$shift][$col] = 0.0;
+                    }
+                    $visitorBulk[$shift][$col] += $line['quantity'];
+                    if (!isset($visitorBulk[$shift]['total'])) {
+                        $visitorBulk[$shift]['total'] = 0.0;
+                    }
+                    $visitorBulk[$shift]['total'] += $line['quantity'];
+                }
 
                 $result[$shift]['center'][$col]      += $centerSvc;
                 $result[$shift]['center']['total']   += $centerSvc;
@@ -336,6 +392,20 @@ class ReportsModel
 
                 $result[$shift]['exempt'][$col]      += $exemptSvc;
                 $result[$shift]['exempt']['total']   += $exemptSvc;
+            }
+        }
+
+        // ----- تركيب النتيجة النهائية لعدد المترددين -----
+        // visitors[col] = عدد الزيارات المميزة + عدد السندات التجميعية (إن وجدت)
+        foreach (['morning', 'evening'] as $shift) {
+            $cols = array_unique(array_merge(
+                array_keys($visitorVisits[$shift] ?? []),
+                array_keys($visitorBulk[$shift] ?? [])
+            ));
+            foreach ($cols as $col) {
+                $distinct = isset($visitorVisits[$shift][$col]) ? count($visitorVisits[$shift][$col]) : 0;
+                $bulk     = (float) ($visitorBulk[$shift][$col] ?? 0.0);
+                $result[$shift]['visitors'][$col] = (float) $distinct + $bulk;
             }
         }
 
