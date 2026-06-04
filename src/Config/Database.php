@@ -42,8 +42,27 @@ class Database
 
             if ($this->driver === 'pgsql') {
                 $this->conn->exec("SET client_encoding TO 'UTF8'");
+                // 🆕 توحيد المنطقة الزمنية لجلسة قاعدة البيانات مع توقيت التطبيق المحلي.
+                // قبل هذا الإصلاح كانت جلسة Render تعمل افتراضياً بـ UTC مما يجعل
+                // CURRENT_DATE و DATE(timestamptz) ترجع تاريخ UTC، فتظهر فواتير
+                // ما بعد منتصف الليل المحلي كأنها تعود لليوم السابق، وبالتالي تختفي
+                // من واجهة "اليومية" لدى أمين الصندوق.
+                $tz = getenv('APP_TIMEZONE') ?: 'Asia/Aden';
+                // SET TIME ZONE لا يقبل placeholder، لذلك نحقن بقيمة آمنة بعد التحقق.
+                if (preg_match('/^[A-Za-z_\/\-+0-9]{1,64}$/', $tz)) {
+                    $this->conn->exec("SET TIME ZONE '" . $tz . "'");
+                }
             } else {
                 $this->conn->exec("SET NAMES utf8mb4");
+                // محاولة ضبط المنطقة الزمنية لجلسة MySQL إذا كان توقيت دقيق متوفر.
+                $tz = getenv('APP_TIMEZONE') ?: 'Asia/Aden';
+                if (preg_match('/^[A-Za-z_\/\-+0-9]{1,64}$/', $tz)) {
+                    try {
+                        $this->conn->exec("SET time_zone = '" . $tz . "'");
+                    } catch (Throwable $e) {
+                        // MySQL قد لا يحتوي جداول المناطق الزمنية — تجاهل بصمت.
+                    }
+                }
             }
 
             return $this->conn;

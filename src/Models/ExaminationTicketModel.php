@@ -131,11 +131,13 @@ class ExaminationTicketModel
      */
     public function hasOpenShiftBefore(string $shiftType): bool
     {
+        // جلسة قاعدة البيانات مضبوطة على APP_TIMEZONE (راجع Database::getConnection)
+        // لذلك DATE(created_at) و CURRENT_DATE يعملان بالتوقيت المحلي للمركز.
         $sql = $this->driver === 'pgsql'
             ? "SELECT 1 FROM examination_tickets
                   WHERE ticket_type = :shift_type
                     AND shift_closure_id IS NULL
-                    AND DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE - INTERVAL '1 day'
+                    AND DATE(created_at) = CURRENT_DATE - INTERVAL '1 day'
                   LIMIT 1"
             : "SELECT 1 FROM examination_tickets
                   WHERE ticket_type = :shift_type

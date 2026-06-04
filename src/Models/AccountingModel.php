@@ -636,10 +636,10 @@ class AccountingModel
         $timestamp = $this->paymentTimestamp('i');
 
         if ($date !== null && $date !== '') {
-            // فلترة بتاريخ محدد (PostgreSQL/MySQL compatible)
-            $whereParts[] = ($this->driver === 'pgsql'
-                ? "DATE({$timestamp} AT TIME ZONE 'UTC') = :journal_date"
-                : "DATE({$timestamp}) = :journal_date");
+            // فلترة بتاريخ محدد — نعتمد على المنطقة الزمنية المضبوطة لجلسة قاعدة
+            // البيانات (Database::getConnection يضبطها على APP_TIMEZONE / Asia/Aden)
+            // بحيث يطابق DATE() تاريخ المستخدم المحلي الذي يرسله المتصفح.
+            $whereParts[] = "DATE({$timestamp}) = :journal_date";
             $params[':journal_date'] = $date;
         } else {
             $whereParts[] = "{$timestamp} >= {$this->todayStart()}";
@@ -711,15 +711,15 @@ class AccountingModel
         $params = [':shift_type' => $shiftType];
         $dateFilter = '';
 
+        // المنطقة الزمنية لجلسة قاعدة البيانات مضبوطة مسبقاً على APP_TIMEZONE،
+        // فيكفي استخدام DATE(created_at) دون تحويل صريح إلى UTC.
         if ($date !== null && $date !== '') {
-            $dateFilter = ($this->driver === 'pgsql'
-                ? "AND DATE(created_at AT TIME ZONE 'UTC') = :shift_date"
-                : "AND DATE(created_at) = :shift_date");
+            $dateFilter = 'AND DATE(created_at) = :shift_date';
             $params[':shift_date'] = $date;
         } else {
             $dateFilter = ($this->driver === 'pgsql'
-                ? "AND DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE"
-                : "AND DATE(created_at) = CURDATE()");
+                ? 'AND DATE(created_at) = CURRENT_DATE'
+                : 'AND DATE(created_at) = CURDATE()');
         }
 
         $sql = "SELECT MIN(serial_number) AS start_no,
@@ -746,11 +746,12 @@ class AccountingModel
      */
     public function hasOpenShiftBefore(string $shiftType): bool
     {
+        // يعتمد على ضبط جلسة DB على APP_TIMEZONE (Database::getConnection).
         $sql = $this->driver === 'pgsql'
             ? "SELECT 1 FROM examination_tickets
                   WHERE ticket_type = :shift_type
                     AND shift_closure_id IS NULL
-                    AND DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE - INTERVAL '1 day'
+                    AND DATE(created_at) = CURRENT_DATE - INTERVAL '1 day'
                   LIMIT 1"
             : "SELECT 1 FROM examination_tickets
                   WHERE ticket_type = :shift_type
@@ -816,10 +817,9 @@ class AccountingModel
 
             $this->assertPreviousShiftClosedOrEmpty($shiftType, $shiftDate);
 
-            // جلب التذاكر مع قفل الصف (لمنع إصدار تذاكر متوازية خلال الإقفال)
-            $dateExpr = $this->driver === 'pgsql'
-                ? "DATE(created_at AT TIME ZONE 'UTC')"
-                : 'DATE(created_at)';
+            // جلب التذاكر مع قفل الصف (لمنع إصدار تذاكر متوازية خلال الإقفال).
+            // المنطقة الزمنية لجلسة DB مضبوطة على APP_TIMEZONE، فلا حاجة لتحويل صريح.
+            $dateExpr = 'DATE(created_at)';
             $lockStmt = $this->conn->prepare(
                 "SELECT ticket_id, serial_number, amount
                  FROM examination_tickets
@@ -967,9 +967,8 @@ class AccountingModel
             return;
         }
 
-        $dateExpr = $this->driver === 'pgsql'
-            ? "DATE(created_at AT TIME ZONE 'UTC')"
-            : 'DATE(created_at)';
+        // يعتمد على المنطقة الزمنية المضبوطة لجلسة DB.
+        $dateExpr = 'DATE(created_at)';
         $cntStmt = $this->conn->prepare(
             "SELECT COUNT(*) FROM examination_tickets
              WHERE ticket_type = :st
