@@ -623,7 +623,7 @@ const DailyInfo = {
             </tr>`;
         const spacerRow = `
             <tr class="bg-row di-spacer" aria-hidden="true">
-                <td colspan="${cols.length + 5}" style="height:10px; border-left:0; border-right:0;">&nbsp;</td>
+                <td colspan="${cols.length + 4}" style="height:10px; border-left:0; border-right:0;">&nbsp;</td>
                 <td>${lTotal.from}</td>
                 <td>${lTotal.to}</td>
                 <td><strong>${lTotal.count}</strong></td>
