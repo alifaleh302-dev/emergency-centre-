@@ -243,6 +243,7 @@ const DailyInfo = {
         const tools = [
             { label: 'تحديث', icon: 'bi-arrow-repeat', action: "DailyInfo.loadReport(document.getElementById('di-date-picker')?.value || DailyInfo.getLocalIsoDate())" },
             { label: 'طباعة', icon: 'bi-printer', action: 'DailyInfo.printReport()' },
+            { label: 'تصدير إلى Excel', icon: 'bi-file-earmark-excel', action: 'DailyInfo.exportToXlsx()' },
         ];
 
         const toolbar = `
@@ -642,54 +643,220 @@ const DailyInfo = {
         };
     },
 
-    printReport() {
+    /**
+     * بناء قالب HTML الكامل المستخدم للطباعة والتصدير (محتوى مستقل)
+     */
+    buildPrintableHtml() {
         const printable = document.getElementById('di-printable');
-        if (!printable) {
-            alert('لا يوجد تقرير للطباعة.');
-            return;
-        }
+        if (!printable) return null;
 
-        const win = window.open('', '_blank', 'width=1400,height=900');
-        win.document.write(`
-            <!DOCTYPE html>
-            <html dir="rtl" lang="ar">
-            <head>
-                <meta charset="UTF-8">
-                <title>المعلومية اليومية</title>
-                <link rel="preconnect" href="https://fonts.googleapis.com">
-                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-                <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;600;700;800&display=swap" rel="stylesheet">
-                <style>
-                    * { box-sizing: border-box; }
-                    body { font-family: 'Noto Sans Arabic', 'Segoe UI', Tahoma, Arial, sans-serif; direction: rtl; color:#111; margin:0; padding:6mm; }
-                    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-                    th, td { border: 1px solid #333; padding: 4px 5px; text-align:center; vertical-align: middle; font-size: 10.5px; word-wrap: break-word; }
-                    .di-bayan { text-align: right; padding-right: 8px; }
-                    .di-cat { font-weight: 800; }
-                    .di-th-rotate { display: inline-block; font-weight: 700; }
-                    .report-header { display: block; }
-                    .bg-cat, .bg-header { background: #f4b9c8 !important; }
-                    .bg-svc-hdr { background: #f7e59d !important; }
-                    .bg-subtotal { background: #fff4a8 !important; }
-                    .bg-exempt { background: #d8f0d2 !important; }
-                    .bg-grand { background: #f7c3d0 !important; }
-                    .bg-grand2 { background: #ffffff !important; }
-                    .bg-row { background: #ffffff !important; }
-                    @page { size: A4 landscape; margin: 0.5cm; }
-                    @media print {
-                        body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+        const data = this.state.data || {};
+        const dateObj = new Date(`${data.report_date || this.getLocalIsoDate()}T12:00:00`);
+        let gregDate = '';
+        let dayName = '';
+        let hijriDate = '';
+        try {
+            gregDate = dateObj.toLocaleDateString('ar-YE', { year: 'numeric', month: '2-digit', day: '2-digit' });
+            dayName  = dateObj.toLocaleDateString('ar-YE', { weekday: 'long' });
+            hijriDate = dateObj.toLocaleDateString('ar-SA-u-ca-islamic-umalqura', { year: 'numeric', month: '2-digit', day: '2-digit' });
+        } catch (_) { /* تجاهل أخطاء التنسيق */ }
+
+        const headerBar = `
+            <div class="di-report-print-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:6px 10px; border:1px solid #333; background:#f4b9c8;">
+                <div style="font-weight:800; font-size:13px;">نموذج المعلومية اليومية</div>
+                <div style="font-size:11px;">
+                    <span style="margin-left:8px;">التاريخ: ${gregDate}</span>
+                    <span style="margin-left:8px;">اليوم: ${dayName}</span>
+                    ${hijriDate ? `<span>الهجري: ${hijriDate} هـ</span>` : ''}
+                </div>
+            </div>`;
+
+        return `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <title>المعلومية اليومية</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; direction: rtl; color:#111; margin:0; padding:6mm; }
+        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        th, td { border: 1px solid #333; padding: 4px 5px; text-align:center; vertical-align: middle; font-size: 10.5px; word-wrap: break-word; }
+        .di-bayan { text-align: right; padding-right: 8px; }
+        .di-cat { font-weight: 800; }
+        .di-th-rotate { display: inline-block; font-weight: 700; }
+        .bg-cat, .bg-header { background: #f4b9c8 !important; }
+        .bg-svc-hdr { background: #f7e59d !important; }
+        .bg-subtotal { background: #fff4a8 !important; }
+        .bg-exempt { background: #d8f0d2 !important; }
+        .bg-grand { background: #f7c3d0 !important; }
+        .bg-grand2 { background: #ffffff !important; }
+        .bg-row { background: #ffffff !important; }
+        @page { size: A4 landscape; margin: 0.5cm; }
+        @media print {
+            body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+        }
+    </style>
+</head>
+<body dir="rtl">
+    ${headerBar}
+    ${printable.innerHTML}
+    <div style="margin-top:8px; font-size:10px; color:#555; text-align:left;">* لا يتم احتساب أي سند أو فاتورة ملغاة ضمن التقرير.</div>
+</body>
+</html>`;
+    },
+
+    /**
+     * طباعة التقرير عبر iframe مخفي (أكثر موثوقية، لا يتأثر بـ popup blocker)
+     */
+    printReport() {
+        try {
+            const printable = document.getElementById('di-printable');
+            if (!printable) {
+                if (typeof Core !== 'undefined' && Core.showAlert) {
+                    Core.showAlert('لا يوجد تقرير للطباعة. يرجى تحميل البيانات أولاً.', 'warning');
+                } else {
+                    alert('لا يوجد تقرير للطباعة.');
+                }
+                return;
+            }
+
+            const html = this.buildPrintableHtml();
+            if (!html) throw new Error('تعذر إنشاء محتوى الطباعة.');
+
+            // إزالة أي iframe طباعة سابق
+            const oldFrame = document.getElementById('di-print-frame');
+            if (oldFrame) oldFrame.remove();
+
+            const iframe = document.createElement('iframe');
+            iframe.id = 'di-print-frame';
+            iframe.style.cssText = 'position:fixed; right:-10000px; bottom:-10000px; width:0; height:0; border:0;';
+            document.body.appendChild(iframe);
+
+            const doPrint = () => {
+                try {
+                    const cw = iframe.contentWindow;
+                    if (!cw) throw new Error('تعذر الوصول إلى نافذة الطباعة.');
+                    cw.focus();
+                    cw.print();
+                    // إزالة الـ iframe بعد فترة كافية لإتمام مربع حوار الطباعة
+                    setTimeout(() => {
+                        const f = document.getElementById('di-print-frame');
+                        if (f) f.remove();
+                    }, 2000);
+                } catch (innerErr) {
+                    console.error('print iframe error:', innerErr);
+                    if (typeof Core !== 'undefined' && Core.showAlert) {
+                        Core.showAlert('تعذر تنفيذ أمر الطباعة: ' + (innerErr.message || innerErr), 'error');
+                    } else {
+                        alert('تعذر تنفيذ أمر الطباعة: ' + (innerErr.message || innerErr));
                     }
-                </style>
-            </head>
-            <body dir="rtl">${printable.innerHTML}</body>
-            </html>
-        `);
-        win.document.close();
-        win.focus();
-        setTimeout(() => {
-            win.print();
-            win.close();
-        }, 300);
+                }
+            };
+
+            // ضمان جاهزية المحتوى قبل بدء الطباعة
+            iframe.onload = () => setTimeout(doPrint, 250);
+
+            // كتابة محتوى الـ iframe
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            doc.open();
+            doc.write(html);
+            doc.close();
+
+            // احتياط: في بعض المتصفحات onload لا يطلق بعد document.write
+            setTimeout(() => {
+                if (iframe && iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
+                    doPrint();
+                }
+            }, 800);
+        } catch (err) {
+            console.error('printReport error:', err);
+            const msg = 'حدث خطأ أثناء الطباعة: ' + (err && err.message ? err.message : err);
+            if (typeof Core !== 'undefined' && Core.showAlert) {
+                Core.showAlert(msg, 'error');
+            } else {
+                alert(msg);
+            }
+        }
+    },
+
+    /**
+     * تصدير التقرير إلى ملف Excel (xlsx) بنفس التنسيق تماماً
+     * يعتمد على SheetJS (XLSX) المحمَّل في index.html
+     */
+    exportToXlsx() {
+        try {
+            if (typeof XLSX === 'undefined') {
+                const m = 'مكتبة Excel غير محمّلة. تحقق من اتصال الإنترنت ثم أعد المحاولة.';
+                if (typeof Core !== 'undefined' && Core.showAlert) Core.showAlert(m, 'error');
+                else alert(m);
+                return;
+            }
+
+            const printable = document.getElementById('di-printable');
+            if (!printable) {
+                const m = 'لا يوجد تقرير للتصدير. يرجى تحميل البيانات أولاً.';
+                if (typeof Core !== 'undefined' && Core.showAlert) Core.showAlert(m, 'warning');
+                else alert(m);
+                return;
+            }
+
+            const table = printable.querySelector('table.di-table');
+            if (!table) {
+                throw new Error('تعذر العثور على جدول التقرير.');
+            }
+
+            // 1) بناء workbook من جدول HTML (يحافظ على rowspan/colspan تلقائياً)
+            const wb = XLSX.utils.table_to_book(table, { sheet: 'المعلومية اليومية', raw: false, display: true });
+            const ws = wb.Sheets['المعلومية اليومية'];
+            if (!ws) throw new Error('تعذر إنشاء ورقة العمل.');
+
+            // 2) ضبط اتجاه RTL
+            if (!ws['!props']) ws['!props'] = {};
+            ws['!props'].RTL = true;
+            wb.Workbook = wb.Workbook || {};
+            wb.Workbook.Views = [{ RTL: true }];
+
+            // 3) ضبط عرض الأعمدة (مماثل لـ colgroup في الجدول الأصلي)
+            // الأعمدة: نوع الإيرادات | البيان | الفترة | 11 خدمة | الإجمالي | من | إلى | عددها | نوع المطبوعات
+            const colWidths = [
+                { wch: 18 }, // نوع الإيرادات
+                { wch: 32 }, // البيان
+                { wch: 6  }, // الفترة
+                // 11 عمود خدمات
+                { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 },
+                { wch: 8 },  { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 10 },
+                { wch: 12 }, // الإجمالي
+                { wch: 10 }, // من
+                { wch: 10 }, // إلى
+                { wch: 8 },  // عددها
+                { wch: 22 }, // نوع المطبوعات
+            ];
+            ws['!cols'] = colWidths;
+
+            // 4) ضبط ارتفاع الصف الأول (الترويسة) لتظهر الكتابة المائلة بوضوح
+            ws['!rows'] = ws['!rows'] || [];
+            ws['!rows'][0] = { hpt: 22 };
+            ws['!rows'][1] = { hpt: 22 };
+
+            // 5) إنشاء اسم الملف من التاريخ
+            const reportDate = (this.state && this.state.reportDate) || this.getLocalIsoDate();
+            const fileName = `المعلومية_اليومية_${reportDate}.xlsx`;
+
+            // 6) حفظ الملف
+            XLSX.writeFile(wb, fileName);
+
+            if (typeof Core !== 'undefined' && Core.showAlert) {
+                Core.showAlert('تم تصدير التقرير بنجاح إلى ' + fileName, 'success');
+            }
+        } catch (err) {
+            console.error('exportToXlsx error:', err);
+            const msg = 'حدث خطأ أثناء التصدير إلى Excel: ' + (err && err.message ? err.message : err);
+            if (typeof Core !== 'undefined' && Core.showAlert) {
+                Core.showAlert(msg, 'error');
+            } else {
+                alert(msg);
+            }
+        }
     },
 };
 
