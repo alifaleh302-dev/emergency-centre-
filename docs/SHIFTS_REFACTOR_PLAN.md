@@ -535,6 +535,11 @@ CHECK (action::text = ANY (ARRAY[
 
 ### 🟢 المرحلة 7 — Audit Log
 18. تطبيق ترقية `audit_logs.action` (§9).
+    - ✅ Migration `017_audit_log_auto_close_action.sql` (مطبَّق على Render).
+    - ✅ `AccountingModel::autoCloseShift()` يكتب action='AUTO_CLOSE' عبر `AuditService`.
+    - ✅ شاشة `viewAuditLog` في `admin.js` تترجم وتلوّن `AUTO_CLOSE` (badge أصفر + أيقونة `bi-robot` + شارة "نظام").
+    - ✅ Dropdown فلتر العملية أصبح ديناميكياً من `ADMIN_ENUM_LABELS` ويغطي الأفعال الـ12 المعتمدة.
+    - 📄 التوثيق: `docs/changelogs/PHASE_7_AUDIT_LOG_AUTO_CLOSE.md`.
 
 ### 🟢 المرحلة 8 — اختبارات وتوثيق
 19. اختبار سيناريوهات: إقفال يدوي مع/بدون معلّقات، إقفال تلقائي، إعادة فتح قبل/بعد بدء الفترة التالية، يوم كامل صباحي، يوم كامل مسائي.

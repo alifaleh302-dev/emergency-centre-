@@ -1825,22 +1825,31 @@ const Admin = {
             const meta = r.data.meta || { total: 0, pages: 1, page: 1 };
 
             const rowsHtml = rows.length ? rows.map(log => {
+                // 🆕 المرحلة 7 (Audit Log): الـ badge يأخذ بعين الاعتبار كل الأفعال
+                // المعتمدة في CHECK constraint بما فيها AUTO_CLOSE و REOPEN.
                 const actionBadge = {
-                    'CREATE': 'bg-success-subtle text-success',
-                    'UPDATE': 'bg-primary-subtle text-primary',
-                    'DELETE': 'bg-danger-subtle text-danger',
-                    'CANCEL': 'bg-warning-subtle text-warning',
-                    'LOGIN': 'bg-info-subtle text-info',
-                    'EXPORT': 'bg-secondary-subtle text-secondary',
+                    'CREATE'     : 'bg-success-subtle text-success',
+                    'UPDATE'     : 'bg-primary-subtle text-primary',
+                    'DELETE'     : 'bg-danger-subtle text-danger',
+                    'CANCEL'     : 'bg-warning-subtle text-warning',
+                    'LOGIN'      : 'bg-info-subtle text-info',
+                    'LOGOUT'     : 'bg-info-subtle text-info',
+                    'EXPORT'     : 'bg-secondary-subtle text-secondary',
+                    'IMPORT'     : 'bg-secondary-subtle text-secondary',
+                    'VIEW'       : 'bg-light text-dark',
+                    'REOPEN'     : 'bg-warning-subtle text-warning',
+                    'AUTO_CLOSE' : 'bg-warning-subtle text-warning',
+                    'OTHER'      : 'bg-light text-dark',
                 }[log.action] || 'bg-light text-dark';
-                const actionLabel = {
-                    'CREATE':'إنشاء','UPDATE':'تعديل','DELETE':'حذف','CANCEL':'إلغاء','LOGIN':'دخول','EXPORT':'تصدير'
-                }[log.action] || log.action;
+                // الترجمة الموحَّدة من ADMIN_ENUM_LABELS لضمان عرض AUTO_CLOSE بشكل صحيح
+                const actionLabel = (ADMIN_ENUM_LABELS['audit_logs.action'] || {})[log.action] || log.action;
+                // علامة مميزة للإقفال التلقائي (System) لتمييزه بصرياً عن إقفال المستخدم.
+                const isAutoClose = log.action === 'AUTO_CLOSE';
                 return `
                     <tr>
                         <td class="fw-bold">#${log.log_id}</td>
-                        <td><span class="badge ${actionBadge}">${actionLabel}</span></td>
-                        <td>${this.escapeHtml(log.username || '—')}</td>
+                        <td><span class="badge ${actionBadge}">${isAutoClose ? '<i class="bi bi-robot ms-1"></i>' : ''}${actionLabel}</span></td>
+                        <td>${this.escapeHtml(log.username || '—')}${isAutoClose ? ' <small class="badge bg-light text-muted border">نظام</small>' : ''}</td>
                         <td><code>${log.table_name || '—'}</code> ${log.record_id ? `<small class="text-muted">#${log.record_id}</small>` : ''}</td>
                         <td><code style="font-size:.75rem;">${log.ip_address || '—'}</code></td>
                         <td>${this.formatDateTime(log.created_at)}</td>
@@ -1859,11 +1868,9 @@ const Admin = {
                             <div class="col-md-3"><label class="form-label small fw-bold">نوع العملية</label>
                                 <select id="audit-action" class="form-select form-select-sm">
                                     <option value="">الكل</option>
-                                    <option value="CREATE">إنشاء</option>
-                                    <option value="UPDATE">تعديل</option>
-                                    <option value="DELETE">حذف</option>
-                                    <option value="CANCEL">إلغاء</option>
-                                    <option value="EXPORT">تصدير</option>
+                                    ${Object.entries(ADMIN_ENUM_LABELS['audit_logs.action'] || {})
+                                        .map(([val, lbl]) => `<option value="${val}" ${ (AdminData._auditFilters?.action===val)?'selected':'' }>${this.escapeHtml(lbl)}</option>`)
+                                        .join('')}
                                 </select>
                             </div>
                             <div class="col-md-3"><label class="form-label small fw-bold">الجدول</label>
