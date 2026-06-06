@@ -246,6 +246,32 @@ if (!isset($routes[$path])) {
     exit;
 }
 
+$autoCloseTriggerPaths = [
+    'accounting/pending',
+    'accounting/pay_invoice',
+    'accounting/daily_journal',
+    'accounting/close_shift',
+    'accounting/reopen_shift',
+    'accounting/previous_shift_check',
+    'accounting/daily_treasury',
+    'doctor/send_orders',
+    'doctor/new_patient',
+    'doctor/existing_patient_visit',
+];
+if (in_array($path, $autoCloseTriggerPaths, true)) {
+    try {
+        $_lazyDb = new Database();
+        $_lazyModel = new AccountingModel($_lazyDb->getConnection(), $_lazyDb->getDriver());
+        $_lazyResult = $_lazyModel->runAutoClosurePass();
+        if (!empty($_lazyResult['closed'])) {
+            error_log('runAutoClosurePass: closed ' . count($_lazyResult['closed']) . ' shift(s)');
+        }
+    } catch (Throwable $_lazyEx) {
+        error_log('runAutoClosurePass (lazy hook) failed: ' . $_lazyEx->getMessage());
+    }
+    unset($_lazyDb, $_lazyModel, $_lazyResult, $_lazyEx);
+}
+
 $route = $routes[$path];
 $requestMethod = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 if (!in_array($requestMethod, $route['methods'], true)) {

@@ -148,8 +148,21 @@ class DoctorModel
 
     public function createVisit(int $patientId, int $doctorId, int $caseTypeId, string $diagnosis, string $notes, string $typeCaseName): int
     {
-        $sql = "INSERT INTO Visits (patient_id, doctor_id, case_type_id, type_case, diagnosis, notes, status)
-                VALUES (:patient_id, :doctor_id, :case_type_id, :type_case, :diagnosis, :notes, 'Active')";
+        $shiftId = null;
+        try {
+            $shiftService = new ShiftService($this->conn);
+            $shift = $shiftService->resolveOrCreateShift(new DateTimeImmutable());
+            $shiftId = (int) ($shift['shift_id'] ?? 0);
+            if ($shiftId <= 0) {
+                $shiftId = null;
+            }
+        } catch (Throwable $e) {
+            error_log('createVisit: shift resolution failed: ' . $e->getMessage());
+            $shiftId = null;
+        }
+
+        $sql = "INSERT INTO Visits (patient_id, doctor_id, case_type_id, type_case, diagnosis, notes, status, shift_id)
+                VALUES (:patient_id, :doctor_id, :case_type_id, :type_case, :diagnosis, :notes, 'Active', :shift_id)";
 
         return $this->insertAndGetId($sql, [
             ':patient_id' => $patientId,
@@ -158,6 +171,7 @@ class DoctorModel
             ':type_case' => $typeCaseName,
             ':diagnosis' => $diagnosis,
             ':notes' => $notes,
+            ':shift_id' => $shiftId,
         ], 'visit_id');
     }
 

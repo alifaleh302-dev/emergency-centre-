@@ -6,12 +6,19 @@ class AccountingModel
     private PDO $conn;
     private string $driver;
     private SettingsService $settings;
+    private ShiftService $shiftService;
 
     public function __construct(PDO $db, string $driver = 'pgsql')
     {
         $this->conn = $db;
         $this->driver = $driver;
         $this->settings = new SettingsService($db);
+        $this->shiftService = new ShiftService($db, $this->settings);
+    }
+
+    public function getShiftService(): ShiftService
+    {
+        return $this->shiftService;
     }
 
     public function getInvoiceShift(int $invoiceId): ?array
@@ -869,6 +876,15 @@ class AccountingModel
 
             $this->assertPreviousShiftClosedOrEmpty($shiftType, $shiftDate);
 
+            $pendingInfo = $this->countPendingInvoicesInShift($shiftType, $shiftDate);
+            if ($pendingInfo['count'] > 0) {
+                throw new RuntimeException(sprintf(
+                    'يوجد %d فاتورة معلّقة في هذه الفترة (إجمالي: %s). يجب تسويتها قبل الإقفال اليدوي.',
+                    $pendingInfo['count'],
+                    number_format($pendingInfo['total'], 2)
+                ));
+            }
+
             // جلب التذاكر مع قفل الصف (لمنع إصدار تذاكر متوازية خلال الإقفال).
             // المنطقة الزمنية لجلسة DB مضبوطة على APP_TIMEZONE، فلا حاجة لتحويل صريح.
             $dateExpr = 'DATE(created_at)';
@@ -885,7 +901,24 @@ class AccountingModel
             $tickets = $lockStmt->fetchAll();
 
             if (empty($tickets)) {
-                throw new RuntimeException('لا توجد تذاكر في الفترة المحددة لإقفالها.');
+                if (!$this->isEmptyShiftCloseAllowed()) {
+                    throw new RuntimeException('لا توجد تذاكر في الفترة المحددة لإقفالها.');
+                }
+
+                $this->markShiftRowClosed($shiftType, $shiftDate, $closedBy, false, null);
+                $this->conn->commit();
+                return [
+                    'closure_id'     => null,
+                    'invoice_id'     => null,
+                    'serial_number'  => null,
+                    'total_amount'   => 0.0,
+                    'center_share'   => 0.0,
+                    'ministry_share' => 0.0,
+                    'tickets_count'  => 0,
+                    'start_no'       => null,
+                    'end_no'         => null,
+                    'empty_close'    => true,
+                ];
             }
 
             $serials = array_map(static fn ($t) => (int) $t['serial_number'], $tickets);
@@ -985,6 +1018,8 @@ class AccountingModel
             );
             $updateTickets->execute(array_merge([$closureId], $ticketIds));
 
+            $this->markShiftRowClosed($shiftType, $shiftDate, $closedBy, false, $closureId);
+
             $this->conn->commit();
 
             return [
@@ -997,6 +1032,7 @@ class AccountingModel
                 'tickets_count'  => $count,
                 'start_no'       => $startNo,
                 'end_no'         => $endNo,
+                'empty_close'    => false,
             ];
         } catch (Throwable $e) {
             if ($this->conn->inTransaction()) {
@@ -1053,5 +1089,333 @@ class AccountingModel
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([':sd' => $sd]);
         return $stmt->fetchAll();
+    }
+
+    public function countPendingInvoicesInShift(string $shiftType, string $shiftDate): array
+    {
+        $shiftRow = $this->getShiftRowByTypeDate($shiftType, $shiftDate);
+        $shiftId  = $shiftRow ? (int) $shiftRow['shift_id'] : 0;
+
+        $pending = [];
+        $totalPending = 0.0;
+
+        if ($shiftId > 0) {
+            $sql = "SELECT i.invoice_id,
+                           i.total,
+                           i.created_at,
+                           COALESCE(p.full_name, '') AS patient_name
+                    FROM invoices i
+                    JOIN visits v ON v.visit_id = i.visit_id
+                    LEFT JOIN patients p ON p.patient_id = v.patient_id
+                    WHERE i.doc_type_id IS NULL
+                      AND i.accountant_id IS NULL
+                      AND i.cancelled_at IS NULL
+                      AND v.shift_id = :sid
+                    ORDER BY i.created_at ASC";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([':sid' => $shiftId]);
+            foreach ($stmt->fetchAll() ?: [] as $row) {
+                $total = (float) $row['total'];
+                $totalPending += $total;
+                $pending[] = [
+                    'invoice_id'   => (int) $row['invoice_id'],
+                    'patient_name' => (string) $row['patient_name'],
+                    'total'        => $total,
+                    'created_at'   => (string) $row['created_at'],
+                ];
+            }
+        }
+
+        $legacy = $this->getShiftPendingInvoices($shiftType, $shiftDate, 200);
+        foreach ($legacy as $row) {
+            $exists = false;
+            foreach ($pending as $p) {
+                if ((int) $p['invoice_id'] === (int) $row['invoice_id']) {
+                    $exists = true;
+                    break;
+                }
+            }
+            if (!$exists) {
+                $totalPending += (float) $row['total'];
+                $pending[] = $row;
+            }
+        }
+
+        usort($pending, static fn ($a, $b) => strcmp((string) $a['created_at'], (string) $b['created_at']));
+
+        return [
+            'count'  => count($pending),
+            'total'  => round($totalPending, 2),
+            'sample' => array_slice($pending, 0, 20),
+        ];
+    }
+
+    public function getShiftRowByTypeDate(string $shiftType, string $shiftDate): ?array
+    {
+        $stmt = $this->conn->prepare(
+            "SELECT shift_id, shift_date, shift_type, start_time, end_time,
+                    day_mode, status, closure_id, auto_closed, closed_at, closed_by
+             FROM shifts
+             WHERE shift_date = :sd AND shift_type = :st
+             LIMIT 1"
+        );
+        $stmt->execute([':sd' => $shiftDate, ':st' => $shiftType]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
+    private function markShiftRowClosed(
+        string $shiftType,
+        string $shiftDate,
+        int $closedBy,
+        bool $autoClosed,
+        ?int $closureId
+    ): void {
+        try {
+            $row = $this->getShiftRowByTypeDate($shiftType, $shiftDate);
+            if ($row && (string) $row['status'] === 'open') {
+                $this->shiftService->markShiftClosed(
+                    (int) $row['shift_id'],
+                    $closedBy,
+                    $autoClosed,
+                    $closureId
+                );
+            }
+        } catch (Throwable $e) {
+            error_log('markShiftRowClosed failed: ' . $e->getMessage());
+        }
+    }
+
+    private function isEmptyShiftCloseAllowed(): bool
+    {
+        $stmt = $this->conn->prepare(
+            "SELECT setting_value FROM system_settings WHERE setting_key = 'allow_zero_invoices_implicit_close' LIMIT 1"
+        );
+        $stmt->execute();
+        $v = strtolower(trim((string) ($stmt->fetchColumn() ?: '')));
+        return in_array($v, ['1', 'true', 'yes', 'on'], true);
+    }
+
+    public function autoCloseShift(int $shiftId): array
+    {
+        $stmt = $this->conn->prepare(
+            "SELECT shift_id, shift_date, shift_type, start_time, end_time,
+                    day_mode, status
+             FROM shifts WHERE shift_id = :id LIMIT 1"
+        );
+        $stmt->execute([':id' => $shiftId]);
+        $shift = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$shift) {
+            throw new InvalidArgumentException('الفترة المطلوب إقفالها غير موجودة.');
+        }
+        if ((string) $shift['status'] !== 'open') {
+            return [
+                'shift_id'   => (int) $shift['shift_id'],
+                'shift_date' => (string) $shift['shift_date'],
+                'shift_type' => (string) $shift['shift_type'],
+                'skipped'    => true,
+                'reason'     => 'already_closed',
+            ];
+        }
+
+        $shiftType = (string) $shift['shift_type'];
+        $shiftDate = (string) $shift['shift_date'];
+        $systemUserId = ShiftService::SYSTEM_USER_ID;
+
+        $autoPaidCount = 0;
+        $autoPaidTotal = 0.0;
+        $pendingInfo = $this->countPendingInvoicesInShift($shiftType, $shiftDate);
+        if ($pendingInfo['count'] > 0) {
+            $autoPaidCount = $pendingInfo['count'];
+            $autoPaidTotal = (float) $pendingInfo['total'];
+            $this->autoPayPendingInvoicesForShift($shiftType, $shiftDate, $systemUserId);
+        }
+
+        $closeResult = null;
+        $ticketsExist = $this->shiftHasUnboundTickets($shiftType, $shiftDate);
+        if ($ticketsExist) {
+            try {
+                $closeResult = $this->closeShift($shiftType, $systemUserId, $shiftDate);
+            } catch (Throwable $e) {
+                error_log('autoCloseShift::closeShift error: ' . $e->getMessage());
+                throw new RuntimeException('تعذّر الإقفال التلقائي للفترة: ' . $e->getMessage());
+            }
+            $this->conn->prepare(
+                "UPDATE shifts SET auto_closed = TRUE, updated_at = CURRENT_TIMESTAMP WHERE shift_id = :id"
+            )->execute([':id' => $shiftId]);
+        } else {
+            $this->shiftService->markShiftClosed($shiftId, $systemUserId, true, null);
+        }
+
+        $this->logAuditAction(
+            $systemUserId,
+            '__system__',
+            'AUTO_CLOSE',
+            'shifts',
+            $shiftId,
+            null,
+            [
+                'shift_type'      => $shiftType,
+                'shift_date'      => $shiftDate,
+                'auto_paid_count' => $autoPaidCount,
+                'auto_paid_total' => $autoPaidTotal,
+                'closure_result'  => $closeResult,
+            ]
+        );
+
+        return [
+            'shift_id'        => $shiftId,
+            'shift_type'      => $shiftType,
+            'shift_date'      => $shiftDate,
+            'auto_paid_count' => $autoPaidCount,
+            'auto_paid_total' => round($autoPaidTotal, 2),
+            'closure'         => $closeResult,
+            'skipped'         => false,
+        ];
+    }
+
+    private function shiftHasUnboundTickets(string $shiftType, string $shiftDate): bool
+    {
+        $stmt = $this->conn->prepare(
+            "SELECT 1 FROM examination_tickets
+             WHERE ticket_type = :st
+               AND shift_closure_id IS NULL
+               AND DATE(created_at) = :sd
+             LIMIT 1"
+        );
+        $stmt->execute([':st' => $shiftType, ':sd' => $shiftDate]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    private function autoPayPendingInvoicesForShift(
+        string $shiftType,
+        string $shiftDate,
+        int $systemUserId
+    ): void {
+        $shiftRow = $this->getShiftRowByTypeDate($shiftType, $shiftDate);
+        $shiftId  = $shiftRow ? (int) $shiftRow['shift_id'] : 0;
+
+        $pendingIds = [];
+        if ($shiftId > 0) {
+            $stmt = $this->conn->prepare(
+                "SELECT i.invoice_id
+                 FROM invoices i
+                 JOIN visits v ON v.visit_id = i.visit_id
+                 WHERE i.doc_type_id IS NULL
+                   AND i.accountant_id IS NULL
+                   AND i.cancelled_at IS NULL
+                   AND v.shift_id = :sid"
+            );
+            $stmt->execute([':sid' => $shiftId]);
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) ?: [] as $iid) {
+                $pendingIds[(int) $iid] = true;
+            }
+        }
+        $legacyList = $this->getShiftPendingInvoices($shiftType, $shiftDate, 500);
+        foreach ($legacyList as $row) {
+            $pendingIds[(int) $row['invoice_id']] = true;
+        }
+        if (empty($pendingIds)) {
+            return;
+        }
+
+        $docStmt = $this->conn->query("SELECT doc_type_id FROM document_types WHERE doc_name = 'A' LIMIT 1");
+        $docTypeIdA = (int) $docStmt->fetchColumn();
+        if ($docTypeIdA <= 0) {
+            throw new RuntimeException('لم يتم العثور على نوع السند A.');
+        }
+
+        $this->conn->beginTransaction();
+        try {
+            foreach (array_keys($pendingIds) as $invoiceId) {
+                $invoiceId = (int) $invoiceId;
+                $pendStmt = $this->conn->prepare('SELECT total FROM Invoices WHERE invoice_id = :id AND doc_type_id IS NULL AND accountant_id IS NULL LIMIT 1');
+                $pendStmt->execute([':id' => $invoiceId]);
+                $totalRow = $pendStmt->fetch();
+                if (!$totalRow) {
+                    continue;
+                }
+                $invoiceTotal = round((float) $totalRow['total'], 2);
+                $newSerial = $this->allocateSerial('A', [$docTypeIdA]);
+
+                $updateStmt = $this->conn->prepare(
+                    "UPDATE Invoices SET
+                        total           = :total,
+                        net_amount      = :net,
+                        exemption_value = 0,
+                        doc_type_id     = :dt,
+                        serial_number   = :sn,
+                        accountant_id   = :uid,
+                        paid_at         = NOW()
+                     WHERE invoice_id = :id"
+                );
+                $updateStmt->execute([
+                    ':total' => $invoiceTotal,
+                    ':net'   => $invoiceTotal,
+                    ':dt'    => $docTypeIdA,
+                    ':sn'    => $newSerial,
+                    ':uid'   => $systemUserId,
+                    ':id'    => $invoiceId,
+                ]);
+
+                $this->applyMinistryShare($invoiceId);
+            }
+            $this->conn->commit();
+        } catch (Throwable $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    public function runAutoClosurePass(): array
+    {
+        $defaults = $this->shiftService->getDefaults();
+        if (!($defaults['auto_close_enabled'] ?? true)) {
+            return ['enabled' => false, 'closed' => []];
+        }
+
+        $expired = $this->shiftService->findOpenExpiredShifts();
+        $closed  = [];
+        foreach ($expired as $row) {
+            try {
+                $result = $this->autoCloseShift((int) $row['shift_id']);
+                $closed[] = $result;
+            } catch (Throwable $e) {
+                error_log(sprintf(
+                    'runAutoClosurePass failed for shift_id=%d: %s',
+                    (int) $row['shift_id'],
+                    $e->getMessage()
+                ));
+                $closed[] = [
+                    'shift_id' => (int) $row['shift_id'],
+                    'error'    => $e->getMessage(),
+                    'skipped'  => true,
+                ];
+            }
+        }
+
+        return [
+            'enabled' => true,
+            'closed'  => $closed,
+        ];
+    }
+
+    private function logAuditAction(
+        ?int $userId,
+        string $username,
+        string $action,
+        ?string $tableName,
+        int|string|null $recordId,
+        ?array $oldValues,
+        ?array $newValues
+    ): void {
+        try {
+            $audit = new AuditService($this->conn);
+            $audit->log($userId, $username, $action, $tableName, $recordId, $oldValues, $newValues);
+        } catch (Throwable $e) {
+            error_log('AccountingModel::logAuditAction failed: ' . $e->getMessage());
+        }
     }
 }

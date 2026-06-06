@@ -758,6 +758,31 @@ class AdminModel
                 );
             }
 
+            try {
+                $shiftRowStmt = $this->conn->prepare(
+                    "SELECT shift_id FROM shifts
+                     WHERE shift_type = :st AND shift_date = :sd LIMIT 1"
+                );
+                $shiftRowStmt->execute([
+                    ':st' => (string) $closure['shift_type'],
+                    ':sd' => (string) $closure['shift_date'],
+                ]);
+                $shiftRow = $shiftRowStmt->fetch(PDO::FETCH_ASSOC);
+                if ($shiftRow) {
+                    $shiftService = new ShiftService($this->conn);
+                    $nextStart = $shiftService->getNextShiftStartTime((int) $shiftRow['shift_id']);
+                    if ($nextStart !== null && new DateTimeImmutable() >= $nextStart) {
+                        throw new InvalidArgumentException(
+                            'لا يمكن إعادة فتح هذه الفترة لأن الفترة التالية قد بدأت بالفعل.'
+                        );
+                    }
+                }
+            } catch (InvalidArgumentException $e) {
+                throw $e;
+            } catch (Throwable $e) {
+                error_log('reopenLatestShift time check failed: ' . $e->getMessage());
+            }
+
             $closingInvoiceId = $closure['closing_invoice_id'] !== null ? (int) $closure['closing_invoice_id'] : null;
 
             // 3) فك ارتباط التذاكر بهذا الإقفال (تعود قابلة للإقفال مجدداً)
@@ -789,6 +814,25 @@ class AdminModel
                     // داخل نفس المعاملة
                     $this->performInvoiceDeleteWithAdjustment($closingInvoiceId);
                 }
+            }
+
+            try {
+                $openShiftStmt = $this->conn->prepare(
+                    "UPDATE shifts
+                        SET status      = 'open',
+                            closed_at   = NULL,
+                            closed_by   = NULL,
+                            auto_closed = FALSE,
+                            closure_id  = NULL,
+                            updated_at  = CURRENT_TIMESTAMP
+                      WHERE shift_type = :st AND shift_date = :sd"
+                );
+                $openShiftStmt->execute([
+                    ':st' => (string) $closure['shift_type'],
+                    ':sd' => (string) $closure['shift_date'],
+                ]);
+            } catch (Throwable $e) {
+                error_log('reopenLatestShift: failed to update shifts.status: ' . $e->getMessage());
             }
 
             $this->conn->commit();

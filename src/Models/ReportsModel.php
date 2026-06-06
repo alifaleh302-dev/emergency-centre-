@@ -222,6 +222,8 @@ class ReportsModel
                 i.visit_id,
                 i.paid_at,
                 (i.paid_at AT TIME ZONE :tz) AS paid_at_local,
+                s.shift_type AS shift_type_saved,
+                s.shift_date AS shift_date_saved,
                 i.net_amount,
                 i.exemption_value,
                 i.related_invoice_id,
@@ -235,13 +237,15 @@ class ReportsModel
                 CAST(id.ministry_share_at_time AS FLOAT) AS ministry_svc,
                 CAST(COALESCE(sm.ministry_share, 0) * id.quantity AS FLOAT) AS ministry_svc_fallback
             FROM invoices i
+            LEFT JOIN visits v ON v.visit_id = i.visit_id
+            LEFT JOIN shifts s ON s.shift_id = v.shift_id
             JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
             JOIN invoice_details id ON id.invoice_id = i.invoice_id
             JOIN services_master sm ON id.service_id = sm.service_id
             LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
             LEFT JOIN departments d ON sc.department_id = d.department_id
             WHERE {$this->activeInvoiceCondition('i')}
-              AND DATE(i.paid_at AT TIME ZONE :tz) = :report_date
+              AND COALESCE(s.shift_date, DATE(i.paid_at AT TIME ZONE :tz)) = :report_date
               AND dt.doc_name IN ('A', 'B', 'C')
             ORDER BY i.invoice_id, id.detail_id
         ";
@@ -263,6 +267,7 @@ class ReportsModel
                     'invoice_id'         => $invoiceId,
                     'visit_id'           => $row['visit_id'] !== null ? (int) $row['visit_id'] : null,
                     'paid_at_local'      => (string) $row['paid_at_local'],
+                    'shift_type_saved'   => $row['shift_type_saved'] !== null ? (string) $row['shift_type_saved'] : null,
                     'doc_name'           => (string) $row['doc_name'],
                     'net_amount'         => (float) $row['net_amount'],
                     'exemption_value'    => (float) $row['exemption_value'],
@@ -304,7 +309,9 @@ class ReportsModel
         foreach ($grouped as $invoice) {
             // ⚠️ paid_at_local هو timestamp بدون منطقة زمنية (محول إلى التوقيت المحلي)
             // لذا نمرّره مع DateTimeZone::UTC حتى لا يعيد PHP تحويله ثم نسأل عن الساعة مباشرة.
-            $shift   = $this->getShiftFromLocalString($invoice['paid_at_local'], $mStart, $mEnd);
+            $shift   = in_array($invoice['shift_type_saved'] ?? null, ['morning', 'evening'], true)
+                ? (string) $invoice['shift_type_saved']
+                : $this->getShiftFromLocalString($invoice['paid_at_local'], $mStart, $mEnd);
             $doc     = $invoice['doc_name'];
             $lines   = $invoice['lines'];
             $visitId = $invoice['visit_id'];
@@ -440,17 +447,21 @@ class ReportsModel
     {
         $sql = "
             SELECT
-                CASE WHEN EXTRACT(HOUR FROM t.created_at AT TIME ZONE :tz) >= :m_start
-                          AND EXTRACT(HOUR FROM t.created_at AT TIME ZONE :tz) <  :m_end
-                     THEN 'morning' ELSE 'evening' END AS shift,
+                COALESCE(
+                    s.shift_type,
+                    CASE WHEN EXTRACT(HOUR FROM t.created_at AT TIME ZONE :tz) >= :m_start
+                              AND EXTRACT(HOUR FROM t.created_at AT TIME ZONE :tz) <  :m_end
+                         THEN 'morning' ELSE 'evening' END
+                ) AS shift,
                 COUNT(*) AS ticket_count,
                 SUM(t.amount) AS ticket_amount,
                 MIN(t.serial_number) AS serial_from,
                 MAX(t.serial_number) AS serial_to
             FROM examination_tickets t
             JOIN visits v ON t.visit_id = v.visit_id
+            LEFT JOIN shifts s ON s.shift_id = v.shift_id
             WHERE v.cancelled_at IS NULL
-              AND DATE(t.created_at AT TIME ZONE :tz) = :report_date
+              AND COALESCE(s.shift_date, DATE(t.created_at AT TIME ZONE :tz)) = :report_date
             GROUP BY 1
         ";
 
@@ -548,10 +559,13 @@ class ReportsModel
      */
     public function getSerialRanges(string $reportDate, int $mStart = 5, int $mEnd = 12): array
     {
-        // CASE تعبير SQL يحدد الفترة بناءً على ساعة الدفع بالتوقيت المحلي
-        $shiftExpr = "CASE WHEN EXTRACT(HOUR FROM i.paid_at AT TIME ZONE :tz) >= :m_start
-                              AND EXTRACT(HOUR FROM i.paid_at AT TIME ZONE :tz) <  :m_end
-                         THEN 'morning' ELSE 'evening' END";
+        // تحديد الفترة يعتمد أولاً على visits.shift_id المحفوظة، ثم fallback إلى وقت الدفع.
+        $shiftExpr = "COALESCE(
+            s.shift_type,
+            CASE WHEN EXTRACT(HOUR FROM i.paid_at AT TIME ZONE :tz) >= :m_start
+                      AND EXTRACT(HOUR FROM i.paid_at AT TIME ZONE :tz) <  :m_end
+                 THEN 'morning' ELSE 'evening' END
+        )";
 
         $sql = "
             SELECT
@@ -561,9 +575,11 @@ class ReportsModel
                 MAX(i.serial_number) AS serial_to,
                 COUNT(*) AS doc_count
             FROM invoices i
+            LEFT JOIN visits v ON v.visit_id = i.visit_id
+            LEFT JOIN shifts s ON s.shift_id = v.shift_id
             JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
             WHERE {$this->activeInvoiceCondition('i')}
-              AND DATE(i.paid_at AT TIME ZONE :tz) = :report_date
+              AND COALESCE(s.shift_date, DATE(i.paid_at AT TIME ZONE :tz)) = :report_date
               AND dt.doc_name IN ('A', 'B', 'C')
             GROUP BY dt.doc_name, {$shiftExpr}
         ";
@@ -629,9 +645,12 @@ class ReportsModel
         // L: استمارات المختبر (لكل فترة + الإجمالي = من أول سند إلى آخر سند)
         // مع AT TIME ZONE لتحديد الفترة والتاريخ بحسب التوقيت المحلي.
         try {
-            $shiftExprL = "CASE WHEN EXTRACT(HOUR FROM ld.created_at AT TIME ZONE :tz) >= :m_start
-                                   AND EXTRACT(HOUR FROM ld.created_at AT TIME ZONE :tz) <  :m_end
-                              THEN 'morning' ELSE 'evening' END";
+            $shiftExprL = "COALESCE(
+                s.shift_type,
+                CASE WHEN EXTRACT(HOUR FROM ld.created_at AT TIME ZONE :tz) >= :m_start
+                           AND EXTRACT(HOUR FROM ld.created_at AT TIME ZONE :tz) <  :m_end
+                      THEN 'morning' ELSE 'evening' END
+            )";
             $sqlL = "
                 SELECT
                     {$shiftExprL} AS shift,
@@ -640,7 +659,9 @@ class ReportsModel
                     COUNT(*) AS doc_count
                 FROM laboratory_documents ld
                 LEFT JOIN invoices i ON ld.invoice_id = i.invoice_id
-                WHERE DATE(ld.created_at AT TIME ZONE :tz) = :report_date
+                LEFT JOIN visits v ON i.visit_id = v.visit_id
+                LEFT JOIN shifts s ON s.shift_id = v.shift_id
+                WHERE COALESCE(s.shift_date, DATE(ld.created_at AT TIME ZONE :tz)) = :report_date
                   AND (ld.invoice_id IS NULL OR i.cancelled_at IS NULL)
                 GROUP BY {$shiftExprL}
             ";
