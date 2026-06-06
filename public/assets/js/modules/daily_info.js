@@ -10,6 +10,11 @@
  *  - العمود الأيسر: رقم المطبوعات (من / إلى) + عددها + نوع المطبوعات (rowspan رأسي)
  *  - تجاوب (overflow-x:auto)، ألوان هادئة للمتصفح، ألوان النموذج الورقي للطباعة فقط
  *  - تحكم في @page (A4 landscape) وإخفاء/إظهار الترويسة عبر media queries
+ *
+ * 🆕 المرحلة 6 (SHIFTS_REFACTOR_PLAN §7.1): الشاشة تستهلك الآن endpoint موحَّد
+ * /api/reports/daily_view بدلاً من /api/reports/daily_info توحيداً لمصدر
+ * البيانات مع شاشة اليومية، مع fallback تلقائي للمسار القديم للتوافق
+ * الخلفي في حال عدم نشر التحديث الجديد على خادم الإنتاج بعد.
  */
 
 const DailyInfo = {
@@ -288,15 +293,35 @@ const DailyInfo = {
         });
     },
 
+    /**
+     * 🆕 المرحلة 6 (§7.1): تستهلك هذه الدالة endpoint موحَّد /api/reports/daily_view
+     * بدلاً من /api/reports/daily_info. تستخرج daily_info من داخل الحمولة الموحَّدة
+     * لضمان مطابقة الأرقام مع شاشة اليومية. في حال فشل المسار الجديد
+     * (مثلاً: بيئة لم تُنشَر عليها المرحلة 6 بعد) يتم السقوط إلى المسار
+     * القديم تلقائياً (توافق خلفي).
+     */
     async loadReport(date) {
         this.state.reportDate = date || this.getLocalIsoDate();
         const area = document.getElementById('di-report-area');
         if (!area) return;
 
-        area.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div></div>';
+        area.innerHTML = '<div class="text-center py-5" dir="rtl"><div class="spinner-border text-primary"></div></div>';
 
         try {
-            const res = await Core.apiCall(`reports/daily_info?date=${this.state.reportDate}`, 'GET');
+            // المحاولة الأولى: endpoint الموحَّد الجديد (المرحلة 6)
+            let res = await Core.apiCall(`reports/daily_view?date=${this.state.reportDate}&shift_type=all`, 'GET');
+            if (res && res.success && res.data && res.data.daily_info) {
+                // الحمولة الموحّدة تحتوي daily_info داخل res.data
+                this.state.data = Object.assign(
+                    { report_date: res.data.report_date || this.state.reportDate },
+                    res.data.daily_info
+                );
+                this.renderReport(this.state.data);
+                return;
+            }
+
+            // المحاولة الثانية (Fallback): المسار القديم للتوافق الخلفي
+            res = await Core.apiCall(`reports/daily_info?date=${this.state.reportDate}`, 'GET');
             if (res && res.success) {
                 this.state.data = res.data;
                 this.renderReport(res.data);
@@ -304,7 +329,7 @@ const DailyInfo = {
             }
 
             const message = res?.message || 'تعذر تحميل بيانات المعلومية اليومية.';
-            area.innerHTML = `<div class="p-4"><div class="alert alert-warning mb-0">${message}</div></div>`;
+            area.innerHTML = `<div class="p-4" dir="rtl"><div class="alert alert-warning mb-0">${message}</div></div>`;
         } catch (e) {
             console.error('daily_info load error:', e);
             const message = e?.message || 'حدث خطأ أثناء تحميل تقرير المعلومية اليومية.';

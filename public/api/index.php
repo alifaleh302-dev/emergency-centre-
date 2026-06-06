@@ -192,6 +192,8 @@ $routes = [
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     }],
     'reports/daily_info' => ['methods' => ['GET'], 'handler' => fn () => (new ReportsController())->getDailyInfo()],
+    // 🆕 المرحلة 6 (SHIFTS_REFACTOR_PLAN §7.1): endpoint موحَّد لشاشتي اليومية والمعلومية اليومية
+    'reports/daily_view' => ['methods' => ['GET'], 'handler' => fn () => (new ReportsController())->getDailyView()],
 
     // إعدادات الترويسة - متاح لأي مستخدم مسجل دخوله لاستخدامها في نماذج الطباعة
     'settings/header' => ['methods' => ['GET'], 'handler' => function (): void {

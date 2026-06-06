@@ -16,7 +16,8 @@
  *   - منع إصدار سندات جديدة بعد الإقفال (يُفرض في الـ Backend)
  *
  * APIs المستهلكة:
- *   - GET  /api/accounting/daily_journal?date=YYYY-MM-DD&department_id=N
+ *   - GET  /api/reports/daily_view?date=YYYY-MM-DD&shift_type=morning|evening|all&department_id=N
+ *     (🆕 المرحلة 6 — SHIFTS_REFACTOR_PLAN §7.1: مصدر بيانات موحَّد مع شاشة المعلومية اليومية)
  *   - GET  /api/accounting/invoice_services?invoice_id=N
  *   - POST /api/accounting/close_shift
  */
@@ -25,6 +26,7 @@ const DailyJournal = {
     state: {
         date: null,
         departmentId: 0,
+        shiftType: 'all',   // 🆕 المرحلة 6 — SHIFTS_REFACTOR_PLAN §7.2: فلتر الفترة
         data: null,
     },
 
@@ -465,11 +467,20 @@ const DailyJournal = {
                 { label: 'طباعة', icon: 'bi-printer', action: 'window.print()' },
             ];
 
+            // 🆕 المرحلة 6 (§7.2): إضافة Dropdown فلتر الفترة [ كل الفترات | الصباحية | المسائية ]
             const toolbar = `
-                <div class="dj-toolbar-grid">
+                <div class="dj-toolbar-grid" dir="rtl">
                     <div class="dj-filter-field">
                         <label class="form-label">التاريخ</label>
                         <input type="date" id="dj-date" class="form-control form-control-sm dj-filter-input" value="${this.state.date}">
+                    </div>
+                    <div class="dj-filter-field">
+                        <label class="form-label">الفترة</label>
+                        <select id="dj-shift" class="form-select form-select-sm dj-filter-input">
+                            <option value="all" ${this.state.shiftType === 'all' ? 'selected' : ''}>كل الفترات</option>
+                            <option value="morning" ${this.state.shiftType === 'morning' ? 'selected' : ''}>الصباحية</option>
+                            <option value="evening" ${this.state.shiftType === 'evening' ? 'selected' : ''}>المسائية</option>
+                        </select>
                     </div>
                     <div class="dj-filter-field">
                         <label class="form-label">القسم</label>
@@ -527,29 +538,48 @@ const DailyJournal = {
         });
     },
 
+    /**
+     * 🆕 المرحلة 6 (§7.1): يستهلك endpoint موحَّد /api/reports/daily_view
+     * بدلاً من /api/accounting/daily_journal. هذا يضمن أن شاشتي اليومية
+     * والمعلومية اليومية تتشاركان نفس مصدر البيانات المُجمَّع.
+     */
     async load() {
         this.state.date = document.getElementById('dj-date')?.value || this.getTodayIso();
         this.state.departmentId = parseInt(document.getElementById('dj-dept')?.value || '0', 10);
+        const shiftSel = document.getElementById('dj-shift')?.value || 'all';
+        this.state.shiftType = ['all', 'morning', 'evening'].includes(shiftSel) ? shiftSel : 'all';
 
         const container = document.getElementById('dj-container');
         if (!container) return;
-        container.innerHTML = `<div class="text-center py-5"><div class="spinner-border text-primary"></div></div>`;
+        container.innerHTML = `<div class="text-center py-5" dir="rtl"><div class="spinner-border text-primary"></div></div>`;
 
         try {
-            const params = new URLSearchParams({ date: this.state.date });
+            const params = new URLSearchParams({
+                date: this.state.date,
+                shift_type: this.state.shiftType,
+            });
             if (this.state.departmentId > 0) params.append('department_id', String(this.state.departmentId));
 
-            const res = await Core.apiCall('accounting/daily_journal?' + params.toString(), 'GET');
+            const res = await Core.apiCall('reports/daily_view?' + params.toString(), 'GET');
             if (!res || !res.success) {
-                container.innerHTML = `<div class="dj-empty">⚠️ تعذر جلب بيانات اليومية.</div>`;
+                container.innerHTML = `<div class="dj-empty" dir="rtl">⚠️ تعذر جلب بيانات اليومية.</div>`;
                 return;
             }
 
-            this.state.data = res.data || { invoices: [], shift_totals: [], closures: [] };
+            // الحمولة الجديدة: { report_date, shift_filter, shift_boundaries, journal: {invoices, shift_totals, closures}, daily_info: {...} }
+            const payload = res.data || {};
+            const journal = payload.journal || {};
+            this.state.data = {
+                invoices: Array.isArray(journal.invoices) ? journal.invoices : [],
+                shift_totals: Array.isArray(journal.shift_totals) ? journal.shift_totals : [],
+                closures: Array.isArray(journal.closures) ? journal.closures : [],
+                shift_boundaries: Array.isArray(payload.shift_boundaries) ? payload.shift_boundaries : [],
+                shift_filter: payload.shift_filter || 'all',
+            };
             this.render();
         } catch (error) {
             console.error('daily_journal load error:', error);
-            container.innerHTML = `<div class="dj-empty">⚠️ حدث خطأ أثناء تحميل اليومية.</div>`;
+            container.innerHTML = `<div class="dj-empty" dir="rtl">⚠️ حدث خطأ أثناء تحميل اليومية.</div>`;
         }
     },
 
