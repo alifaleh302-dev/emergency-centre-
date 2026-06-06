@@ -34,7 +34,41 @@ const AdminData = {
     settingsDraft: {},
     settingsDirty: false,
     settingsActiveGroup: 'shifts',
+    shiftEditor: {
+        selectedDate: '',
+        loading: false,
+        saving: false,
+        error: '',
+        defaults: null,
+        currentConfig: null,
+        rows: [],
+    },
     currentView: 'dashboard', // dashboard | table | audit | reports | broadcast | settings
+};
+
+const ADMIN_ENUM_LABELS = {
+    'shifts.status': { open: 'مفتوحة', closed: 'مغلقة' },
+    'shifts.shift_type': { morning: 'صباحية', evening: 'مسائية' },
+    'shifts.day_mode': {
+        both: 'صباحي + مسائي',
+        morning_only: 'اليوم كله صباحي',
+        evening_only: 'اليوم كله مسائي',
+    },
+    'shifts_closures.status': { open: 'مفتوحة', locked: 'مقفلة' },
+    'audit_logs.action': {
+        CREATE: 'إنشاء',
+        UPDATE: 'تحديث',
+        DELETE: 'حذف',
+        LOGIN: 'دخول',
+        LOGOUT: 'خروج',
+        CANCEL: 'إلغاء',
+        EXPORT: 'تصدير',
+        IMPORT: 'استيراد',
+        VIEW: 'عرض',
+        REOPEN: 'إعادة فتح',
+        AUTO_CLOSE: 'إقفال تلقائي',
+        OTHER: 'أخرى',
+    },
 };
 
 const Admin = {
@@ -184,7 +218,11 @@ const Admin = {
 
             const groupsWithItems = (AdminData.settingsCatalog.groups || []).filter(group => Number(group.count || 0) > 0);
             AdminData.settingsActiveGroup = activeGroup || groupsWithItems[0]?.key || 'general';
+            AdminData.shiftEditor.selectedDate = AdminData.shiftEditor.selectedDate || this.getTodayDate();
             this.renderSettingsScreen(AdminData.settingsCatalog);
+            if (groupsWithItems.some(group => group.key === 'shifts')) {
+                await this.loadShiftBoundaryEditor(AdminData.shiftEditor.selectedDate, false);
+            }
         });
     },
 
@@ -302,6 +340,7 @@ const Admin = {
 
     renderSettingsGroupSection: function(group) {
         const settingsHtml = (group.items || []).map(setting => this.renderSystemSettingField(setting)).join('');
+        const extraTopContent = group.key === 'shifts' ? this.renderShiftBoundaryPlannerShell() : '';
         return `
             <section id="settings-group-${group.key}" class="card border-0 shadow-sm rounded-4 overflow-hidden">
                 <div class="card-header border-0 bg-${group.accent}-subtle p-4">
@@ -320,10 +359,354 @@ const Admin = {
                     </div>
                 </div>
                 <div class="card-body p-4">
+                    ${extraTopContent}
                     <div class="row g-3">${settingsHtml}</div>
                 </div>
             </section>
         `;
+    },
+
+    renderShiftBoundaryPlannerShell: function() {
+        return `<div id="shift-boundary-editor-root" class="mb-4">${this.renderShiftBoundaryPlannerCard()}</div>`;
+    },
+
+    refreshShiftBoundaryPlanner: function() {
+        const root = document.getElementById('shift-boundary-editor-root');
+        if (!root) return;
+        root.innerHTML = this.renderShiftBoundaryPlannerCard();
+        this.bindShiftDial();
+    },
+
+    getTodayDate: function() {
+        const now = new Date();
+        const pad = value => String(value).padStart(2, '0');
+        return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    },
+
+    loadShiftBoundaryEditor: async function(date, showLoading = true) {
+        const targetDate = date || AdminData.shiftEditor.selectedDate || this.getTodayDate();
+        AdminData.shiftEditor.selectedDate = targetDate;
+        if (showLoading) {
+            AdminData.shiftEditor.loading = true;
+            AdminData.shiftEditor.error = '';
+            this.refreshShiftBoundaryPlanner();
+        }
+
+        const response = await Core.apiCall(`admin/shifts/day?date=${encodeURIComponent(targetDate)}`, 'GET');
+        AdminData.shiftEditor.loading = false;
+        if (!response?.success) {
+            AdminData.shiftEditor.error = response?.message || 'تعذر تحميل حدود الفترات لليوم المحدد.';
+            this.refreshShiftBoundaryPlanner();
+            return;
+        }
+
+        const payload = response.data || {};
+        AdminData.shiftEditor.defaults = payload.defaults || null;
+        AdminData.shiftEditor.rows = payload.rows || [];
+        AdminData.shiftEditor.currentConfig = {
+            shift_date: payload.config?.shift_date || targetDate,
+            split_time: payload.config?.split_time || payload.defaults?.split_time || '12:00',
+            day_mode: payload.config?.day_mode || payload.defaults?.day_mode || 'both',
+            status: payload.config?.status || (payload.has_closed_shift ? 'closed' : 'open'),
+        };
+        AdminData.shiftEditor.error = '';
+        this.refreshShiftBoundaryPlanner();
+    },
+
+    getShiftEditorConfig: function() {
+        const config = AdminData.shiftEditor.currentConfig || {};
+        const defaults = AdminData.shiftEditor.defaults || {};
+        return {
+            shift_date: config.shift_date || AdminData.shiftEditor.selectedDate || this.getTodayDate(),
+            split_time: this.normalizeShiftTimeValue(config.split_time || defaults.split_time || '12:00'),
+            day_mode: config.day_mode || defaults.day_mode || 'both',
+            status: config.status || 'open',
+        };
+    },
+
+    normalizeShiftTimeValue: function(value) {
+        const raw = String(value || '').trim();
+        if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(raw)) return '12:00';
+        const [hours, minutes] = raw.split(':');
+        return `${String(hours).padStart(2, '0')}:${minutes}`;
+    },
+
+    setShiftDayMode: function(dayMode) {
+        if (!['both', 'morning_only', 'evening_only'].includes(dayMode)) return;
+        const config = this.getShiftEditorConfig();
+        AdminData.shiftEditor.currentConfig = { ...config, day_mode: dayMode };
+        this.refreshShiftBoundaryPlanner();
+    },
+
+    handleShiftDateChange: async function(date) {
+        await this.loadShiftBoundaryEditor(date || this.getTodayDate());
+    },
+
+    onShiftSplitInput: function(value) {
+        const normalized = this.normalizeShiftTimeValue(value);
+        const config = this.getShiftEditorConfig();
+        AdminData.shiftEditor.currentConfig = { ...config, split_time: normalized, day_mode: config.day_mode || 'both' };
+        this.refreshShiftBoundaryPlanner();
+    },
+
+    saveShiftBoundaries: async function() {
+        const config = this.getShiftEditorConfig();
+        if (config.status === 'closed') {
+            Core.showAlert('لا يمكن تعديل حدود يوم تحوي فيه فترة مغلقة.', 'warning');
+            return;
+        }
+
+        AdminData.shiftEditor.saving = true;
+        this.refreshShiftBoundaryPlanner();
+        const response = await Core.apiCall('admin/shifts/save_boundaries', 'POST', {
+            shift_date: config.shift_date,
+            split_time: config.split_time,
+            day_mode: config.day_mode,
+        });
+        AdminData.shiftEditor.saving = false;
+
+        if (!response?.success) {
+            Core.showAlert(response?.message || 'تعذر حفظ حدود الفترات.', 'error');
+            this.refreshShiftBoundaryPlanner();
+            return;
+        }
+
+        Core.showAlert(response.message || 'تم حفظ حدود الفترات بنجاح.', 'success');
+        await this.loadShiftBoundaryEditor(config.shift_date, false);
+    },
+
+    renderShiftBoundaryPlannerCard: function() {
+        const editor = AdminData.shiftEditor || {};
+        const config = this.getShiftEditorConfig();
+        const isClosed = config.status === 'closed';
+        const isBusy = !!editor.loading || !!editor.saving;
+        const splitLabel = config.day_mode === 'both'
+            ? `${config.split_time}`
+            : (config.day_mode === 'morning_only' ? 'يوم كامل صباحي' : 'يوم كامل مسائي');
+        const morningLabel = config.day_mode === 'evening_only' ? '—' : `00:00 → ${config.day_mode === 'both' ? config.split_time : '24:00'}`;
+        const eveningLabel = config.day_mode === 'morning_only' ? '—' : `${config.day_mode === 'both' ? config.split_time : '00:00'} → 24:00`;
+        const modeButtons = [
+            { value: 'both', label: 'صباحي + مسائي', icon: 'bi-pie-chart' },
+            { value: 'morning_only', label: 'اليوم كله صباحي', icon: 'bi-sunrise' },
+            { value: 'evening_only', label: 'اليوم كله مسائي', icon: 'bi-moon-stars' },
+        ].map(mode => `
+            <button type="button" class="btn ${config.day_mode === mode.value ? 'btn-primary' : 'btn-outline-secondary'} rounded-pill" onclick="Admin.setShiftDayMode('${mode.value}')">
+                <i class="bi ${mode.icon} ms-1"></i>${mode.label}
+            </button>
+        `).join('');
+
+        const rowsSummary = (editor.rows || []).map(row => `
+            <div class="d-flex justify-content-between align-items-center py-2 border-bottom small">
+                <span class="fw-semibold">${this.getEnumDisplayLabel('shifts', 'shift_type', row.shift_type)}</span>
+                <span>${String(row.start_time || '').slice(0, 5)} → ${String(row.end_time || '').slice(0, 5)}</span>
+                <span class="badge ${this.getEnumBadgeClass('shifts', 'status', row.status)}">${this.getEnumDisplayLabel('shifts', 'status', row.status)}</span>
+            </div>
+        `).join('');
+
+        if (editor.loading) {
+            return `
+                <div class="card border border-primary-subtle rounded-4 mb-4">
+                    <div class="card-body p-4 text-center text-muted">
+                        <div class="spinner-border text-primary mb-3" role="status"></div>
+                        <div class="fw-semibold">جاري تحميل حدود الفترات لليوم المحدد...</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        return `
+            <div class="card border border-primary-subtle rounded-4 mb-4 overflow-hidden">
+                <div class="card-header bg-primary-subtle border-0 p-4 d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
+                    <div>
+                        <div class="d-inline-flex align-items-center gap-2 rounded-pill px-3 py-2 bg-white shadow-sm small fw-semibold text-primary mb-2">
+                            <i class="bi bi-clock-history"></i>
+                            محرر حدود الفترات اليومية
+                        </div>
+                        <h5 class="fw-bold text-dark mb-1">تخصيص حدود يوم واحد وحفظها داخل جدول <code>shifts</code></h5>
+                        <div class="text-muted small">يمكنك تعديل وقت التقسيم أو تحويل اليوم إلى صباحي كامل أو مسائي كامل. إذا كانت إحدى الفترات مغلقة فسيُمنع الحفظ.</div>
+                    </div>
+                    <div class="d-flex flex-column align-items-lg-end gap-2">
+                        <label class="form-label fw-bold mb-0">التاريخ</label>
+                        <input id="shift-editor-date" type="date" class="form-control rounded-3" value="${this.escapeHtml(config.shift_date)}" onchange="Admin.handleShiftDateChange(this.value)">
+                    </div>
+                </div>
+                <div class="card-body p-4">
+                    ${editor.error ? `<div class="alert alert-danger rounded-4 mb-4">${this.escapeHtml(editor.error)}</div>` : ''}
+                    <div class="row g-4 align-items-stretch">
+                        <div class="col-12 col-xl-7">
+                            <div class="border rounded-4 p-4 h-100 bg-light-subtle">
+                                <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
+                                    <div>
+                                        <div class="fw-bold text-dark">قرص 24 ساعة</div>
+                                        <div class="text-muted small">أعلى القرص = 12:00، وكل ساعة = 15°. السحب يغيّر وقت التقسيم عندما يكون اليوم مقسماً لفترتين.</div>
+                                    </div>
+                                    <span class="badge ${this.shiftEditorModeBadge(config.day_mode)}">${this.getEnumDisplayLabel('shifts', 'day_mode', config.day_mode)}</span>
+                                </div>
+                                ${this.renderShiftDialSvg(config)}
+                            </div>
+                        </div>
+                        <div class="col-12 col-xl-5">
+                            <div class="d-flex flex-column gap-3 h-100">
+                                <div class="card border-0 shadow-sm rounded-4">
+                                    <div class="card-body p-3 p-lg-4">
+                                        <label class="form-label fw-bold">وضع اليوم</label>
+                                        <div class="d-flex flex-wrap gap-2 mb-3">${modeButtons}</div>
+                                        <label class="form-label fw-bold">وقت التقسيم</label>
+                                        <div class="input-group mb-2">
+                                            <span class="input-group-text"><i class="bi bi-alarm"></i></span>
+                                            <input id="shift-split-input" type="time" class="form-control" value="${this.escapeHtml(config.split_time)}" ${config.day_mode !== 'both' ? 'disabled' : ''} onchange="Admin.onShiftSplitInput(this.value)">
+                                        </div>
+                                        <div class="text-muted small">القيمة الحالية: <strong>${this.escapeHtml(splitLabel)}</strong></div>
+                                    </div>
+                                </div>
+
+                                <div class="card border-0 shadow-sm rounded-4">
+                                    <div class="card-body p-3 p-lg-4">
+                                        <div class="d-flex justify-content-between align-items-center mb-3">
+                                            <div class="fw-bold text-dark">ملخص الحدود</div>
+                                            <span class="badge ${isClosed ? 'bg-danger-subtle text-danger' : 'bg-success-subtle text-success'}">${isClosed ? 'يوجد إقفال' : 'قابل للتعديل'}</span>
+                                        </div>
+                                        <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                                            <span class="fw-semibold">الصباحية</span>
+                                            <span>${this.escapeHtml(morningLabel)}</span>
+                                        </div>
+                                        <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                                            <span class="fw-semibold">المسائية</span>
+                                            <span>${this.escapeHtml(eveningLabel)}</span>
+                                        </div>
+                                        <div class="pt-3 small text-muted">السجلات الحالية في قاعدة البيانات لهذا اليوم:</div>
+                                        <div class="pt-2">${rowsSummary || '<div class="text-muted small">سيتم إنشاء السجلات تلقائياً عند أول حفظ أو تحميل لليوم.</div>'}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
+                        <div class="small text-muted">
+                            <i class="bi bi-info-circle ms-1"></i>
+                            ${isClosed ? 'هذا اليوم يحتوي فترة مغلقة، لذلك تم تعطيل الحفظ وفق الخطة.' : 'الحفظ سيحدّث تعريف الفترات في جدول shifts، ويعيد ربط زيارات اليوم تلقائياً إذا لزم الأمر.'}
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-secondary rounded-pill px-4" onclick="Admin.loadShiftBoundaryEditor('${this.escapeHtml(config.shift_date)}')">
+                                <i class="bi bi-arrow-clockwise ms-1"></i>تحديث
+                            </button>
+                            <button class="btn btn-primary rounded-pill px-4" ${isClosed || isBusy ? 'disabled' : ''} onclick="Admin.saveShiftBoundaries()">
+                                <i class="bi ${editor.saving ? 'bi-hourglass-split' : 'bi-floppy'} ms-1"></i>${editor.saving ? 'جاري الحفظ...' : 'حفظ حدود اليوم'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
+    renderShiftDialSvg: function(config) {
+        const splitMinutes = this.timeToMinutes(config.split_time);
+        const angle = ((splitMinutes - 720 + 1440) % 1440) / 1440 * 360;
+        const knobAngle = config.day_mode === 'morning_only' || config.day_mode === 'evening_only' ? 0 : angle;
+        const knobPoint = this.polarToCartesian(66, 66, 48, knobAngle);
+        const morningColor = '#0d6efd';
+        const eveningColor = '#6f42c1';
+        let arcs = '';
+
+        if (config.day_mode === 'both') {
+            const safeAngle = Math.max(2, Math.min(358, angle));
+            arcs = `
+                <path d="${this.describeArc(66, 66, 48, 0, safeAngle)}" fill="none" stroke="${morningColor}" stroke-width="12" stroke-linecap="round"></path>
+                <path d="${this.describeArc(66, 66, 48, safeAngle, 359.99)}" fill="none" stroke="${eveningColor}" stroke-width="12" stroke-linecap="round"></path>
+            `;
+        } else {
+            arcs = `<circle cx="66" cy="66" r="48" fill="none" stroke="${config.day_mode === 'morning_only' ? morningColor : eveningColor}" stroke-width="12"></circle>`;
+        }
+
+        const ticks = Array.from({ length: 24 }, (_, index) => {
+            const outer = this.polarToCartesian(66, 66, 58, index * 15);
+            const inner = this.polarToCartesian(66, 66, index % 6 === 0 ? 48 : 52, index * 15);
+            return `<line x1="${outer.x.toFixed(2)}" y1="${outer.y.toFixed(2)}" x2="${inner.x.toFixed(2)}" y2="${inner.y.toFixed(2)}" stroke="#94a3b8" stroke-width="${index % 6 === 0 ? 2 : 1}" opacity="0.7"></line>`;
+        }).join('');
+
+        return `
+            <div class="text-center">
+                <svg id="admin-shift-dial-svg" viewBox="0 0 132 132" width="100%" style="max-width:340px;cursor:${config.day_mode === 'both' ? 'grab' : 'default'};touch-action:none;">
+                    <circle cx="66" cy="66" r="56" fill="#fff" stroke="#e2e8f0" stroke-width="2"></circle>
+                    ${ticks}
+                    ${arcs}
+                    <circle cx="66" cy="66" r="36" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"></circle>
+                    ${config.day_mode === 'both' ? `<line x1="66" y1="66" x2="${knobPoint.x.toFixed(2)}" y2="${knobPoint.y.toFixed(2)}" stroke="#1f2937" stroke-width="2.5" opacity="0.7"></line>` : ''}
+                    <circle id="admin-shift-dial-knob" cx="${knobPoint.x.toFixed(2)}" cy="${knobPoint.y.toFixed(2)}" r="5.5" fill="#1f2937"></circle>
+                    <text x="66" y="62" text-anchor="middle" font-size="10" fill="#64748b">وقت التقسيم</text>
+                    <text x="66" y="77" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">${this.escapeHtml(config.day_mode === 'both' ? config.split_time : (config.day_mode === 'morning_only' ? 'Morning' : 'Evening'))}</text>
+                    <text x="66" y="12" text-anchor="middle" font-size="9" fill="#475569">12:00</text>
+                    <text x="120" y="69" text-anchor="middle" font-size="9" fill="#475569">18:00</text>
+                    <text x="66" y="126" text-anchor="middle" font-size="9" fill="#475569">00:00</text>
+                    <text x="12" y="69" text-anchor="middle" font-size="9" fill="#475569">06:00</text>
+                </svg>
+            </div>
+        `;
+    },
+
+    bindShiftDial: function() {
+        const svg = document.getElementById('admin-shift-dial-svg');
+        const config = this.getShiftEditorConfig();
+        if (!svg || config.day_mode !== 'both') return;
+
+        const updateFromPointer = (clientX, clientY) => {
+            const rect = svg.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            const angle = (Math.atan2(clientY - centerY, clientX - centerX) * 180 / Math.PI + 90 + 360) % 360;
+            const minutes = (720 + Math.round((angle / 360) * 1440)) % 1440;
+            const nextConfig = this.getShiftEditorConfig();
+            AdminData.shiftEditor.currentConfig = { ...nextConfig, split_time: this.minutesToTime(minutes) };
+            this.refreshShiftBoundaryPlanner();
+        };
+
+        const onPointerMove = event => updateFromPointer(event.clientX, event.clientY);
+        const onPointerUp = () => {
+            window.removeEventListener('pointermove', onPointerMove);
+            window.removeEventListener('pointerup', onPointerUp);
+        };
+
+        svg.addEventListener('pointerdown', event => {
+            event.preventDefault();
+            updateFromPointer(event.clientX, event.clientY);
+            window.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerup', onPointerUp);
+        }, { once: true });
+    },
+
+    shiftEditorModeBadge: function(dayMode) {
+        if (dayMode === 'morning_only') return 'bg-info-subtle text-info';
+        if (dayMode === 'evening_only') return 'bg-dark-subtle text-dark';
+        return 'bg-primary-subtle text-primary';
+    },
+
+    timeToMinutes: function(timeValue) {
+        const [hours, minutes] = this.normalizeShiftTimeValue(timeValue).split(':').map(Number);
+        return (hours * 60) + minutes;
+    },
+
+    minutesToTime: function(totalMinutes) {
+        const normalized = ((Number(totalMinutes) % 1440) + 1440) % 1440;
+        const hours = Math.floor(normalized / 60);
+        const minutes = normalized % 60;
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    },
+
+    polarToCartesian: function(cx, cy, radius, angleInDegrees) {
+        const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
+        return {
+            x: cx + (radius * Math.cos(angleInRadians)),
+            y: cy + (radius * Math.sin(angleInRadians)),
+        };
+    },
+
+    describeArc: function(cx, cy, radius, startAngle, endAngle) {
+        const start = this.polarToCartesian(cx, cy, radius, endAngle);
+        const end = this.polarToCartesian(cx, cy, radius, startAngle);
+        const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
+        return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
     },
 
     renderSystemSettingField: function(setting) {
@@ -915,7 +1298,7 @@ const Admin = {
                     <label class="form-label small fw-bold">${column.label}</label>
                     <select id="filter-${safeName}" class="form-select form-select-sm">
                         <option value="">الكل</option>
-                        ${column.enum_values.map(v => `<option value="${this.escapeHtml(String(v))}" ${current===v?'selected':''}>${this.escapeHtml(String(v))}</option>`).join('')}
+                        ${column.enum_values.map(v => `<option value="${this.escapeHtml(String(v))}" ${current===v?'selected':''}>${this.escapeHtml(this.getEnumDisplayLabel(AdminData.currentTable, column.name, v))}</option>`).join('')}
                     </select>
                 </div>
             `;
@@ -960,7 +1343,7 @@ const Admin = {
 
     renderRow: function(tableMeta, columns, row) {
         const pk = tableMeta.primary_key;
-        const cells = columns.map(col => `<td>${this.renderCellValue(col, row)}</td>`).join('');
+        const cells = columns.map(col => `<td>${this.renderCellValue(tableMeta.table, col, row)}</td>`).join('');
 
         // أزرار إضافية حسب الجدول
         const extraActions = this.renderExtraActions(tableMeta.table, row);
@@ -1004,7 +1387,7 @@ const Admin = {
         return html;
     },
 
-    renderCellValue: function(column, row) {
+    renderCellValue: function(tableName, column, row) {
         const value = row[column.name];
         // إذا كان FK ولدينا label من الـ enrichment
         if (column.is_foreign && row['_fk_' + column.name]) {
@@ -1029,8 +1412,11 @@ const Admin = {
         if (column.is_numeric && (column.name.includes('amount') || column.name.includes('price') || column.name.includes('total') || column.name === 'net_amount' || column.name === 'exemption_value' || column.name === 'center_share' || column.name === 'ministry_share')) {
             return `<span class="fw-bold">${this.formatCurrency(value)}</span>`;
         }
-        if (column.name === 'status') {
+        if (tableName === 'visits' && column.name === 'status') {
             return `<span class="badge ${this.visitStatusBadge(value)}">${this.translateVisitStatus(value)}</span>`;
+        }
+        if (column.enum_values?.length) {
+            return `<span class="badge ${this.getEnumBadgeClass(tableName, column.name, value)}">${this.escapeHtml(this.getEnumDisplayLabel(tableName, column.name, value))}</span>`;
         }
         const text = String(value);
         return text.length > 80 ? `<span title="${this.escapeHtml(text)}">${this.escapeHtml(text.slice(0,80))}…</span>` : this.escapeHtml(text);
@@ -1180,7 +1566,7 @@ const Admin = {
                     <label class="form-label fw-bold">${label}</label>
                     <select id="${id}" class="form-select">
                         <option value="">${column.nullable?'اختياري':'اختر قيمة'}</option>
-                        ${column.enum_values.map(v => `<option value="${this.escapeHtml(String(v))}" ${String(currentValue)===String(v)?'selected':''}>${this.escapeHtml(String(v))}</option>`).join('')}
+                        ${column.enum_values.map(v => `<option value="${this.escapeHtml(String(v))}" ${String(currentValue)===String(v)?'selected':''}>${this.escapeHtml(this.getEnumDisplayLabel(tableMeta.table, column.name, v))}</option>`).join('')}
                     </select>
                 </div>`;
         }
@@ -1727,6 +2113,30 @@ const Admin = {
                 </div>
             </div>
         `;
+    },
+
+    getEnumDisplayLabel: function(tableName, columnName, value) {
+        const key = `${tableName}.${columnName}`;
+        return ADMIN_ENUM_LABELS[key]?.[value] || value || '—';
+    },
+
+    getEnumBadgeClass: function(tableName, columnName, value) {
+        const key = `${tableName}.${columnName}`;
+        if (key === 'shifts.status') {
+            return value === 'closed' ? 'bg-danger-subtle text-danger' : 'bg-success-subtle text-success';
+        }
+        if (key === 'shifts_closures.status') {
+            return value === 'locked' ? 'bg-dark-subtle text-dark' : 'bg-warning-subtle text-warning';
+        }
+        if (key === 'shifts.day_mode') {
+            if (value === 'morning_only') return 'bg-info-subtle text-info';
+            if (value === 'evening_only') return 'bg-dark-subtle text-dark';
+            return 'bg-primary-subtle text-primary';
+        }
+        if (key === 'audit_logs.action') {
+            return value === 'AUTO_CLOSE' ? 'bg-warning-subtle text-warning' : 'bg-secondary-subtle text-secondary';
+        }
+        return 'bg-secondary-subtle text-secondary';
     },
 
     statusBadge: function(status) {

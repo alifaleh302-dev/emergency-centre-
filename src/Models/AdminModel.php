@@ -8,6 +8,7 @@ class AdminModel
     private ?array $schemaCache = null;
     private ?SchemaCache $persistentCache = null;
     private ?bool $settingsGroupColumnExists = null;
+    private ShiftService $shiftService;
 
     private array $tableLabels = [
         'users' => 'المستخدمون',
@@ -96,6 +97,7 @@ class AdminModel
     {
         $this->conn = $db;
         $this->driver = $driver;
+        $this->shiftService = new ShiftService($db);
         // Phase 1: كاش schema بين الطلبات (ملف بـ TTL)
         if (class_exists('SchemaCache')) {
             $this->persistentCache = new SchemaCache();
@@ -893,7 +895,9 @@ class AdminModel
             $isBoolean = $dataType === 'boolean';
             $isNumeric = in_array($dataType, ['smallint', 'integer', 'bigint', 'numeric', 'decimal', 'real', 'double precision'], true);
             $isDateLike = in_array($dataType, ['date', 'timestamp without time zone', 'timestamp with time zone', 'time without time zone', 'time with time zone'], true);
-            $enumValues = $dataType === 'USER-DEFINED' ? $this->getEnumValues($udtName) : [];
+            $enumValues = $dataType === 'USER-DEFINED'
+                ? $this->getEnumValues($udtName)
+                : $this->getCheckConstraintEnumValues($table, $name);
             $columns[$name] = [
                 'name' => $name,
                 'label' => $this->columnLabels[$name] ?? $this->humanize($name),
@@ -918,6 +922,7 @@ class AdminModel
                 'is_numeric' => $isNumeric,
                 'is_date_like' => $isDateLike,
                 'enum_values' => $enumValues,
+                'control_hint' => !empty($enumValues) ? 'select' : null,
                 'searchable' => !$this->isLegacyShadowColumn($table, $name)
                     && ($isBoolean || $isNumeric || $isDateLike || in_array($dataType, ['character varying', 'character', 'text', 'USER-DEFINED'], true)),
                 'visible_in_list' => $name !== 'password_hash' && !$this->isLegacyShadowColumn($table, $name),
@@ -950,6 +955,60 @@ class AdminModel
         return $stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
     }
 
+    private function getCheckConstraintEnumValues(string $table, string $column): array
+    {
+        $sql = "SELECT pg_get_constraintdef(c.oid) AS constraint_def
+                FROM pg_constraint c
+                JOIN pg_class t      ON t.oid = c.conrelid
+                JOIN pg_namespace n  ON n.oid = t.relnamespace
+                JOIN pg_attribute a  ON a.attrelid = t.oid AND a.attnum = ANY (c.conkey)
+                WHERE c.contype = 'c'
+                  AND n.nspname = 'public'
+                  AND t.relname = :table
+                  AND a.attname = :column";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([
+            ':table' => $table,
+            ':column' => $column,
+        ]);
+
+        $values = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) ?: [] as $constraintDef) {
+            $constraintText = (string) $constraintDef;
+            if ($constraintText === '' || !str_contains($constraintText, "'")) {
+                continue;
+            }
+            $literals = $this->extractQuotedLiterals($constraintText);
+            if (count($literals) < 2) {
+                continue;
+            }
+            foreach ($literals as $literal) {
+                $values[$literal] = $literal;
+            }
+        }
+
+        return array_values($values);
+    }
+
+    private function extractQuotedLiterals(string $text): array
+    {
+        if (!preg_match_all("/'((?:''|[^'])*)'/", $text, $matches)) {
+            return [];
+        }
+
+        $values = [];
+        foreach ($matches[1] as $match) {
+            $value = str_replace("''", "'", (string) $match);
+            if ($value === '' || preg_match('/^\\d+(?:\\.\\d+)?$/', $value)) {
+                continue;
+            }
+            $values[] = $value;
+        }
+
+        return $values;
+    }
+
     public function getReferenceOptionsForField(string $table, string $columnName): array
     {
         $meta = $this->requireTableMeta($table);
@@ -959,6 +1018,272 @@ class AdminModel
         }
 
         return $this->getReferenceOptions($column['foreign']['table'], $column['foreign']['column']);
+    }
+
+    public function getShiftDayDefinition(string $shiftDate): array
+    {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $shiftDate)) {
+            throw new InvalidArgumentException('صيغة التاريخ غير صالحة (المتوقع YYYY-MM-DD).');
+        }
+
+        $defaults = $this->shiftService->getDefaults();
+        $rows = $this->shiftService->getShiftBoundariesForDate($shiftDate);
+
+        if (empty($rows)) {
+            $this->shiftService->ensureDayDefined($shiftDate);
+            $rows = $this->shiftService->getShiftBoundariesForDate($shiftDate);
+        }
+
+        $config = $this->buildShiftEditorConfig($shiftDate, $rows, $defaults);
+
+        return [
+            'shift_date' => $shiftDate,
+            'defaults' => $defaults,
+            'rows' => $rows,
+            'config' => $config,
+            'has_closed_shift' => !empty(array_filter($rows, fn(array $row): bool => (string) ($row['status'] ?? '') === 'closed')),
+        ];
+    }
+
+    public function saveShiftBoundaries(string $shiftDate, string $splitTime, string $dayMode, int $updatedBy): array
+    {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $shiftDate)) {
+            throw new InvalidArgumentException('صيغة التاريخ غير صالحة (المتوقع YYYY-MM-DD).');
+        }
+
+        $splitTime = $this->normalizeShiftTime($splitTime);
+        if (!in_array($dayMode, ['both', 'morning_only', 'evening_only'], true)) {
+            throw new InvalidArgumentException('وضع اليوم غير صالح.');
+        }
+
+        if ($this->shiftService->hasClosedShiftOnDate($shiftDate)) {
+            throw new RuntimeException('لا يمكن تعديل حدود يوم تحوي فيه فترة مغلقة.');
+        }
+
+        $desiredRows = $this->buildShiftRowsForDate($shiftDate, $splitTime, $dayMode);
+        $desiredTypes = array_column($desiredRows, 'shift_type');
+        $activeShiftIds = [];
+
+        $this->conn->beginTransaction();
+        try {
+            $currentStmt = $this->conn->prepare(
+                "SELECT shift_id, shift_type, shift_date, start_time, end_time, day_mode, status
+                 FROM shifts
+                 WHERE shift_date = :sd
+                 ORDER BY start_time ASC
+                 FOR UPDATE"
+            );
+            $currentStmt->execute([':sd' => $shiftDate]);
+            $currentRows = $currentStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            foreach ($currentRows as $row) {
+                if ((string) ($row['status'] ?? '') === 'closed') {
+                    throw new RuntimeException('لا يمكن تعديل حدود يوم تحوي فيه فترة مغلقة.');
+                }
+            }
+
+            $existingByType = [];
+            foreach ($currentRows as $row) {
+                $existingByType[(string) $row['shift_type']] = $row;
+            }
+
+            $insertStmt = $this->conn->prepare(
+                "INSERT INTO shifts (shift_date, shift_type, start_time, end_time, day_mode, status)
+                 VALUES (:sd, :shift_type, :start_time, :end_time, :day_mode, 'open')
+                 RETURNING shift_id"
+            );
+            $updateStmt = $this->conn->prepare(
+                "UPDATE shifts
+                    SET start_time = :start_time,
+                        end_time = :end_time,
+                        day_mode = :day_mode,
+                        updated_at = CURRENT_TIMESTAMP
+                  WHERE shift_id = :shift_id"
+            );
+
+            foreach ($desiredRows as $row) {
+                $shiftType = $row['shift_type'];
+                if (isset($existingByType[$shiftType])) {
+                    $updateStmt->execute([
+                        ':start_time' => $row['start_time'],
+                        ':end_time' => $row['end_time'],
+                        ':day_mode' => $row['day_mode'],
+                        ':shift_id' => $existingByType[$shiftType]['shift_id'],
+                    ]);
+                    $activeShiftIds[$shiftType] = (int) $existingByType[$shiftType]['shift_id'];
+                    continue;
+                }
+
+                $insertStmt->execute([
+                    ':sd' => $shiftDate,
+                    ':shift_type' => $shiftType,
+                    ':start_time' => $row['start_time'],
+                    ':end_time' => $row['end_time'],
+                    ':day_mode' => $row['day_mode'],
+                ]);
+                $activeShiftIds[$shiftType] = (int) $insertStmt->fetchColumn();
+            }
+
+            $this->reassignVisitsForShiftDate($shiftDate, $splitTime, $dayMode, $activeShiftIds);
+
+            $obsoleteRows = array_filter(
+                $currentRows,
+                fn(array $row): bool => !in_array((string) $row['shift_type'], $desiredTypes, true)
+            );
+            if (!empty($obsoleteRows)) {
+                $deleteStmt = $this->conn->prepare('DELETE FROM shifts WHERE shift_id = :shift_id');
+                foreach ($obsoleteRows as $row) {
+                    $deleteStmt->execute([':shift_id' => $row['shift_id']]);
+                }
+            }
+
+            $this->conn->commit();
+        } catch (Throwable $exception) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $exception;
+        }
+
+        $snapshot = $this->getShiftDayDefinition($shiftDate);
+
+        return [
+            'saved_by' => $updatedBy,
+            'shift_date' => $shiftDate,
+            'split_time' => $splitTime,
+            'day_mode' => $dayMode,
+            'rows' => $snapshot['rows'],
+            'config' => $snapshot['config'],
+        ];
+    }
+
+    private function buildShiftEditorConfig(string $shiftDate, array $rows, array $defaults): array
+    {
+        $dayMode = (string) ($defaults['day_mode'] ?? 'both');
+        $splitTime = (string) ($defaults['split_time'] ?? '12:00');
+        $status = 'open';
+
+        if (!empty($rows)) {
+            $firstRow = $rows[0];
+            $dayMode = (string) ($firstRow['day_mode'] ?? $dayMode);
+            $status = !empty(array_filter($rows, fn(array $row): bool => (string) ($row['status'] ?? '') === 'closed'))
+                ? 'closed'
+                : 'open';
+
+            if ($dayMode === 'both') {
+                foreach ($rows as $row) {
+                    if ((string) ($row['shift_type'] ?? '') === 'morning') {
+                        $splitTime = substr((string) ($row['end_time'] ?? $splitTime), 0, 5);
+                        break;
+                    }
+                }
+            }
+        }
+
+        return [
+            'shift_date' => $shiftDate,
+            'split_time' => $splitTime,
+            'day_mode' => $dayMode,
+            'status' => $status,
+        ];
+    }
+
+    private function normalizeShiftTime(string $value): string
+    {
+        $trimmed = trim($value);
+        if (!preg_match('/^(?:[01]?\d|2[0-3]):[0-5]\d$/', $trimmed)) {
+            throw new InvalidArgumentException('صيغة الوقت غير صالحة (المتوقع HH:MM).');
+        }
+        return str_pad(substr($trimmed, 0, 2), 2, '0', STR_PAD_LEFT) . ':' . substr($trimmed, 3, 2);
+    }
+
+    private function buildShiftRowsForDate(string $shiftDate, string $splitTime, string $dayMode): array
+    {
+        $endOfDay = '23:59:59';
+        $splitWithSeconds = $splitTime . ':00';
+
+        return match ($dayMode) {
+            'morning_only' => [[
+                'shift_date' => $shiftDate,
+                'shift_type' => 'morning',
+                'start_time' => '00:00:00',
+                'end_time' => $endOfDay,
+                'day_mode' => 'morning_only',
+            ]],
+            'evening_only' => [[
+                'shift_date' => $shiftDate,
+                'shift_type' => 'evening',
+                'start_time' => '00:00:00',
+                'end_time' => $endOfDay,
+                'day_mode' => 'evening_only',
+            ]],
+            default => [
+                [
+                    'shift_date' => $shiftDate,
+                    'shift_type' => 'morning',
+                    'start_time' => '00:00:00',
+                    'end_time' => $splitWithSeconds,
+                    'day_mode' => 'both',
+                ],
+                [
+                    'shift_date' => $shiftDate,
+                    'shift_type' => 'evening',
+                    'start_time' => $splitWithSeconds,
+                    'end_time' => $endOfDay,
+                    'day_mode' => 'both',
+                ],
+            ],
+        };
+    }
+
+    private function reassignVisitsForShiftDate(string $shiftDate, string $splitTime, string $dayMode, array $activeShiftIds): void
+    {
+        if ($dayMode === 'morning_only') {
+            if (empty($activeShiftIds['morning'])) {
+                return;
+            }
+            $stmt = $this->conn->prepare(
+                'UPDATE visits SET shift_id = :shift_id WHERE CAST(visit_date AS DATE) = :shift_date'
+            );
+            $stmt->execute([
+                ':shift_id' => $activeShiftIds['morning'],
+                ':shift_date' => $shiftDate,
+            ]);
+            return;
+        }
+
+        if ($dayMode === 'evening_only') {
+            if (empty($activeShiftIds['evening'])) {
+                return;
+            }
+            $stmt = $this->conn->prepare(
+                'UPDATE visits SET shift_id = :shift_id WHERE CAST(visit_date AS DATE) = :shift_date'
+            );
+            $stmt->execute([
+                ':shift_id' => $activeShiftIds['evening'],
+                ':shift_date' => $shiftDate,
+            ]);
+            return;
+        }
+
+        if (empty($activeShiftIds['morning']) || empty($activeShiftIds['evening'])) {
+            return;
+        }
+
+        $stmt = $this->conn->prepare(
+            "UPDATE visits
+                SET shift_id = CASE
+                    WHEN CAST(visit_date AS TIME) < :split_time THEN :morning_shift_id
+                    ELSE :evening_shift_id
+                END
+              WHERE CAST(visit_date AS DATE) = :shift_date"
+        );
+        $stmt->execute([
+            ':split_time' => $splitTime . ':00',
+            ':morning_shift_id' => $activeShiftIds['morning'],
+            ':evening_shift_id' => $activeShiftIds['evening'],
+            ':shift_date' => $shiftDate,
+        ]);
     }
 
     public function getSystemSettingsCatalog(): array
@@ -979,6 +1304,10 @@ class AdminModel
             $value = (string) ($row['setting_value'] ?? '');
             $description = trim((string) ($row['description'] ?? ''));
             $updatedAt = isset($row['updated_at']) ? (string) $row['updated_at'] : null;
+
+            if ($this->isHiddenSystemSetting($key, $description)) {
+                continue;
+            }
 
             $settings[] = [
                 'key' => $key,
@@ -1206,22 +1535,21 @@ class AdminModel
     private function systemSettingDefinitions(): array
     {
         return [
-            'shift_morning_start' => ['label' => 'بداية الفترة الصباحية', 'group' => 'shifts', 'control' => 'time', 'hint' => 'مثال: 05:00', 'allow_empty' => false],
-            'shift_morning_end' => ['label' => 'نهاية الفترة الصباحية', 'group' => 'shifts', 'control' => 'time', 'hint' => 'مثال: 12:00', 'allow_empty' => false],
-            'shift_evening_start' => ['label' => 'بداية الفترة المسائية', 'group' => 'shifts', 'control' => 'time', 'hint' => 'مثال: 12:00', 'allow_empty' => false],
-            'shift_evening_end' => ['label' => 'نهاية الفترة المسائية', 'group' => 'shifts', 'control' => 'time', 'hint' => 'مثال: 23:00', 'allow_empty' => false],
-            'shift_overnight_belongs_to' => [
-                'label' => 'ربط الفترة الليلية',
+            'shift_default_split_time' => ['label' => 'وقت تقسيم اليوم الافتراضي', 'group' => 'shifts', 'control' => 'time', 'hint' => 'الوقت الافتراضي لتقسيم اليوم الجديد بين الصباحية والمسائية.', 'allow_empty' => false],
+            'shift_default_day_mode' => [
+                'label' => 'وضع اليوم الافتراضي',
                 'group' => 'shifts',
                 'control' => 'select',
-                'hint' => 'يوصى بخيار المسائية لليوم السابق وفق السياسة الحالية.',
+                'hint' => 'الوضع الذي يُستخدم عند إنشاء يوم جديد لم تُحفظ حدوده بعد.',
                 'options' => [
-                    ['value' => 'evening_prev_day', 'label' => 'المسائية لليوم السابق'],
-                    ['value' => 'morning_same_day', 'label' => 'الصباحية لليوم نفسه'],
-                    ['value' => 'dead_zone', 'label' => 'منطقة غير محسوبة'],
+                    ['value' => 'both', 'label' => 'صباحي + مسائي'],
+                    ['value' => 'morning_only', 'label' => 'اليوم كله صباحي'],
+                    ['value' => 'evening_only', 'label' => 'اليوم كله مسائي'],
                 ],
                 'allow_empty' => false,
             ],
+            'shift_auto_close_enabled' => ['label' => 'تفعيل الإقفال التلقائي', 'group' => 'shifts', 'control' => 'toggle', 'hint' => 'إقفال الفترات المفتوحة تلقائياً بعد انتهاء وقتها.', 'allow_empty' => false],
+            'shift_system_user_id' => ['label' => 'معرّف مستخدم النظام', 'group' => 'shifts', 'control' => 'number', 'hint' => 'المستخدم الذي يُسجَّل كمنفذ لعمليات الإقفال التلقائي.', 'allow_empty' => false, 'min' => 0, 'step' => 1],
             'enforce_shift_payment_order' => ['label' => 'فرض ترتيب السداد بين الفترات', 'group' => 'shifts', 'control' => 'toggle', 'hint' => 'منع تسديد فترة لاحقة قبل استكمال الفترة السابقة.', 'allow_empty' => false],
             'allow_zero_invoices_implicit_close' => ['label' => 'اعتبار الفترة الفارغة مغلقة تلقائياً', 'group' => 'shifts', 'control' => 'toggle', 'hint' => 'يسمح بالسداد الفوري إذا كانت الفترة السابقة بلا فواتير.', 'allow_empty' => false],
             'allow_admin_payment_override' => ['label' => 'السماح بتجاوز المدير', 'group' => 'shifts', 'control' => 'toggle', 'hint' => 'مع تسجيل إلزامي في سجل التدقيق.', 'allow_empty' => false],
@@ -1341,6 +1669,23 @@ class AdminModel
             return 'textarea';
         }
         return 'text';
+    }
+
+    private function isHiddenSystemSetting(string $key, string $description = ''): bool
+    {
+        $legacyKeys = [
+            'shift_morning_start',
+            'shift_morning_end',
+            'shift_evening_start',
+            'shift_evening_end',
+            'shift_overnight_belongs_to',
+        ];
+
+        if (in_array($key, $legacyKeys, true)) {
+            return true;
+        }
+
+        return str_starts_with($description, '[DEPRECATED');
     }
 
     private function buildFallbackSettingDefinition(string $key, mixed $value = null, mixed $group = null): array

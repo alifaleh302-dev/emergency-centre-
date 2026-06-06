@@ -96,6 +96,50 @@ class AdminController extends BaseController
         }
     }
 
+    public function getShiftBoundaries(): void
+    {
+        try {
+            $shiftDate = $this->sanitizeText($_GET['date'] ?? '', 'date', 10);
+            $this->success($this->model->getShiftDayDefinition($shiftDate));
+        } catch (InvalidArgumentException $e) {
+            $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            error_log('admin/get_shift_boundaries: ' . $e->getMessage());
+            $this->error('تعذر جلب حدود الفترات لليوم المطلوب.', 500);
+        }
+    }
+
+    public function saveShiftBoundaries($data): void
+    {
+        try {
+            $shiftDate = $this->sanitizeText($this->getField($data, 'shift_date'), 'shift_date', 10);
+            $splitTime = $this->sanitizeText($this->getField($data, 'split_time'), 'split_time', 5);
+            $dayMode = $this->sanitizeText($this->getField($data, 'day_mode'), 'day_mode', 20);
+
+            $before = $this->model->getShiftDayDefinition($shiftDate);
+            $result = $this->model->saveShiftBoundaries($shiftDate, $splitTime, $dayMode, (int) $this->userId);
+
+            $this->audit->log(
+                $this->userId,
+                $this->username,
+                'UPDATE',
+                'shifts',
+                $shiftDate,
+                $before,
+                $result
+            );
+
+            $this->success($result, 'تم حفظ حدود الفترات لليوم المحدد بنجاح.');
+        } catch (InvalidArgumentException $e) {
+            $this->error($e->getMessage(), 422);
+        } catch (RuntimeException $e) {
+            $this->error($e->getMessage(), 409);
+        } catch (Throwable $e) {
+            error_log('admin/save_shift_boundaries: ' . $e->getMessage());
+            $this->error('تعذر حفظ حدود الفترات.', 500);
+        }
+    }
+
     public function getReferenceOptions($data): void
     {
         try {
