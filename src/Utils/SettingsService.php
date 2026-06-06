@@ -132,92 +132,92 @@ class SettingsService
     // 🆕 Migration 014 - حدود الفترات وقواعد ترتيب التسديد
     // -------------------------------------------------------------
 
+    // -------------------------------------------------------------
+    // 🆕 Migration 016 - الانتقال إلى ShiftService
+    // -------------------------------------------------------------
+    // الدوال أدناه تبقى كـ wrappers للتوافق العكسي مع الكود القديم
+    // (AccountingModel, ReportsModel ...) خلال مرحلة الانتقال.
+    // التطبيق الفعلي تحوّل إلى ShiftService الذي يقرأ من جدول shifts
+    // (مصدر الحقيقة الجديد) بدلاً من system_settings.
+    //
+    // ⚠️ هذه الدوال ستُحذف من SettingsService في المرحلة 4
+    // بعد ترحيل جميع المستدعيات إلى ShiftService.
+    // -------------------------------------------------------------
+
+    /** كاش لـ ShiftService لتفادي إنشاء instance جديد في كل استدعاء */
+    private ?ShiftService $shiftService = null;
+
+    private function shiftService(): ShiftService
+    {
+        return $this->shiftService ??= new ShiftService($this->conn, $this);
+    }
+
+    /**
+     * @deprecated استخدم ShiftService::getShiftBoundariesForDate(date('Y-m-d'))
+     * تُحتفظ بها للتوافق مع كود قديم في الواجهة.
+     */
     public function getShiftBoundaries(): array
     {
-        $rows = $this->getMany([
-            'shift_morning_start', 'shift_morning_end',
-            'shift_evening_start', 'shift_evening_end',
-            'shift_overnight_belongs_to',
-        ]);
-
-        $normalize = static function (?string $value, string $default): string {
-            $value = trim((string) ($value ?? ''));
-            if ($value === '') return $default;
-            if (preg_match('/^(\d{1,2})(?::(\d{2}))?$/', $value, $m)) {
-                $h = max(0, min(23, (int) $m[1]));
-                $mn = isset($m[2]) ? max(0, min(59, (int) $m[2])) : 0;
-                return sprintf('%02d:%02d', $h, $mn);
-            }
-            return $default;
-        };
+        $defaults = $this->shiftService()->getDefaults();
+        $split    = $defaults['split_time']; // HH:MM
 
         return [
-            'morning_start' => $normalize($rows['shift_morning_start'] ?? null, '05:00'),
-            'morning_end'   => $normalize($rows['shift_morning_end'] ?? null, '12:00'),
-            'evening_start' => $normalize($rows['shift_evening_start'] ?? null, '12:00'),
-            'evening_end'   => $normalize($rows['shift_evening_end'] ?? null, '23:00'),
-            'overnight_belongs_to' => in_array(
-                $rows['shift_overnight_belongs_to'] ?? 'evening_prev_day',
-                ['evening_prev_day', 'dead_zone', 'morning_same_day'],
-                true
-            ) ? ($rows['shift_overnight_belongs_to'] ?? 'evening_prev_day') : 'evening_prev_day',
+            'morning_start' => '00:00',
+            'morning_end'   => $split,
+            'evening_start' => $split,
+            'evening_end'   => '23:59',
+            // الفجوة الليلية لم تعد موجودة في النموذج الجديد
+            'overnight_belongs_to' => 'morning_same_day',
         ];
     }
 
+    /**
+     * @deprecated استخدم ShiftService::resolveShiftFor() أو resolveOrCreateShift()
+     * يُرجع شكلاً مبسّطاً متوافقاً مع المستدعيات القديمة.
+     *
+     * المنطق:
+     *   1. محاولة قراءة الفترة من جدول shifts (المصدر الجديد).
+     *   2. إذا لم تُوجد، نستنتج من الافتراضي بدون إنشاء سجل (لتفادي
+     *      آثار جانبية في مسارات القراءة فقط).
+     */
     public function resolveShiftFor(DateTimeInterface $when): array
     {
-        $b = $this->getShiftBoundaries();
-        $timeStr = $when->format('H:i');
+        $shift = $this->shiftService()->resolveShiftFor($when);
+        if ($shift !== null) {
+            return [
+                'shift_type'   => (string) $shift['shift_type'],
+                'shift_date'   => (string) $shift['shift_date'],
+                'in_dead_zone' => false,
+            ];
+        }
+
+        // Fallback: استنتاج من الافتراضي بدون لمس قاعدة البيانات
         $dateStr = $when->format('Y-m-d');
+        $timeStr = $when->format('H:i');
+        $split   = $this->shiftService()->getDefaults()['split_time'];
 
-        if (strcmp($timeStr, $b['morning_start']) >= 0 && strcmp($timeStr, $b['morning_end']) < 0) {
-            return ['shift_type' => 'morning', 'shift_date' => $dateStr, 'in_dead_zone' => false];
-        }
-
-        if (strcmp($timeStr, $b['evening_start']) >= 0 && strcmp($timeStr, $b['evening_end']) < 0) {
-            return ['shift_type' => 'evening', 'shift_date' => $dateStr, 'in_dead_zone' => false];
-        }
-
-        switch ($b['overnight_belongs_to']) {
-            case 'morning_same_day':
-                if (strcmp($timeStr, $b['morning_start']) < 0) {
-                    return ['shift_type' => 'morning', 'shift_date' => $dateStr, 'in_dead_zone' => false];
-                }
-                $nextDay = (new DateTimeImmutable($dateStr))->modify('+1 day')->format('Y-m-d');
-                return ['shift_type' => 'morning', 'shift_date' => $nextDay, 'in_dead_zone' => false];
-            case 'dead_zone':
-                return ['shift_type' => 'evening', 'shift_date' => $dateStr, 'in_dead_zone' => true];
-            case 'evening_prev_day':
-            default:
-                if (strcmp($timeStr, $b['morning_start']) < 0) {
-                    $prevDay = (new DateTimeImmutable($dateStr))->modify('-1 day')->format('Y-m-d');
-                    return ['shift_type' => 'evening', 'shift_date' => $prevDay, 'in_dead_zone' => false];
-                }
-                return ['shift_type' => 'evening', 'shift_date' => $dateStr, 'in_dead_zone' => false];
-        }
+        $type = strcmp($timeStr, $split) < 0 ? 'morning' : 'evening';
+        return [
+            'shift_type'   => $type,
+            'shift_date'   => $dateStr,
+            'in_dead_zone' => false,
+        ];
     }
 
+    /**
+     * @deprecated استخدم ShiftService::getPreviousShiftRef()
+     */
     public function getPreviousShift(string $shiftType, string $shiftDate): array
     {
-        if (!in_array($shiftType, ['morning', 'evening'], true)) {
-            throw new InvalidArgumentException('نوع الفترة غير صالح.');
-        }
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $shiftDate)) {
-            throw new InvalidArgumentException('صيغة تاريخ الفترة غير صالحة.');
-        }
-
-        if ($shiftType === 'evening') {
-            return ['shift_type' => 'morning', 'shift_date' => $shiftDate];
-        }
-
-        $prevDay = (new DateTimeImmutable($shiftDate))->modify('-1 day')->format('Y-m-d');
-        return ['shift_type' => 'evening', 'shift_date' => $prevDay];
+        return $this->shiftService()->getPreviousShiftRef($shiftType, $shiftDate);
     }
 
+    /**
+     * @deprecated استخدم ShiftService::describeShift()
+     */
     public function describeShift(string $shiftType, string $shiftDate): string
     {
-        $label = $shiftType === 'morning' ? 'الصباحية' : 'المسائية';
-        return "الفترة {$label} ليوم {$shiftDate}";
+        return $this->shiftService()->describeShift($shiftType, $shiftDate);
     }
 
     public function isPaymentOrderEnforced(): bool
