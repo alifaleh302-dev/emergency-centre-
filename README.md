@@ -4,6 +4,43 @@
 
 ---
 
+## 🆕 نظام الفترات المالية الجديد (Shifts Refactor)
+
+تم تنفيذ إعادة هيكلة نظام الفترات المالية عبر المراحل 1–7، وفي هذه المرحلة تم إكمال **التوثيق والتحقق التقني** المطلوبين في المرحلة 8.
+
+### ملخص البنية الجديدة
+- **تعريف الفترات اليومية** صار يُدار عبر جدول `shifts`.
+- **سجل الإقفال** بقي منفصلاً داخل `shifts_closures`.
+- **الزيارة أصبحت مرتبطة بالفترة** عبر `visits.shift_id`.
+- **الخدمة المركزية للفترات** موجودة في `src/Utils/ShiftService.php`.
+- **الإقفال التلقائي Lazy Hook** يعمل من خلال `public/api/index.php`.
+- **مصدر البيانات الموحّد** لشاشتي اليومية والمعلومية اليومية هو `GET /api/reports/daily_view`.
+- **إدارة حدود الفترات** تتم من لوحة المدير عبر:
+  - `GET /api/admin/shifts/day`
+  - `POST /api/admin/shifts/save_boundaries`
+- **سجل التدقيق** يدعم الآن الإجراء `AUTO_CLOSE`.
+
+### تحقق المرحلة 8
+- فحص Syntax لملفات PHP وJavaScript الأساسية بنجاح.
+- فحص Smoke على البيئة المنشورة للمسارات:
+  - `auth/login`
+  - `auth/me`
+  - `reports/daily_view`
+  - `admin/shifts/day`
+- فحص قراءة فقط على قاعدة البيانات للتأكد من وجود:
+  - `shifts`
+  - `shifts_closures`
+  - `visits.shift_id`
+  - قيد `AUTO_CLOSE` في `audit_logs.action`
+
+### مراجع التوثيق
+- الخطة الأصلية: `docs/SHIFTS_REFACTOR_PLAN.md`
+- سجل الإغلاق النهائي للمشروع: `docs/changelogs/CHANGES_SHIFTS_REFACTOR.md`
+- المرحلة 6: `docs/changelogs/PHASE_6_DAILY_VIEW_UNIFIED.md`
+- المرحلة 7: `docs/changelogs/PHASE_7_AUDIT_LOG_AUTO_CLOSE.md`
+
+---
+
 ## 🏗️ بنية المشروع
 
 تمت إعادة تنظيم المشروع وفقًا لأفضل الممارسات (Industry Standard) لفصل الواجهة العامّة عن كود الخادم وتحصين الأمان:
