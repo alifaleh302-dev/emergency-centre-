@@ -113,14 +113,16 @@ class ReportsModel
      */
     private function activeInvoiceCondition(string $alias = 'i'): string
     {
+        // فاتورة "فعّالة" = غير ملغاة + غير محذوفة منطقياً + فاتورتها المرتبطة (إن وُجدت) فعّالة
         return "{$alias}.cancelled_at IS NULL
+            AND {$alias}.is_deleted = FALSE
             AND (
                 {$alias}.related_invoice_id IS NULL
                 OR NOT EXISTS (
                     SELECT 1
                     FROM invoices rel
                     WHERE rel.invoice_id = {$alias}.related_invoice_id
-                      AND rel.cancelled_at IS NOT NULL
+                      AND (rel.cancelled_at IS NOT NULL OR rel.is_deleted = TRUE)
                 )
             )";
     }
@@ -662,7 +664,7 @@ class ReportsModel
                 LEFT JOIN visits v ON i.visit_id = v.visit_id
                 LEFT JOIN shifts s ON s.shift_id = v.shift_id
                 WHERE COALESCE(s.shift_date, DATE(ld.created_at AT TIME ZONE :tz)) = :report_date
-                  AND (ld.invoice_id IS NULL OR i.cancelled_at IS NULL)
+                  AND (ld.invoice_id IS NULL OR (i.cancelled_at IS NULL AND i.is_deleted = FALSE))
                 GROUP BY {$shiftExprL}
             ";
             $stmtL = $this->conn->prepare($sqlL);

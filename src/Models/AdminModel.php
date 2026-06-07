@@ -106,14 +106,16 @@ class AdminModel
 
     private function activeInvoiceCondition(string $alias = 'i'): string
     {
+        // فاتورة "فعّالة" = غير ملغاة + غير محذوفة منطقياً + فاتورتها المرتبطة (إن وُجدت) فعّالة
         return "{$alias}.cancelled_at IS NULL
+            AND {$alias}.is_deleted = FALSE
             AND (
                 {$alias}.related_invoice_id IS NULL
                 OR NOT EXISTS (
                     SELECT 1
                     FROM invoices rel
                     WHERE rel.invoice_id = {$alias}.related_invoice_id
-                      AND rel.cancelled_at IS NOT NULL
+                      AND (rel.cancelled_at IS NOT NULL OR rel.is_deleted = TRUE)
                 )
             )";
     }
@@ -503,7 +505,7 @@ class AdminModel
         return $this->getRecord($table, (string) $id);
     }
 
-    public function deleteRecord(string $table, int|string $id): void
+    public function deleteRecord(string $table, int|string $id, ?int $userId = null): void
     {
         $meta = $this->requireTableMeta($table);
         $pk = $meta['primary_key'];
@@ -511,13 +513,15 @@ class AdminModel
             throw new InvalidArgumentException('السجل المطلوب حذفه غير موجود.');
         }
 
-        // 🔁 معالجة خاصة لحذف السندات (الفواتير):
-        //   عند حذف فاتورة يجب:
+        // 🔁 معالجة خاصة لحذف السندات (الفواتير) — حذف منطقي (Soft Delete):
+        //   عند حذف فاتورة يتم:
+        //     (0) تحويلها إلى حالة "محذوفة" (is_deleted=TRUE, serial_number=NULL).
         //     (1) إنقاص رقم التسلسل بمقدار 1 لكل الفواتير اللاحقة من نفس "مجموعة التسلسل"
         //         (A بمفرده، B و C يتشاركان تسلسلاً واحداً يُخزَّن تحت سجل doc_name='B').
         //     (2) إنقاص العداد current_serial في document_types بمقدار 1 لسجل التسلسل المعني.
+        //   الفائدة: تجنب أخطاء FK (تعذر حذف السجل لوجود بيانات مرتبطة به).
         if (strtolower($table) === 'invoices') {
-            $this->deleteInvoiceWithSerialAdjustment((int) $id);
+            $this->deleteInvoiceWithSerialAdjustment((int) $id, $userId);
             return;
         }
 
@@ -545,17 +549,17 @@ class AdminModel
      *   - إعادة ترقيم الفواتير اللاحقة من الأصغر إلى الأكبر يميناً (kept+1 -> kept).
      *   - تحديث العداد في document_types.
      */
-    public function deleteInvoiceWithSerialAdjustment(int $invoiceId): void
+    public function deleteInvoiceWithSerialAdjustment(int $invoiceId, ?int $userId = null): void
     {
         if ($this->conn->inTransaction()) {
             // المعاملة الحالية تكفي
-            $this->performInvoiceDeleteWithAdjustment($invoiceId);
+            $this->performInvoiceDeleteWithAdjustment($invoiceId, $userId);
             return;
         }
 
         $this->conn->beginTransaction();
         try {
-            $this->performInvoiceDeleteWithAdjustment($invoiceId);
+            $this->performInvoiceDeleteWithAdjustment($invoiceId, $userId);
             $this->conn->commit();
         } catch (Throwable $e) {
             if ($this->conn->inTransaction()) {
@@ -565,11 +569,11 @@ class AdminModel
         }
     }
 
-    private function performInvoiceDeleteWithAdjustment(int $invoiceId): void
+    private function performInvoiceDeleteWithAdjustment(int $invoiceId, ?int $userId = null): void
     {
-        // 1) جلب بيانات الفاتورة قبل الحذف
+        // 1) جلب بيانات الفاتورة قبل الحذف المنطقي
         $infoStmt = $this->conn->prepare(
-            'SELECT i.invoice_id, i.serial_number, i.doc_type_id, i.related_invoice_id, dt.doc_name
+            'SELECT i.invoice_id, i.serial_number, i.doc_type_id, i.related_invoice_id, i.is_deleted, dt.doc_name
              FROM invoices i
              LEFT JOIN document_types dt ON dt.doc_type_id = i.doc_type_id
              WHERE i.invoice_id = :id
@@ -582,16 +586,21 @@ class AdminModel
             throw new InvalidArgumentException('الفاتورة المطلوب حذفها غير موجودة.');
         }
 
+        // حماية: لا نعيد حذف فاتورة محذوفة أصلاً
+        if (!empty($invoice['is_deleted'])) {
+            throw new InvalidArgumentException('هذه الفاتورة محذوفة مسبقاً.');
+        }
+
         $serialNumber = $invoice['serial_number'] !== null ? (int) $invoice['serial_number'] : null;
         $docTypeId    = $invoice['doc_type_id']  !== null ? (int) $invoice['doc_type_id']  : null;
         $docName      = $invoice['doc_name'] !== null ? (string) $invoice['doc_name'] : '';
 
-        // 2) قائمة السندات المرتبطة (B↔A بحالة الإعفاء الجزئي) - تُحذف تلقائياً عبر CASCADE
+        // 2) جلب بيانات السند المرتبط (B↔A في حالة الإعفاء الجزئي) — لإجراء حذف منطقي له أيضاً
         $relatedInvoiceId = $invoice['related_invoice_id'] !== null ? (int) $invoice['related_invoice_id'] : null;
         $relatedInfo = null;
         if ($relatedInvoiceId !== null) {
             $relStmt = $this->conn->prepare(
-                'SELECT i.invoice_id, i.serial_number, i.doc_type_id, dt.doc_name
+                'SELECT i.invoice_id, i.serial_number, i.doc_type_id, i.is_deleted, dt.doc_name
                  FROM invoices i
                  LEFT JOIN document_types dt ON dt.doc_type_id = i.doc_type_id
                  WHERE i.invoice_id = :id
@@ -599,7 +608,7 @@ class AdminModel
             );
             $relStmt->execute([':id' => (string) $relatedInvoiceId]);
             $rel = $relStmt->fetch(PDO::FETCH_ASSOC);
-            if ($rel) {
+            if ($rel && empty($rel['is_deleted'])) {
                 $relatedInfo = [
                     'invoice_id'   => (int) $rel['invoice_id'],
                     'serial_number'=> $rel['serial_number'] !== null ? (int) $rel['serial_number'] : null,
@@ -609,26 +618,56 @@ class AdminModel
             }
         }
 
-        // 3) حذف الفاتورة (CASCADE يحذف invoice_details والفاتورة المرتبطة عبر FK)
-        $delStmt = $this->conn->prepare('DELETE FROM invoices WHERE invoice_id = :id');
-        $delStmt->execute([':id' => (string) $invoiceId]);
+        // 3) حذف منطقي (Soft Delete) للفاتورة:
+        //    - is_deleted = TRUE
+        //    - serial_number = NULL (تحرير الرقم وتجنب تعارض الفهرس الجزئي UNIQUE)
+        //    - deleted_at = NOW(), deleted_by = userId
+        //    - shift_closure_id = NULL (فصلها عن أي إقفال سابق إن وُجد)
+        //    ملاحظة: invoice_details تبقى مرتبطة (للسجل التاريخي والمراجعة)
+        $delStmt = $this->conn->prepare(
+            'UPDATE invoices
+                SET is_deleted    = TRUE,
+                    serial_number = NULL,
+                    deleted_at    = NOW(),
+                    deleted_by    = :uid,
+                    shift_closure_id = NULL,
+                    updated_at    = NOW()
+              WHERE invoice_id = :id'
+        );
+        $delStmt->execute([
+            ':uid' => $userId !== null ? (string) $userId : null,
+            ':id'  => (string) $invoiceId,
+        ]);
 
-        // 4) تطبيق إعادة الترقيم للسند المحذوف (إن كان يحمل رقماً تسلسلياً)
+        // 4) حذف منطقي للسند المرتبط (إن وُجد) — لأن CASCADE لم يعد ينطبق على UPDATE
+        if ($relatedInfo !== null) {
+            $delRelStmt = $this->conn->prepare(
+                'UPDATE invoices
+                    SET is_deleted    = TRUE,
+                        serial_number = NULL,
+                        deleted_at    = NOW(),
+                        deleted_by    = :uid,
+                        shift_closure_id = NULL,
+                        updated_at    = NOW()
+                  WHERE invoice_id = :id AND is_deleted = FALSE'
+            );
+            $delRelStmt->execute([
+                ':uid' => $userId !== null ? (string) $userId : null,
+                ':id'  => (string) $relatedInfo['invoice_id'],
+            ]);
+        }
+
+        // 5) تطبيق إعادة الترقيم للسند المحذوف (إن كان يحمل رقماً تسلسلياً)
         if ($docTypeId !== null && $serialNumber !== null && $serialNumber > 0 && $docName !== '') {
             $this->adjustSerialsAfterDeletion($docName, $serialNumber);
         }
 
-        // 5) تطبيق إعادة الترقيم للسند المرتبط (إن وُجد ولم يكن قد حُذف ضمن CASCADE)
-        if ($relatedInfo !== null) {
-            // بعد CASCADE قد يكون السجل قد حُذف، نتحقق:
-            $check = $this->conn->prepare('SELECT 1 FROM invoices WHERE invoice_id = :id LIMIT 1');
-            $check->execute([':id' => (string) $relatedInfo['invoice_id']]);
-            $stillExists = (bool) $check->fetchColumn();
-            // CASCADE في FK related_invoice_id يحذف السجل المرتبط تلقائياً
-            // فنُطبق إعادة الترقيم بناءً على بياناته المحفوظة
-            if (!$stillExists && $relatedInfo['doc_type_id'] !== null && $relatedInfo['serial_number'] !== null && $relatedInfo['doc_name'] !== '') {
-                $this->adjustSerialsAfterDeletion($relatedInfo['doc_name'], $relatedInfo['serial_number']);
-            }
+        // 6) تطبيق إعادة الترقيم للسند المرتبط (إن وُجد)
+        if ($relatedInfo !== null
+            && $relatedInfo['doc_type_id'] !== null
+            && $relatedInfo['serial_number'] !== null
+            && $relatedInfo['doc_name'] !== '') {
+            $this->adjustSerialsAfterDeletion($relatedInfo['doc_name'], $relatedInfo['serial_number']);
         }
     }
 

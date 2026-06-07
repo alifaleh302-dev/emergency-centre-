@@ -260,7 +260,8 @@ class AdminController extends BaseController
             $oldValues = null;
             try { $oldValues = $this->model->getRecord($table, $id); } catch (Throwable $e) { $oldValues = null; }
 
-            $this->model->deleteRecord($table, $id);
+            // تمرير userId لتسجيل من قام بالحذف (الحذف المنطقي للفواتير)
+            $this->model->deleteRecord($table, $id, (int) $this->userId);
 
             $this->audit->log($this->userId, $this->username, 'DELETE', $table, (string) $id, $oldValues, null);
 
@@ -268,6 +269,7 @@ class AdminController extends BaseController
         } catch (InvalidArgumentException $e) {
             $this->error($e->getMessage(), 422);
         } catch (PDOException $e) {
+            error_log('admin/delete PDO: ' . $e->getMessage());
             $this->error('تعذر حذف السجل لوجود بيانات مرتبطة به.', 409);
         } catch (Throwable $e) {
             error_log('admin/delete: ' . $e->getMessage());

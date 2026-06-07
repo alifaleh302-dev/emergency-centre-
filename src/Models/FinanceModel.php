@@ -152,14 +152,16 @@ class FinanceModel
 
     private function activeInvoiceSql(string $invoiceAlias = 'i'): string
     {
+        // فاتورة "فعّالة" = غير ملغاة + غير محذوفة منطقياً + فاتورتها المرتبطة (إن وُجدت) فعّالة
         return "{$invoiceAlias}.cancelled_at IS NULL
+            AND {$invoiceAlias}.is_deleted = FALSE
             AND (
                 {$invoiceAlias}.related_invoice_id IS NULL
                 OR NOT EXISTS (
                     SELECT 1
                     FROM invoices rel
                     WHERE rel.invoice_id = {$invoiceAlias}.related_invoice_id
-                      AND rel.cancelled_at IS NOT NULL
+                      AND (rel.cancelled_at IS NOT NULL OR rel.is_deleted = TRUE)
                 )
             )";
     }

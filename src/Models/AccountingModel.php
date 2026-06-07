@@ -45,6 +45,7 @@ class AccountingModel
                 WHERE i.doc_type_id IS NULL
                   AND i.accountant_id IS NULL
                   AND i.cancelled_at IS NULL
+                  AND i.is_deleted = FALSE
                   AND i.created_at >= :start_at
                   AND i.created_at < :end_at
                 ORDER BY i.created_at ASC";
@@ -164,14 +165,16 @@ class AccountingModel
 
     private function activeInvoiceCondition(string $alias = 'i'): string
     {
+        // فاتورة "فعّالة" = غير ملغاة + غير محذوفة منطقياً + فاتورتها المرتبطة (إن وُجدت) فعّالة
         return "{$alias}.cancelled_at IS NULL
+            AND {$alias}.is_deleted = FALSE
             AND (
                 {$alias}.related_invoice_id IS NULL
                 OR NOT EXISTS (
                     SELECT 1
                     FROM invoices rel
                     WHERE rel.invoice_id = {$alias}.related_invoice_id
-                      AND rel.cancelled_at IS NOT NULL
+                      AND (rel.cancelled_at IS NOT NULL OR rel.is_deleted = TRUE)
                 )
             )";
     }
@@ -1110,6 +1113,7 @@ class AccountingModel
                     WHERE i.doc_type_id IS NULL
                       AND i.accountant_id IS NULL
                       AND i.cancelled_at IS NULL
+                      AND i.is_deleted = FALSE
                       AND v.shift_id = :sid
                     ORDER BY i.created_at ASC";
             $stmt = $this->conn->prepare($sql);
@@ -1304,6 +1308,7 @@ class AccountingModel
                  WHERE i.doc_type_id IS NULL
                    AND i.accountant_id IS NULL
                    AND i.cancelled_at IS NULL
+                   AND i.is_deleted = FALSE
                    AND v.shift_id = :sid"
             );
             $stmt->execute([':sid' => $shiftId]);
