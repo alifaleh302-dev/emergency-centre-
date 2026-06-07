@@ -327,6 +327,84 @@ CREATE TABLE IF NOT EXISTS Medical_Results (
 | `POST` | `/api/accounting/pay_invoice` |
 | `GET`  | `/api/accounting/daily_treasury` |
 | `POST` | `/api/accounting/revenues_drilldown` |
+| `POST` | `/api/accounting/close_shift` |
+| `POST` | `/api/accounting/reopen_shift` |
+
+## 🕒 نظام الفترات المالية (Shifts System)
+
+أُعيدت هيكلة نظام إدارة الفترات المالية بالكامل عبر **8 مراحل** موثّقة في [`docs/SHIFTS_REFACTOR_PLAN.md`](docs/SHIFTS_REFACTOR_PLAN.md). للملخّص التنفيذي الشامل راجع: [`docs/changelogs/CHANGES_SHIFTS_REFACTOR.md`](docs/changelogs/CHANGES_SHIFTS_REFACTOR.md).
+
+### المعمارية الأساسية
+
+- **جدول `shifts`** (master): مصدر الحقيقة الوحيد لتعريف فترات كل يوم (`shift_date`, `shift_type`, `start_time`, `end_time`, `day_mode`, `status`).
+- **`visits.shift_id`** (FK → `shifts.shift_id`): كل زيارة مرتبطة بفترتها مباشرةً، فلا تعتمد التقارير التاريخية على `EXTRACT(HOUR FROM created_at)` بعد الآن.
+- **`src/Utils/ShiftService.php`**: خدمة مركزية تُغلّف كل منطق الفترات (إنشاء، حلّ، إقفال، فحص انتهاء الصلاحية).
+- **مستخدم النظام** (`user_id=0`, username=`__system__`): يُستخدم كـ `closed_by` للإقفال التلقائي.
+
+### وضع اليوم (`day_mode`)
+
+يدعم النظام ثلاثة أوضاع لكل يوم على حدة:
+
+| الوضع | المعنى |
+|---|---|
+| `both` (افتراضي) | فترتان: صباحية + مسائية، يفصل بينهما `split_time` (افتراضياً 12:00) |
+| `morning_only` | يوم كامل صباحي (00:00 → 24:00) — لا توجد فترة مسائية |
+| `evening_only` | يوم كامل مسائي (00:00 → 24:00) — لا توجد فترة صباحية |
+
+يُضبط الوضع لكل يوم عبر **قرص الساعة التفاعلي** في شاشة الإدمن، الذي يستدعي:
+
+```
+POST /api/admin/shifts/save_boundaries
+Body: { shift_date, split_time, day_mode }
+```
+
+### الإقفال التلقائي (Auto-close)
+
+- خدمة `AccountingModel::runAutoClosurePass()` تكتشف الفترات المفتوحة التي انقضى وقت نهايتها وتُغلقها آلياً.
+- يتم تشغيلها عبر **Lazy Hook** في `public/api/index.php` عند الوصول لمسارات `accounting/*` و `doctor/send_orders` (لا حاجة لـ cron).
+- كل عملية إقفال تلقائي تُسجَّل في `audit_logs` بإجراء `AUTO_CLOSE` ومستخدم نظام `user_id=0`.
+
+### قواعد إعادة الفتح
+
+- إعادة فتح فترة **مسموحة** إذا لم تكن الفترة التالية قد بدأت بعد (`NOW() < next_shift_start_time`).
+- بعد بدء الفترة التالية تُرفض إعادة الفتح بـ `RuntimeException` لحماية تكامل البيانات.
+
+### قواعد الإقفال اليدوي
+
+- يُرفض إقفال فترة تحتوي فواتير معلّقة (`paid_at IS NULL AND cancelled_at IS NULL`).
+- يُرفض إقفال فترة فارغة (لا فواتير).
+- يُرفض إعادة إقفال فترة مُقفلة سابقاً.
+
+### مسارات الـ API الخاصة بالفترات
+
+| الطريقة | المسار | الوصف |
+|---|---|---|
+| `POST` | `/api/accounting/close_shift` | إقفال يدوي للفترة الحالية مع فحص الفواتير المعلّقة |
+| `POST` | `/api/accounting/reopen_shift` | إعادة فتح الفترة الأخيرة (مع قيد زمني) |
+| `POST` | `/api/admin/reopen_shift` | إعادة فتح إدارية بصلاحيات أوسع |
+| `POST` | `/api/admin/shifts/save_boundaries` | حفظ حدود فترات يوم محدد (قرص الساعة) |
+| `GET`  | `/api/reports/daily_view` | تقرير اليومية الموحّد (`?date=YYYY-MM-DD&shift_type=morning\|evening\|all`) |
+| `GET`  | `/api/accounting/previous_shift_check` | فحص قبلي قبل عرض شاشة الإقفال |
+
+### اختبار السيناريوهات
+
+سكربت شامل يُغطّي 10 سيناريوهات حرجة (إقفال يدوي/تلقائي، إعادة الفتح، يوم كامل صباحي/مسائي، قيود قاعدة البيانات). آمن للتشغيل على الإنتاج (يستخدم `SAVEPOINT/ROLLBACK`):
+
+```bash
+psql "$DATABASE_URL" -f database/tests/PHASE_8_SHIFTS_SCENARIOS.sql
+```
+
+النتيجة المتوقعة: **10/10 PASS ✓**.
+
+### الـ Migrations المرتبطة
+
+| Migration | الوصف |
+|---|---|
+| `012_shifts_closures.sql` | جدول الإقفالات الأصلي (Phase 1) |
+| `014_shift_boundaries_and_payment_order.sql` | إعدادات الحدود وترتيب الدفع |
+| `015_reopen_shift_and_audit_action.sql` | إعادة الفتح + إجراء `REOPEN` |
+| `016_shifts_master_table_and_visit_link.sql` | **جدول `shifts` الجديد + ربط الزيارات** |
+| `017_audit_log_auto_close_action.sql` | إضافة إجراء `AUTO_CLOSE` |
 
 ## Real-time updates عبر Pusher
 
