@@ -252,25 +252,43 @@ class AdminController extends BaseController
         try {
             $table = $this->sanitizeText($this->getField($data, 'table'), 'table', 120);
             $id = $this->sanitizeIdentifier($this->getField($data, 'id'), 'id');
+            $confirmCascade = (bool) $this->getField($data, 'confirm_cascade', false);
+            $reason = $this->sanitizeText($this->getField($data, 'reason', ''), 'reason', 255, true);
 
             if ($table === 'users' && (string) $id === (string) $this->userId) {
                 throw new InvalidArgumentException('لا يمكن حذف الحساب الحالي المستخدم في الجلسة.');
             }
 
+            if (in_array($table, ['departments', 'service_categories'], true) && !$confirmCascade) {
+                $impact = $this->model->getCascadeImpact($table, $id);
+                if (!empty($impact['has_dependencies'])) {
+                    $this->success([
+                        'requires_confirmation' => true,
+                        'impact' => $impact,
+                    ], $impact['confirmation_message']);
+                    return;
+                }
+            }
+
             $oldValues = null;
             try { $oldValues = $this->model->getRecord($table, $id); } catch (Throwable $e) { $oldValues = null; }
 
-            // تمرير userId لتسجيل من قام بالحذف (الحذف المنطقي للفواتير)
-            $this->model->deleteRecord($table, $id, (int) $this->userId);
+            $result = $this->model->deleteRecord($table, $id, (int) $this->userId, $reason !== '' ? $reason : null, $confirmCascade);
 
-            $this->audit->log($this->userId, $this->username, 'DELETE', $table, (string) $id, $oldValues, null);
+            $this->audit->log($this->userId, $this->username, 'DELETE', $table, (string) $id, $oldValues, [
+                'soft_delete' => $result['soft_delete'] ?? false,
+                'cascaded'    => $result['cascaded'] ?? [],
+            ]);
 
-            $this->success(null, 'تم حذف السجل بنجاح.');
+            $this->success([
+                'soft_delete' => $result['soft_delete'] ?? false,
+                'cascaded'    => $result['cascaded'] ?? [],
+            ], $result['message'] ?? 'تم حذف السجل بنجاح.');
         } catch (InvalidArgumentException $e) {
             $this->error($e->getMessage(), 422);
         } catch (PDOException $e) {
             error_log('admin/delete PDO: ' . $e->getMessage());
-            $this->error('تعذر حذف السجل لوجود بيانات مرتبطة به.', 409);
+            $this->error('تعذر حذف السجل بسبب قيد في قاعدة البيانات.', 409);
         } catch (Throwable $e) {
             error_log('admin/delete: ' . $e->getMessage());
             $this->error('تعذر حذف السجل المطلوب.', 500);

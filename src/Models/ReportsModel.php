@@ -239,13 +239,13 @@ class ReportsModel
                 CAST(id.ministry_share_at_time AS FLOAT) AS ministry_svc,
                 CAST(COALESCE(sm.ministry_share, 0) * id.quantity AS FLOAT) AS ministry_svc_fallback
             FROM invoices i
-            LEFT JOIN visits v ON v.visit_id = i.visit_id
+            LEFT JOIN visits v ON v.visit_id = i.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
             LEFT JOIN shifts s ON s.shift_id = v.shift_id
             JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
             JOIN invoice_details id ON id.invoice_id = i.invoice_id
-            JOIN services_master sm ON id.service_id = sm.service_id
-            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
-            LEFT JOIN departments d ON sc.department_id = d.department_id
+            JOIN services_master sm ON id.service_id = sm.service_id AND COALESCE(sm.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id AND COALESCE(sc.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+            LEFT JOIN departments d ON sc.department_id = d.department_id AND COALESCE(d.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
             WHERE {$this->activeInvoiceCondition('i')}
               AND COALESCE(s.shift_date, DATE(i.paid_at AT TIME ZONE :tz)) = :report_date
               AND dt.doc_name IN ('A', 'B', 'C')
@@ -460,7 +460,7 @@ class ReportsModel
                 MIN(t.serial_number) AS serial_from,
                 MAX(t.serial_number) AS serial_to
             FROM examination_tickets t
-            JOIN visits v ON t.visit_id = v.visit_id
+            JOIN visits v ON t.visit_id = v.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
             LEFT JOIN shifts s ON s.shift_id = v.shift_id
             WHERE v.cancelled_at IS NULL
               AND COALESCE(s.shift_date, DATE(t.created_at AT TIME ZONE :tz)) = :report_date
@@ -577,7 +577,7 @@ class ReportsModel
                 MAX(i.serial_number) AS serial_to,
                 COUNT(*) AS doc_count
             FROM invoices i
-            LEFT JOIN visits v ON v.visit_id = i.visit_id
+            LEFT JOIN visits v ON v.visit_id = i.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
             LEFT JOIN shifts s ON s.shift_id = v.shift_id
             JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
             WHERE {$this->activeInvoiceCondition('i')}
@@ -661,7 +661,7 @@ class ReportsModel
                     COUNT(*) AS doc_count
                 FROM laboratory_documents ld
                 LEFT JOIN invoices i ON ld.invoice_id = i.invoice_id
-                LEFT JOIN visits v ON i.visit_id = v.visit_id
+                LEFT JOIN visits v ON i.visit_id = v.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
                 LEFT JOIN shifts s ON s.shift_id = v.shift_id
                 WHERE COALESCE(s.shift_date, DATE(ld.created_at AT TIME ZONE :tz)) = :report_date
                   AND (ld.invoice_id IS NULL OR (i.cancelled_at IS NULL AND i.is_deleted = FALSE))

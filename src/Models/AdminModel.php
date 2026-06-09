@@ -91,6 +91,10 @@ class AdminModel
         'setting_group' => 'تصنيف الإعداد',
         'description' => 'الوصف',
         'updated_by' => 'آخر تعديل بواسطة',
+        'is_deleted' => 'محذوف؟',
+        'deleted_at' => 'تاريخ الحذف',
+        'deleted_by' => 'حذف بواسطة',
+        'deleted_reason' => 'سبب الحذف',
     ];
 
     public function __construct(PDO $db, string $driver = 'pgsql')
@@ -505,7 +509,7 @@ class AdminModel
         return $this->getRecord($table, (string) $id);
     }
 
-    public function deleteRecord(string $table, int|string $id, ?int $userId = null): void
+    public function deleteRecord(string $table, int|string $id, ?int $userId = null, ?string $reason = null, bool $confirmCascade = false): array
     {
         $meta = $this->requireTableMeta($table);
         $pk = $meta['primary_key'];
@@ -513,20 +517,251 @@ class AdminModel
             throw new InvalidArgumentException('السجل المطلوب حذفه غير موجود.');
         }
 
-        // 🔁 معالجة خاصة لحذف السندات (الفواتير) — حذف منطقي (Soft Delete):
-        //   عند حذف فاتورة يتم:
-        //     (0) تحويلها إلى حالة "محذوفة" (is_deleted=TRUE, serial_number=NULL).
-        //     (1) إنقاص رقم التسلسل بمقدار 1 لكل الفواتير اللاحقة من نفس "مجموعة التسلسل"
-        //         (A بمفرده، B و C يتشاركان تسلسلاً واحداً يُخزَّن تحت سجل doc_name='B').
-        //     (2) إنقاص العداد current_serial في document_types بمقدار 1 لسجل التسلسل المعني.
-        //   الفائدة: تجنب أخطاء FK (تعذر حذف السجل لوجود بيانات مرتبطة به).
-        if (strtolower($table) === 'invoices') {
+        $lower = strtolower($table);
+
+        if ($lower === 'invoices') {
             $this->deleteInvoiceWithSerialAdjustment((int) $id, $userId);
-            return;
+            return [
+                'soft_delete' => true,
+                'cascaded'    => [],
+                'message'     => 'تم حذف الفاتورة بنجاح.',
+            ];
+        }
+
+        switch ($lower) {
+            case 'patients':
+                return $this->softDeletePatient((int) $id, $userId, $reason);
+            case 'visits':
+                return $this->softDeleteVisit((int) $id, $userId, $reason);
+            case 'services_master':
+                return $this->softDeleteService((int) $id, $userId, $reason);
+            case 'service_categories':
+                return $this->softDeleteServiceCategory((int) $id, $userId, $reason, $confirmCascade);
+            case 'departments':
+                return $this->softDeleteDepartment((int) $id, $userId, $reason, $confirmCascade);
         }
 
         $stmt = $this->conn->prepare('DELETE FROM ' . $this->quoteIdentifier($table) . ' WHERE ' . $this->quoteIdentifier($pk) . ' = :id');
         $stmt->execute([':id' => (string) $id]);
+        return [
+            'soft_delete' => false,
+            'cascaded'    => [],
+            'message'     => 'تم حذف السجل بنجاح.',
+        ];
+    }
+
+    private function softDeletePatient(int $patientId, ?int $userId, ?string $reason): array
+    {
+        $this->conn->beginTransaction();
+        try {
+            $stmt = $this->conn->prepare(
+                'UPDATE patients SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = :uid, deleted_reason = :reason, updated_at = NOW() WHERE patient_id = :id AND COALESCE(is_deleted, FALSE) = FALSE'
+            );
+            $stmt->execute([':id' => $patientId, ':uid' => $userId, ':reason' => $reason]);
+
+            $visitsStmt = $this->conn->prepare(
+                "UPDATE visits SET status = 'Deleted', updated_at = NOW() WHERE patient_id = :pid AND status NOT IN ('Deleted', 'Cancelled')"
+            );
+            $visitsStmt->execute([':pid' => $patientId]);
+            $affectedVisits = $visitsStmt->rowCount();
+
+            $this->conn->commit();
+            return [
+                'soft_delete' => true,
+                'cascaded'    => ['visits' => $affectedVisits],
+                'message'     => 'تم حذف المريض وإخفاؤه من الواجهات التشغيلية.' . ($affectedVisits > 0 ? ' (تم إخفاء ' . $affectedVisits . ' زيارة مرتبطة)' : ''),
+            ];
+        } catch (Throwable $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    private function softDeleteVisit(int $visitId, ?int $userId, ?string $reason): array
+    {
+        $stmt = $this->conn->prepare("UPDATE visits SET status = 'Deleted', updated_at = NOW() WHERE visit_id = :id AND status NOT IN ('Deleted', 'Cancelled')");
+        $stmt->execute([':id' => $visitId]);
+        return [
+            'soft_delete' => true,
+            'cascaded'    => [],
+            'message'     => 'تم حذف الزيارة وإخفاؤها من الواجهات التشغيلية.',
+        ];
+    }
+
+    private function softDeleteService(int $serviceId, ?int $userId, ?string $reason): array
+    {
+        $stmt = $this->conn->prepare(
+            'UPDATE services_master SET is_deleted = TRUE, is_active = FALSE, deleted_at = NOW(), deleted_by = :uid, deleted_reason = :reason, updated_at = NOW() WHERE service_id = :id AND COALESCE(is_deleted, FALSE) = FALSE'
+        );
+        $stmt->execute([':id' => $serviceId, ':uid' => $userId, ':reason' => $reason]);
+        return [
+            'soft_delete' => true,
+            'cascaded'    => [],
+            'message'     => 'تم حذف الخدمة بنجاح.',
+        ];
+    }
+
+    private function softDeleteServiceCategory(int $categoryId, ?int $userId, ?string $reason, bool $confirmCascade): array
+    {
+        $this->conn->beginTransaction();
+        try {
+            $servicesStmt = $this->conn->prepare(
+                'UPDATE services_master SET is_deleted = TRUE, is_active = FALSE, deleted_at = NOW(), deleted_by = :uid, deleted_reason = :reason, updated_at = NOW() WHERE category_id = :cid AND COALESCE(is_deleted, FALSE) = FALSE'
+            );
+            $servicesStmt->execute([
+                ':cid' => $categoryId,
+                ':uid' => $userId,
+                ':reason' => $reason !== null ? ($reason . ' (حذف متسلسل من تصنيف)') : ('حذف متسلسل من تصنيف #' . $categoryId),
+            ]);
+            $servicesAffected = $servicesStmt->rowCount();
+
+            $catStmt = $this->conn->prepare(
+                'UPDATE service_categories SET is_deleted = TRUE, is_active = FALSE, deleted_at = NOW(), deleted_by = :uid, deleted_reason = :reason, updated_at = NOW() WHERE category_id = :id AND COALESCE(is_deleted, FALSE) = FALSE'
+            );
+            $catStmt->execute([':id' => $categoryId, ':uid' => $userId, ':reason' => $reason]);
+
+            $this->conn->commit();
+            return [
+                'soft_delete' => true,
+                'cascaded'    => ['services_master' => $servicesAffected],
+                'message'     => 'تم حذف التصنيف' . ($servicesAffected > 0 ? (' و' . $servicesAffected . ' خدمة مرتبطة به') : '') . '.',
+            ];
+        } catch (Throwable $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    private function softDeleteDepartment(int $departmentId, ?int $userId, ?string $reason, bool $confirmCascade): array
+    {
+        $this->conn->beginTransaction();
+        try {
+            $catIdsStmt = $this->conn->prepare(
+                'SELECT category_id FROM service_categories WHERE department_id = :did AND COALESCE(is_deleted, FALSE) = FALSE'
+            );
+            $catIdsStmt->execute([':did' => $departmentId]);
+            $catIds = array_map('intval', $catIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+            $servicesAffected = 0;
+            $categoriesAffected = 0;
+
+            if (!empty($catIds)) {
+                $placeholders = implode(',', array_map(static fn($i) => ':c' . $i, array_keys($catIds)));
+
+                $servicesParams = [':uid' => $userId, ':reason' => 'حذف متسلسل من قسم #' . $departmentId];
+                foreach ($catIds as $i => $cid) {
+                    $servicesParams[':c' . $i] = $cid;
+                }
+                $servicesStmt = $this->conn->prepare(
+                    'UPDATE services_master SET is_deleted = TRUE, is_active = FALSE, deleted_at = NOW(), deleted_by = :uid, deleted_reason = :reason, updated_at = NOW() WHERE category_id IN (' . $placeholders . ') AND COALESCE(is_deleted, FALSE) = FALSE'
+                );
+                $servicesStmt->execute($servicesParams);
+                $servicesAffected = $servicesStmt->rowCount();
+
+                $catsParams = [':uid' => $userId, ':reason' => 'حذف متسلسل من قسم #' . $departmentId];
+                foreach ($catIds as $i => $cid) {
+                    $catsParams[':c' . $i] = $cid;
+                }
+                $catsStmt = $this->conn->prepare(
+                    'UPDATE service_categories SET is_deleted = TRUE, is_active = FALSE, deleted_at = NOW(), deleted_by = :uid, deleted_reason = :reason, updated_at = NOW() WHERE category_id IN (' . $placeholders . ') AND COALESCE(is_deleted, FALSE) = FALSE'
+                );
+                $catsStmt->execute($catsParams);
+                $categoriesAffected = $catsStmt->rowCount();
+            }
+
+            $deptStmt = $this->conn->prepare(
+                'UPDATE departments SET is_deleted = TRUE, is_active = FALSE, deleted_at = NOW(), deleted_by = :uid, deleted_reason = :reason, updated_at = NOW() WHERE department_id = :id AND COALESCE(is_deleted, FALSE) = FALSE'
+            );
+            $deptStmt->execute([':id' => $departmentId, ':uid' => $userId, ':reason' => $reason]);
+
+            $this->conn->commit();
+            $parts = [];
+            if ($categoriesAffected > 0) {
+                $parts[] = $categoriesAffected . ' تصنيف';
+            }
+            if ($servicesAffected > 0) {
+                $parts[] = $servicesAffected . ' خدمة';
+            }
+            $suffix = !empty($parts) ? (' (ومعه ' . implode(' و ', $parts) . ' مرتبطة)') : '';
+            return [
+                'soft_delete' => true,
+                'cascaded'    => [
+                    'service_categories' => $categoriesAffected,
+                    'services_master'    => $servicesAffected,
+                ],
+                'message'     => 'تم حذف القسم بنجاح' . $suffix . '.',
+            ];
+        } catch (Throwable $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    public function getCascadeImpact(string $table, int|string $id): array
+    {
+        $lower = strtolower($table);
+        if ($lower === 'service_categories') {
+            $stmt = $this->conn->prepare('SELECT COUNT(*) FROM services_master WHERE category_id = :cid AND COALESCE(is_deleted, FALSE) = FALSE');
+            $stmt->execute([':cid' => (string) $id]);
+            $count = (int) $stmt->fetchColumn();
+
+            $catNameStmt = $this->conn->prepare('SELECT category_name FROM service_categories WHERE category_id = :id');
+            $catNameStmt->execute([':id' => (string) $id]);
+            $catName = (string) ($catNameStmt->fetchColumn() ?: '');
+
+            return [
+                'has_dependencies' => $count > 0,
+                'services_count'   => $count,
+                'categories_count' => 0,
+                'category_name'    => $catName,
+                'confirmation_message' => $count > 0
+                    ? ('تحتوي فئة \'' . $catName . '\' على ' . $count . ' خدمة، هل توافق على حذف الخدمات المرتبطة بها؟')
+                    : 'لا توجد بيانات مرتبطة بهذا التصنيف.',
+            ];
+        }
+
+        if ($lower === 'departments') {
+            $catStmt = $this->conn->prepare('SELECT COUNT(*) FROM service_categories WHERE department_id = :did AND COALESCE(is_deleted, FALSE) = FALSE');
+            $catStmt->execute([':did' => (string) $id]);
+            $catCount = (int) $catStmt->fetchColumn();
+
+            $svcStmt = $this->conn->prepare(
+                'SELECT COUNT(*) FROM services_master sm JOIN service_categories sc ON sm.category_id = sc.category_id WHERE sc.department_id = :did AND COALESCE(sm.is_deleted, FALSE) = FALSE AND COALESCE(sc.is_deleted, FALSE) = FALSE'
+            );
+            $svcStmt->execute([':did' => (string) $id]);
+            $svcCount = (int) $svcStmt->fetchColumn();
+
+            $deptNameStmt = $this->conn->prepare('SELECT department_name FROM departments WHERE department_id = :id');
+            $deptNameStmt->execute([':id' => (string) $id]);
+            $deptName = (string) ($deptNameStmt->fetchColumn() ?: '');
+
+            $parts = [];
+            if ($catCount > 0) {
+                $parts[] = $catCount . ' تصنيف';
+            }
+            if ($svcCount > 0) {
+                $parts[] = $svcCount . ' خدمة';
+            }
+            $impactText = implode(' و ', $parts);
+
+            return [
+                'has_dependencies' => ($catCount > 0 || $svcCount > 0),
+                'services_count'   => $svcCount,
+                'categories_count' => $catCount,
+                'department_name'  => $deptName,
+                'confirmation_message' => ($catCount > 0 || $svcCount > 0)
+                    ? ('يحتوي قسم \'' . $deptName . '\' على ' . $impactText . '، هل توافق على حذف التصنيفات والخدمات المرتبطة به؟')
+                    : 'لا توجد بيانات مرتبطة بهذا القسم.',
+            ];
+        }
+
+        return ['has_dependencies' => false, 'confirmation_message' => ''];
     }
 
     /**

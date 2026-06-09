@@ -396,8 +396,8 @@ class FinanceModel
                     i.cancel_reason                       AS cancel_reason
                 FROM invoices i
                 JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
-                JOIN visits v          ON i.visit_id    = v.visit_id
-                JOIN patients p        ON v.patient_id  = p.patient_id
+                JOIN visits v          ON i.visit_id    = v.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
+                JOIN patients p        ON v.patient_id  = p.patient_id AND COALESCE(p.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
                 LEFT JOIN users u      ON i.accountant_id = u.user_id
                 LEFT JOIN users du     ON v.doctor_id    = du.user_id
                 LEFT JOIN LATERAL (
@@ -422,8 +422,8 @@ class FinanceModel
                         COALESCE(SUM(sid.ministry_share_at_time), 0)                AS matched_raw_ministry,
                         COALESCE(SUM(GREATEST((sid.service_price_at_time * sid.quantity) - sid.ministry_share_at_time, 0)), 0) AS matched_raw_center
                     FROM invoice_details sid
-                    JOIN services_master ssm ON sid.service_id = ssm.service_id
-                    LEFT JOIN service_categories ssc ON ssm.category_id = ssc.category_id
+                    JOIN services_master ssm ON sid.service_id = ssm.service_id AND COALESCE(ssm.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+                    LEFT JOIN service_categories ssc ON ssm.category_id = ssc.category_id AND COALESCE(ssc.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
                     WHERE sid.invoice_id = detail_link.detail_invoice_id
                     {$detailScopeSql}
                 ) scoped ON TRUE
@@ -479,8 +479,8 @@ class FinanceModel
                     i.cancel_reason                       AS cancel_reason
                 FROM invoices i
                 JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
-                JOIN visits v          ON i.visit_id    = v.visit_id
-                JOIN patients p        ON v.patient_id  = p.patient_id
+                JOIN visits v          ON i.visit_id    = v.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
+                JOIN patients p        ON v.patient_id  = p.patient_id AND COALESCE(p.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
                 LEFT JOIN users u      ON i.accountant_id = u.user_id
                 LEFT JOIN users du     ON v.doctor_id    = du.user_id
                 LEFT JOIN LATERAL (
@@ -536,8 +536,8 @@ class FinanceModel
                 NULL::INTEGER                         AS related_id,
                 NULL::VARCHAR                         AS cancel_reason
             FROM examination_tickets t
-            JOIN visits v       ON t.visit_id   = v.visit_id
-            JOIN patients p     ON v.patient_id = p.patient_id
+            JOIN visits v       ON t.visit_id   = v.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
+            JOIN patients p     ON v.patient_id = p.patient_id AND COALESCE(p.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
             LEFT JOIN users ui  ON t.issued_by  = ui.user_id
             LEFT JOIN users du  ON v.doctor_id  = du.user_id
         ";
@@ -1069,12 +1069,12 @@ class FinanceModel
                 COALESCE(SUM(id.service_price_at_time * id.quantity), 0)       AS revenue,
                 COALESCE(SUM(id.ministry_share_at_time), 0)                    AS ministry_share
             FROM invoice_details id
-            JOIN services_master sm ON id.service_id = sm.service_id
-            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
+            JOIN services_master sm ON id.service_id = sm.service_id AND COALESCE(sm.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id AND COALESCE(sc.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
             JOIN invoices i ON id.invoice_id = i.invoice_id
             JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
-            JOIN visits v ON i.visit_id = v.visit_id
-            JOIN patients p ON v.patient_id = p.patient_id
+            JOIN visits v ON i.visit_id = v.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
+            JOIN patients p ON v.patient_id = p.patient_id AND COALESCE(p.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
             {$reportFilters['where_sql']}
             GROUP BY sm.service_id, sm.service_name
             ORDER BY revenue DESC, sm.service_name ASC
@@ -1186,8 +1186,8 @@ class FinanceModel
                 et.case_name AS case_type_name
             FROM invoices i
             JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
-            JOIN visits v          ON i.visit_id    = v.visit_id
-            JOIN patients p        ON v.patient_id  = p.patient_id
+            JOIN visits v          ON i.visit_id    = v.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
+            JOIN patients p        ON v.patient_id  = p.patient_id AND COALESCE(p.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
             LEFT JOIN users u      ON i.accountant_id = u.user_id
             LEFT JOIN users du     ON v.doctor_id    = du.user_id
             LEFT JOIN emergency_case_types et ON v.case_type_id = et.case_type_id
@@ -1209,9 +1209,9 @@ class FinanceModel
                 sc.category_name,
                 d.department_name
             FROM invoice_details id
-            JOIN services_master sm ON id.service_id = sm.service_id
-            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
-            LEFT JOIN departments d ON sc.department_id = d.department_id
+            JOIN services_master sm ON id.service_id = sm.service_id AND COALESCE(sm.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id AND COALESCE(sc.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+            LEFT JOIN departments d ON sc.department_id = d.department_id AND COALESCE(d.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
             WHERE id.invoice_id = :iid
             ORDER BY id.detail_id
         ";
@@ -1317,8 +1317,8 @@ class FinanceModel
                 u.full_name AS issued_by_name,
                 du.full_name AS doctor_name
             FROM examination_tickets t
-            JOIN visits v       ON t.visit_id   = v.visit_id
-            JOIN patients p     ON v.patient_id = p.patient_id
+            JOIN visits v       ON t.visit_id   = v.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
+            JOIN patients p     ON v.patient_id = p.patient_id AND COALESCE(p.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
             LEFT JOIN users u   ON t.issued_by  = u.user_id
             LEFT JOIN users du  ON v.doctor_id  = du.user_id
             WHERE t.ticket_id = :tid
@@ -1384,13 +1384,13 @@ class FinanceModel
                 ), 0)                                                   AS ministry_share,
                 COALESCE(SUM(id.service_price_at_time * id.quantity), 0) AS total_revenue
             FROM invoice_details id
-            JOIN services_master sm ON id.service_id = sm.service_id
-            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
-            LEFT JOIN departments d ON sc.department_id = d.department_id
+            JOIN services_master sm ON id.service_id = sm.service_id AND COALESCE(sm.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id AND COALESCE(sc.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+            LEFT JOIN departments d ON sc.department_id = d.department_id AND COALESCE(d.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
             JOIN invoices i ON id.invoice_id = i.invoice_id
             JOIN document_types dt ON i.doc_type_id = dt.doc_type_id
-            JOIN visits v ON i.visit_id = v.visit_id
-            JOIN patients p ON v.patient_id = p.patient_id
+            JOIN visits v ON i.visit_id = v.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
+            JOIN patients p ON v.patient_id = p.patient_id AND COALESCE(p.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
             LEFT JOIN LATERAL (
                 SELECT SUM(id2.ministry_share_at_time) AS total_ministry
                 FROM invoice_details id2
@@ -1508,8 +1508,8 @@ class FinanceModel
                     )), 0) AS ministry_share,
                     COALESCE(SUM(t.amount), 0) AS total_revenue
                 FROM examination_tickets t
-                JOIN visits v ON t.visit_id = v.visit_id
-                JOIN patients p ON v.patient_id = p.patient_id
+                JOIN visits v ON t.visit_id = v.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
+                JOIN patients p ON v.patient_id = p.patient_id AND COALESCE(p.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
                 WHERE " . implode(' AND ', $ticketWhere) . "
                 GROUP BY t.ticket_type
                 ORDER BY ministry_share DESC
@@ -1596,7 +1596,7 @@ class FinanceModel
         $departments = $this->conn->query("
             SELECT department_id, department_name
             FROM departments
-            WHERE is_active = TRUE
+            WHERE is_active = TRUE AND COALESCE(is_deleted, FALSE) = FALSE
             ORDER BY sort_order, department_name
         ")->fetchAll(PDO::FETCH_ASSOC);
 
@@ -1604,8 +1604,8 @@ class FinanceModel
         $categories = $this->conn->query("
             SELECT sc.category_id, sc.category_name, sc.department_id, d.department_name
             FROM service_categories sc
-            LEFT JOIN departments d ON sc.department_id = d.department_id
-            WHERE sc.is_active = TRUE
+            LEFT JOIN departments d ON sc.department_id = d.department_id AND COALESCE(d.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+            WHERE sc.is_active = TRUE AND COALESCE(sc.is_deleted, FALSE) = FALSE
             ORDER BY d.sort_order, sc.category_name
         ")->fetchAll(PDO::FETCH_ASSOC);
 
@@ -1616,9 +1616,9 @@ class FinanceModel
                 sc.category_name, sc.department_id, d.department_name,
                 sm.total_price, sm.ministry_share
             FROM services_master sm
-            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id
-            LEFT JOIN departments d ON sc.department_id = d.department_id
-            WHERE sm.is_active = TRUE
+            LEFT JOIN service_categories sc ON sm.category_id = sc.category_id AND COALESCE(sc.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+            LEFT JOIN departments d ON sc.department_id = d.department_id AND COALESCE(d.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
+            WHERE sm.is_active = TRUE AND COALESCE(sm.is_deleted, FALSE) = FALSE
             ORDER BY sc.category_name, sm.service_name
         ")->fetchAll(PDO::FETCH_ASSOC);
 

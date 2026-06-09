@@ -40,8 +40,8 @@ class AccountingModel
                        i.total,
                        p.full_name AS patient_name
                 FROM invoices i
-                LEFT JOIN visits v ON v.visit_id = i.visit_id
-                LEFT JOIN patients p ON p.patient_id = v.patient_id
+                LEFT JOIN visits v ON v.visit_id = i.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
+                LEFT JOIN patients p ON p.patient_id = v.patient_id AND COALESCE(p.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
                 WHERE i.doc_type_id IS NULL
                   AND i.accountant_id IS NULL
                   AND i.cancelled_at IS NULL
@@ -189,6 +189,8 @@ class AccountingModel
                 WHERE i.doc_type_id IS NULL
                   AND i.accountant_id IS NULL
                   AND {$this->activeInvoiceCondition('i')}
+                  AND v.status NOT IN ('Deleted', 'Cancelled')
+                  AND COALESCE(p.is_deleted, FALSE) = FALSE
                 ORDER BY i.created_at ASC";
         $stmt = $this->conn->query($sql);
         return $stmt->fetchAll();
@@ -758,7 +760,7 @@ class AccountingModel
                 JOIN Patients p        ON v.patient_id = p.patient_id
                 JOIN Document_Types dt ON i.doc_type_id = dt.doc_type_id
                 JOIN Users u           ON i.accountant_id = u.user_id
-                LEFT JOIN departments d ON d.department_id = i.department_id
+                LEFT JOIN departments d ON d.department_id = i.department_id AND COALESCE(d.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
                 WHERE {$whereClause}
                 ORDER BY group_order ASC, i.serial_number ASC";
 
@@ -775,7 +777,7 @@ class AccountingModel
         $sql = "SELECT id.detail_id, id.service_id, sm.service_name,
                        id.service_price_at_time AS price, id.quantity
                 FROM invoice_details id
-                JOIN services_master sm ON sm.service_id = id.service_id
+                JOIN services_master sm ON sm.service_id = id.service_id AND COALESCE(sm.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
                 WHERE id.invoice_id = :inv_id
                 ORDER BY id.detail_id ASC";
         $stmt = $this->conn->prepare($sql);
@@ -1130,8 +1132,8 @@ class AccountingModel
                            i.created_at,
                            COALESCE(p.full_name, '') AS patient_name
                     FROM invoices i
-                    JOIN visits v ON v.visit_id = i.visit_id
-                    LEFT JOIN patients p ON p.patient_id = v.patient_id
+                    JOIN visits v ON v.visit_id = i.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
+                    LEFT JOIN patients p ON p.patient_id = v.patient_id AND COALESCE(p.is_deleted, FALSE) = FALSE /* SOFT_DELETE_FILTER */
                     WHERE i.doc_type_id IS NULL
                       AND i.accountant_id IS NULL
                       AND i.cancelled_at IS NULL
@@ -1326,7 +1328,7 @@ class AccountingModel
             $stmt = $this->conn->prepare(
                 "SELECT i.invoice_id
                  FROM invoices i
-                 JOIN visits v ON v.visit_id = i.visit_id
+                 JOIN visits v ON v.visit_id = i.visit_id AND v.status NOT IN ('Deleted', 'Cancelled') /* SOFT_DELETE_FILTER */
                  WHERE i.doc_type_id IS NULL
                    AND i.accountant_id IS NULL
                    AND i.cancelled_at IS NULL

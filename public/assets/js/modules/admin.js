@@ -1649,9 +1649,38 @@ const Admin = {
     },
 
     deleteRecord: async function(tableName, id) {
-        if (!confirm('هل أنت متأكد من حذف هذا السجل؟ قد يفشل الحذف إذا كانت هناك بيانات مرتبطة.')) return;
-        const r = await Core.apiCall('admin/delete', 'POST', { table: tableName, id });
+        const tableLabels = {
+            patients: 'المريض',
+            visits: 'الزيارة',
+            services_master: 'الخدمة',
+            service_categories: 'التصنيف',
+            departments: 'القسم',
+            users: 'المستخدم',
+            invoices: 'الفاتورة',
+        };
+        const softDeleteTables = ['patients', 'visits', 'services_master', 'service_categories', 'departments'];
+        const isSoftDelete = softDeleteTables.includes(tableName);
+        const label = tableLabels[tableName] || 'هذا السجل';
+        const baseMsg = isSoftDelete
+            ? `هل أنت متأكد من حذف ${label}؟
+
+سيتم الحذف الذكي (Soft Delete) — سيبقى السجل في قاعدة البيانات للأغراض التاريخية لكنه لن يظهر في أي واجهة غير إدارية.`
+            : `هل أنت متأكد من حذف ${label}؟`;
+        if (!confirm(baseMsg)) return;
+
+        let r = await Core.apiCall('admin/delete', 'POST', { table: tableName, id });
         if (!r?.success) { Core.showAlert(r?.message || 'تعذر الحذف.', 'error'); return; }
+
+        if (r.data?.requires_confirmation) {
+            const impactMsg = r.message || 'توجد بيانات مرتبطة، هل توافق على حذفها أيضاً؟';
+            if (!confirm(`⚠️ ${impactMsg}\n\nسيتم استخدام الحذف الذكي لهذه العناصر أيضاً.`)) {
+                Core.showAlert('تم إلغاء عملية الحذف.', 'info');
+                return;
+            }
+            r = await Core.apiCall('admin/delete', 'POST', { table: tableName, id, confirm_cascade: true });
+            if (!r?.success) { Core.showAlert(r?.message || 'تعذر الحذف.', 'error'); return; }
+        }
+
         Core.showAlert(r.message || 'تم الحذف.', 'success');
         await this.loadTableData();
     },

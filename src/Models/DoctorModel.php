@@ -23,7 +23,7 @@ class DoctorModel
                        (SELECT u.full_name FROM Visits v3 JOIN users u ON u.user_id = v3.doctor_id
                           WHERE v3.patient_id = p.patient_id AND v3.status = 'Active' LIMIT 1) AS active_visit_doctor
                 FROM Patients p
-                WHERE 1 = 1";
+                WHERE COALESCE(p.is_deleted, FALSE) = FALSE";
         $params = [];
 
         foreach ($keywords as $index => $word) {
@@ -63,7 +63,7 @@ class DoctorModel
 
     public function patientExists(int $patientId): bool
     {
-        $stmt = $this->conn->prepare('SELECT patient_id FROM Patients WHERE patient_id = :patient_id LIMIT 1');
+        $stmt = $this->conn->prepare('SELECT patient_id FROM Patients WHERE patient_id = :patient_id AND COALESCE(is_deleted, FALSE) = FALSE LIMIT 1');
         $stmt->execute([':patient_id' => $patientId]);
         return (bool) $stmt->fetchColumn();
     }
@@ -186,6 +186,7 @@ class DoctorModel
                 JOIN Patients p ON v.patient_id = p.patient_id
                 LEFT JOIN Examination_Tickets et ON et.visit_id = v.visit_id
                 WHERE v.doctor_id = :doctor_id AND v.status = 'Active'
+                  AND COALESCE(p.is_deleted, FALSE) = FALSE
                 ORDER BY v.created_at ASC";
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([':doctor_id' => $doctorId]);
@@ -255,7 +256,10 @@ class DoctorModel
                 FROM services_master sm
                 LEFT JOIN service_categories sc ON sc.category_id = sm.category_id
                 LEFT JOIN departments d         ON d.department_id = sc.department_id
-                WHERE sm.service_id IN ($placeholders)";
+                WHERE sm.service_id IN ($placeholders)
+                  AND COALESCE(sm.is_deleted, FALSE) = FALSE
+                  AND COALESCE(sc.is_deleted, FALSE) = FALSE
+                  AND COALESCE(d.is_deleted, FALSE) = FALSE";
 
         $stmt = $this->conn->prepare($sql);
         $stmt->execute($cleanIds);
@@ -626,10 +630,13 @@ class DoctorModel
                 LEFT JOIN service_categories sc
                     ON sc.department_id = d.department_id
                    AND COALESCE(sc.is_active, TRUE) = TRUE
+                   AND COALESCE(sc.is_deleted, FALSE) = FALSE
                 LEFT JOIN services_master sm
                     ON sm.category_id = sc.category_id
                    AND COALESCE(sm.is_active, TRUE) = TRUE
+                   AND COALESCE(sm.is_deleted, FALSE) = FALSE
                 WHERE COALESCE(d.is_active, TRUE) = TRUE
+                  AND COALESCE(d.is_deleted, FALSE) = FALSE
                 ORDER BY COALESCE(d.sort_order, 999) ASC, d.department_name ASC, sm.service_name ASC";
         $stmt = $this->conn->query($sql);
         return $stmt->fetchAll();
@@ -644,6 +651,7 @@ class DoctorModel
                 LEFT JOIN service_categories sc ON sc.category_id = sm.category_id
                 LEFT JOIN departments d ON d.department_id = sc.department_id
                 WHERE sm.service_id = :service_id
+                  AND COALESCE(sm.is_deleted, FALSE) = FALSE
                 LIMIT 1";
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([':service_id' => $serviceId]);
@@ -721,6 +729,7 @@ class DoctorModel
                 FROM Patients p
                 JOIN Visits v ON p.patient_id = v.patient_id
                 WHERE v.status = 'Completed'
+                  AND COALESCE(p.is_deleted, FALSE) = FALSE
                 GROUP BY p.patient_id, p.full_name
                 ORDER BY MAX(v.created_at) DESC";
         $stmt = $this->conn->query($sql);
