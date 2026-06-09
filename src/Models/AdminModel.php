@@ -572,12 +572,16 @@ class AdminModel
     private function performInvoiceDeleteWithAdjustment(int $invoiceId, ?int $userId = null): void
     {
         // 1) جلب بيانات الفاتورة قبل الحذف المنطقي
+        //    ملاحظة: نستخدم "FOR UPDATE OF i" لقفل جدول invoices فقط،
+        //    لأن PostgreSQL لا يسمح بـ FOR UPDATE على الجانب nullable لـ LEFT JOIN
+        //    (سيرمي: FeatureNotSupported / SQLSTATE 0A000) وكان هذا يظهر للمستخدم
+        //    كرسالة "تعذر حذف السجل لوجود بيانات مرتبطة به" عبر PDOException عامة.
         $infoStmt = $this->conn->prepare(
             'SELECT i.invoice_id, i.serial_number, i.doc_type_id, i.related_invoice_id, i.is_deleted, dt.doc_name
              FROM invoices i
              LEFT JOIN document_types dt ON dt.doc_type_id = i.doc_type_id
              WHERE i.invoice_id = :id
-             FOR UPDATE'
+             FOR UPDATE OF i'
         );
         $infoStmt->execute([':id' => (string) $invoiceId]);
         $invoice = $infoStmt->fetch(PDO::FETCH_ASSOC);
@@ -599,12 +603,13 @@ class AdminModel
         $relatedInvoiceId = $invoice['related_invoice_id'] !== null ? (int) $invoice['related_invoice_id'] : null;
         $relatedInfo = null;
         if ($relatedInvoiceId !== null) {
+            // نفس السبب: قفل invoices فقط (i)، لا يمكن قفل الجانب nullable من LEFT JOIN
             $relStmt = $this->conn->prepare(
                 'SELECT i.invoice_id, i.serial_number, i.doc_type_id, i.is_deleted, dt.doc_name
                  FROM invoices i
                  LEFT JOIN document_types dt ON dt.doc_type_id = i.doc_type_id
                  WHERE i.invoice_id = :id
-                 FOR UPDATE'
+                 FOR UPDATE OF i'
             );
             $relStmt->execute([':id' => (string) $relatedInvoiceId]);
             $rel = $relStmt->fetch(PDO::FETCH_ASSOC);
