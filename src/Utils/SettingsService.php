@@ -102,12 +102,23 @@ class SettingsService
 
     public function getMorningStartHour(): int
     {
-        return $this->getInt('ticket_morning_start_hour', 5);
+        $defaults = $this->shiftService()->getDefaults();
+        $dayMode = (string) ($defaults['day_mode'] ?? 'both');
+        if ($dayMode === 'evening_only') {
+            return 24;
+        }
+        return 0;
     }
 
     public function getMorningEndHour(): int
     {
-        return $this->getInt('ticket_morning_end_hour', 12);
+        $defaults = $this->shiftService()->getDefaults();
+        $dayMode = (string) ($defaults['day_mode'] ?? 'both');
+        if ($dayMode === 'morning_only') {
+            return 24;
+        }
+        $split = (string) ($defaults['split_time'] ?? '12:00');
+        return (int) substr($split, 0, 2);
     }
 
     /**
@@ -136,11 +147,18 @@ class SettingsService
             // fallback أدناه حفاظاً على التوافق إذا تعذّر الوصول إلى shifts.
         }
 
-        $hour = (int) $when->format('G');
-        $start = $this->getMorningStartHour();
-        $end   = $this->getMorningEndHour();
+        $defaults = $this->shiftService()->getDefaults();
+        $dayMode = (string) ($defaults['day_mode'] ?? 'both');
+        if ($dayMode === 'morning_only') {
+            return ['type' => 'morning', 'amount' => $this->getMorningPrice()];
+        }
+        if ($dayMode === 'evening_only') {
+            return ['type' => 'evening', 'amount' => $this->getEveningPrice()];
+        }
 
-        if ($hour >= $start && $hour < $end) {
+        $time = $when->format('H:i');
+        $split = (string) ($defaults['split_time'] ?? '12:00');
+        if (strcmp($time, $split) < 0) {
             return ['type' => 'morning', 'amount' => $this->getMorningPrice()];
         }
         return ['type' => 'evening', 'amount' => $this->getEveningPrice()];

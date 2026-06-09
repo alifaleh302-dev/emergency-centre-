@@ -16,6 +16,7 @@ class ReportsModel
     private PDO $conn;
     private string $driver;
     private string $tz;
+    private ShiftService $shiftService;
 
     public function __construct(PDO $db, string $driver = 'pgsql')
     {
@@ -23,6 +24,7 @@ class ReportsModel
         $this->driver = $driver;
         // التوقيت المحلي للنظام (افتراضي Asia/Aden) يمكن تجاوزه عبر APP_TIMEZONE
         $this->tz = getenv('APP_TIMEZONE') ?: 'Asia/Aden';
+        $this->shiftService = new ShiftService($db);
     }
 
     /**
@@ -149,20 +151,87 @@ class ReportsModel
     }
 
     /**
-     * جلب إعدادات الفترة الصباحية
+     * جلب تعريف الفترات الفعلي لليوم المطلوب من جدول shifts.
+     *
+     * يُستخدم هذا التعريف كمصدر الحقيقة الوحيد لتصنيف صباحي/مسائي
+     * بما يتوافق مع القرص الدائري في إعدادات المدير.
      */
-    public function getShiftSettings(): array
+    public function getShiftSettings(?string $reportDate = null): array
     {
-        $stmt = $this->conn->query(
-            "SELECT setting_key, setting_value FROM system_settings
-             WHERE setting_key IN ('ticket_morning_start_hour','ticket_morning_end_hour')"
-        );
-        $rows = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+        $date = is_string($reportDate) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $reportDate)
+            ? $reportDate
+            : date('Y-m-d');
 
-        return [
-            'morning_start' => (int) ($rows['ticket_morning_start_hour'] ?? 5),
-            'morning_end'   => (int) ($rows['ticket_morning_end_hour'] ?? 12),
+        $defaults = $this->shiftService->getDefaults();
+        $split = (string) ($defaults['split_time'] ?? '12:00');
+        $dayMode = (string) ($defaults['day_mode'] ?? 'both');
+        $rows = [];
+
+        try {
+            $rows = $this->shiftService->getShiftBoundariesForDate($date);
+            if (empty($rows)) {
+                $this->shiftService->ensureDayDefined($date);
+                $rows = $this->shiftService->getShiftBoundariesForDate($date);
+            }
+        } catch (Throwable $e) {
+            $rows = [];
+        }
+
+        $settings = [
+            'shift_date' => $date,
+            'day_mode' => $dayMode,
+            'split_time' => $split,
+            'morning_start' => '00:00',
+            'morning_end' => $split,
+            'evening_start' => $split,
+            'evening_end' => '23:59',
         ];
+
+        if (empty($rows)) {
+            if ($dayMode === 'morning_only') {
+                $settings['morning_end'] = '23:59';
+                $settings['evening_start'] = '';
+                $settings['evening_end'] = '';
+            } elseif ($dayMode === 'evening_only') {
+                $settings['morning_start'] = '';
+                $settings['morning_end'] = '';
+                $settings['evening_start'] = '00:00';
+                $settings['evening_end'] = '23:59';
+            }
+            return $settings;
+        }
+
+        $firstRow = $rows[0];
+        $settings['day_mode'] = (string) ($firstRow['day_mode'] ?? $dayMode);
+
+        foreach ($rows as $row) {
+            $type = (string) ($row['shift_type'] ?? '');
+            $start = substr((string) ($row['start_time'] ?? ''), 0, 5);
+            $end = substr((string) ($row['end_time'] ?? ''), 0, 5);
+            if ($type === 'morning') {
+                $settings['morning_start'] = $start;
+                $settings['morning_end'] = $end;
+                if ($settings['day_mode'] === 'both') {
+                    $settings['split_time'] = $end;
+                    $settings['evening_start'] = $end;
+                }
+            } elseif ($type === 'evening') {
+                $settings['evening_start'] = $start;
+                $settings['evening_end'] = $end;
+            }
+        }
+
+        if ($settings['day_mode'] === 'morning_only') {
+            $settings['split_time'] = '24:00';
+            $settings['evening_start'] = '';
+            $settings['evening_end'] = '';
+        } elseif ($settings['day_mode'] === 'evening_only') {
+            $settings['split_time'] = '00:00';
+            $settings['morning_start'] = '';
+            $settings['morning_end'] = '';
+        }
+
+        return $settings;
     }
 
     /**
@@ -181,16 +250,16 @@ class ReportsModel
      * تحديد الفترة (صباحية/مسائية) بناءً على وقت التوقيت المحلي.
      * يقبل timestamp بأي صيغة قابلة لـ DateTimeImmutable.
      */
-    private function getShift(string $timestamp, int $mStart, int $mEnd): string
+    private function getShift(string $timestamp, array $shiftSettings): string
     {
         try {
             $dt = new DateTimeImmutable($timestamp);
             $dt = $dt->setTimezone(new DateTimeZone($this->tz));
-            $hour = (int) $dt->format('G');
+            return $this->classifyShiftByLocalTime($dt->format('H:i'), $shiftSettings);
         } catch (\Throwable $e) {
-            $hour = (int) date('G', strtotime($timestamp));
+            $time = date('H:i', strtotime($timestamp));
+            return $this->classifyShiftByLocalTime($time, $shiftSettings);
         }
-        return ($hour >= $mStart && $hour < $mEnd) ? 'morning' : 'evening';
     }
 
     /**
@@ -216,7 +285,7 @@ class ReportsModel
      * الكميات (quantity) كاحتياط لأنها لا تمثل زيارة واحدة
      * بل تجميع لعدة عمليات.
      */
-    public function getInvoiceData(string $reportDate, int $mStart, int $mEnd): array
+    public function getInvoiceData(string $reportDate, array $shiftSettings): array
     {
         $sql = "
             SELECT
@@ -313,7 +382,7 @@ class ReportsModel
             // لذا نمرّره مع DateTimeZone::UTC حتى لا يعيد PHP تحويله ثم نسأل عن الساعة مباشرة.
             $shift   = in_array($invoice['shift_type_saved'] ?? null, ['morning', 'evening'], true)
                 ? (string) $invoice['shift_type_saved']
-                : $this->getShiftFromLocalString($invoice['paid_at_local'], $mStart, $mEnd);
+                : $this->getShiftFromLocalString($invoice['paid_at_local'], $shiftSettings);
             $doc     = $invoice['doc_name'];
             $lines   = $invoice['lines'];
             $visitId = $invoice['visit_id'];
@@ -425,15 +494,44 @@ class ReportsModel
      * استخراج الساعة من سلسلة timestamp محلية (بدون منطقة زمنية)
      * التي أعادتها قاعدة البيانات بعد AT TIME ZONE.
      */
-    private function getShiftFromLocalString(string $localTs, int $mStart, int $mEnd): string
+    private function getShiftFromLocalString(string $localTs, array $shiftSettings): string
     {
-        // النص بصيغة 'YYYY-MM-DD HH:MM:SS.fff' بدون TZ → نأخذ الساعة مباشرة
-        if (preg_match('/\b(\d{1,2}):\d{2}:\d{2}/', $localTs, $m)) {
-            $hour = (int) $m[1];
-            return ($hour >= $mStart && $hour < $mEnd) ? 'morning' : 'evening';
+        if (preg_match('/\b(\d{1,2}:\d{2})(?::\d{2})?/', $localTs, $m)) {
+            return $this->classifyShiftByLocalTime($m[1], $shiftSettings);
         }
-        // fallback
-        return $this->getShift($localTs, $mStart, $mEnd);
+        return $this->getShift($localTs, $shiftSettings);
+    }
+
+    private function classifyShiftByLocalTime(string $timeValue, array $shiftSettings): string
+    {
+        $dayMode = (string) ($shiftSettings['day_mode'] ?? 'both');
+        if ($dayMode === 'morning_only') {
+            return 'morning';
+        }
+        if ($dayMode === 'evening_only') {
+            return 'evening';
+        }
+
+        $split = $this->normalizeHm((string) ($shiftSettings['split_time'] ?? $shiftSettings['morning_end'] ?? '12:00'), '12:00');
+        $time = $this->normalizeHm($timeValue, '00:00');
+
+        return strcmp($time, $split) < 0 ? 'morning' : 'evening';
+    }
+
+    private function normalizeHm(?string $value, string $default = '00:00'): string
+    {
+        $raw = trim((string) ($value ?? ''));
+        if (preg_match('/^(\d{1,2}):(\d{2})/', $raw, $m)) {
+            $hour = (int) $m[1];
+            $minute = (int) $m[2];
+            if ($hour >= 0 && $hour <= 24 && $minute >= 0 && $minute <= 59) {
+                if ($hour === 24) {
+                    return '24:00';
+                }
+                return sprintf('%02d:%02d', $hour, $minute);
+            }
+        }
+        return $default;
     }
 
     /**
@@ -445,15 +543,22 @@ class ReportsModel
      *   • تُرجع أرقام التسلسل (from/to/count) لكل فترة منفصلة
      *     ومجموع اليوم total (من أول تذكرة إلى آخر تذكرة).
      */
-    public function getTicketData(string $reportDate, int $mStart = 5, int $mEnd = 12): array
+    public function getTicketData(string $reportDate, array $shiftSettings = []): array
     {
+        $splitTime = $this->normalizeHm((string) ($shiftSettings['split_time'] ?? '12:00'), '12:00');
+        $dayMode = (string) ($shiftSettings['day_mode'] ?? 'both');
+
         $sql = "
             SELECT
                 COALESCE(
                     s.shift_type,
-                    CASE WHEN EXTRACT(HOUR FROM t.created_at AT TIME ZONE :tz) >= :m_start
-                              AND EXTRACT(HOUR FROM t.created_at AT TIME ZONE :tz) <  :m_end
-                         THEN 'morning' ELSE 'evening' END
+                    CASE
+                        WHEN :day_mode = 'morning_only' THEN 'morning'
+                        WHEN :day_mode = 'evening_only' THEN 'evening'
+                        WHEN CAST(t.created_at AT TIME ZONE :tz AS TIME) < CAST(:split_time AS TIME)
+                            THEN 'morning'
+                        ELSE 'evening'
+                    END
                 ) AS shift,
                 COUNT(*) AS ticket_count,
                 SUM(t.amount) AS ticket_amount,
@@ -471,13 +576,11 @@ class ReportsModel
         $stmt->execute([
             ':report_date' => $reportDate,
             ':tz'          => $this->tz,
-            ':m_start'     => $mStart,
-            ':m_end'       => $mEnd,
+            ':split_time'  => $splitTime,
+            ':day_mode'    => $dayMode,
         ]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // جلب حصص الوزارة (المشتركة) لكل فترة من إعدادات النظام
-        // المبلغ الكلّي للتذكرة يُقسّم إلى: حصة الوزارة (مشتركة) + حصة المركز (مشاركة مجتمع)
         $ticketShare = $this->getTicketMinistryShareSettings();
         $ministryPerTicket = [
             'morning' => (float) ($ticketShare['ticket_ministry_share_morning'] ?? 0.0),
@@ -500,22 +603,20 @@ class ReportsModel
 
         foreach ($rows as $row) {
             $shift = ((string) $row['shift']) === 'morning' ? 'morning' : 'evening';
-            $count        = (int) $row['ticket_count'];
-            $totalAmount  = (float) $row['ticket_amount'];
-            // حصة الوزارة (مشتركة) = عدد التذاكر × حصة الوزارة للتذكرة الواحدة
-            $ministryAmt  = round($ministryPerTicket[$shift] * $count, 2);
+            $count = (int) $row['ticket_count'];
+            $totalAmount = (float) $row['ticket_amount'];
+            $ministryAmt = round($ministryPerTicket[$shift] * $count, 2);
             if ($ministryAmt > $totalAmount) {
                 $ministryAmt = $totalAmount;
             }
-            // حصة المركز (مشاركة المجتمع) = الإجمالي - حصة الوزارة
-            $centerAmt    = max($totalAmount - $ministryAmt, 0.0);
+            $centerAmt = max($totalAmount - $ministryAmt, 0.0);
 
-            $result[$shift]['count']           = $count;
-            $result[$shift]['amount']          = $totalAmount;
-            $result[$shift]['center_amount']   = $centerAmt;
+            $result[$shift]['count'] = $count;
+            $result[$shift]['amount'] = $totalAmount;
+            $result[$shift]['center_amount'] = $centerAmt;
             $result[$shift]['ministry_amount'] = $ministryAmt;
-            $result[$shift]['serial_from']     = $row['serial_from'];
-            $result[$shift]['serial_to']       = $row['serial_to'];
+            $result[$shift]['serial_from'] = $row['serial_from'];
+            $result[$shift]['serial_to'] = $row['serial_to'];
         }
 
         return $result;
@@ -559,14 +660,20 @@ class ReportsModel
      *
      * ⚠️ يستخدم AT TIME ZONE لتحديد الفترة والتاريخ على التوقيت المحلي.
      */
-    public function getSerialRanges(string $reportDate, int $mStart = 5, int $mEnd = 12): array
+    public function getSerialRanges(string $reportDate, array $shiftSettings = []): array
     {
-        // تحديد الفترة يعتمد أولاً على visits.shift_id المحفوظة، ثم fallback إلى وقت الدفع.
+        $splitTime = $this->normalizeHm((string) ($shiftSettings['split_time'] ?? '12:00'), '12:00');
+        $dayMode = (string) ($shiftSettings['day_mode'] ?? 'both');
+
         $shiftExpr = "COALESCE(
             s.shift_type,
-            CASE WHEN EXTRACT(HOUR FROM i.paid_at AT TIME ZONE :tz) >= :m_start
-                      AND EXTRACT(HOUR FROM i.paid_at AT TIME ZONE :tz) <  :m_end
-                 THEN 'morning' ELSE 'evening' END
+            CASE
+                WHEN :day_mode = 'morning_only' THEN 'morning'
+                WHEN :day_mode = 'evening_only' THEN 'evening'
+                WHEN CAST(i.paid_at AT TIME ZONE :tz AS TIME) < CAST(:split_time AS TIME)
+                    THEN 'morning'
+                ELSE 'evening'
+            END
         )";
 
         $sql = "
@@ -590,8 +697,8 @@ class ReportsModel
         $stmt->execute([
             ':report_date' => $reportDate,
             ':tz'          => $this->tz,
-            ':m_start'     => $mStart,
-            ':m_end'       => $mEnd,
+            ':split_time'  => $splitTime,
+            ':day_mode'    => $dayMode,
         ]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -599,7 +706,6 @@ class ReportsModel
             'morning' => null,
             'evening' => null,
             'total'   => null,
-            // مفاتيح التوافق العكسي (تشير لـ total)
             'from'    => null,
             'to'      => null,
             'count'   => 0,
@@ -626,7 +732,6 @@ class ReportsModel
             ];
         }
 
-        // حساب total لكل نوع = دمج النطاقات (من أول سند إلى آخر سند)
         foreach (['A', 'B', 'C'] as $docName) {
             $total = $this->mergeRanges($result[$docName]['morning'], $result[$docName]['evening']);
             $result[$docName]['total'] = $total;
@@ -635,7 +740,6 @@ class ReportsModel
             $result[$docName]['count'] = $total['count'] ?? 0;
         }
 
-        // EXEMPT = دمج B و C لكل فترة
         $result['EXEMPT']['morning'] = $this->mergeRanges($result['B']['morning'], $result['C']['morning']);
         $result['EXEMPT']['evening'] = $this->mergeRanges($result['B']['evening'], $result['C']['evening']);
         $exemptTotal = $this->mergeRanges($result['EXEMPT']['morning'], $result['EXEMPT']['evening']);
@@ -644,14 +748,16 @@ class ReportsModel
         $result['EXEMPT']['to']    = $exemptTotal['to']    ?? null;
         $result['EXEMPT']['count'] = $exemptTotal['count'] ?? 0;
 
-        // L: استمارات المختبر (لكل فترة + الإجمالي = من أول سند إلى آخر سند)
-        // مع AT TIME ZONE لتحديد الفترة والتاريخ بحسب التوقيت المحلي.
         try {
             $shiftExprL = "COALESCE(
                 s.shift_type,
-                CASE WHEN EXTRACT(HOUR FROM ld.created_at AT TIME ZONE :tz) >= :m_start
-                           AND EXTRACT(HOUR FROM ld.created_at AT TIME ZONE :tz) <  :m_end
-                      THEN 'morning' ELSE 'evening' END
+                CASE
+                    WHEN :day_mode = 'morning_only' THEN 'morning'
+                    WHEN :day_mode = 'evening_only' THEN 'evening'
+                    WHEN CAST(ld.created_at AT TIME ZONE :tz AS TIME) < CAST(:split_time AS TIME)
+                        THEN 'morning'
+                    ELSE 'evening'
+                END
             )";
             $sqlL = "
                 SELECT
@@ -671,8 +777,8 @@ class ReportsModel
             $stmtL->execute([
                 ':report_date' => $reportDate,
                 ':tz'          => $this->tz,
-                ':m_start'     => $mStart,
-                ':m_end'       => $mEnd,
+                ':split_time'  => $splitTime,
+                ':day_mode'    => $dayMode,
             ]);
             $rowsL = $stmtL->fetchAll(PDO::FETCH_ASSOC);
 

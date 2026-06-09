@@ -49,14 +49,12 @@ class ReportsController extends BaseController
                 $date = date('Y-m-d');
             }
 
-            $shiftSettings = $this->model->getShiftSettings();
-            $mStart = $shiftSettings['morning_start'];
-            $mEnd   = $shiftSettings['morning_end'];
+            $shiftSettings = $this->model->getShiftSettings($date);
 
             $headerSettings = $this->model->getHeaderSettings();
-            $invoiceData    = $this->model->getInvoiceData($date, $mStart, $mEnd);
-            $ticketData     = $this->model->getTicketData($date);
-            $serialRanges   = $this->model->getSerialRanges($date, $mStart, $mEnd);
+            $invoiceData    = $this->model->getInvoiceData($date, $shiftSettings);
+            $ticketData     = $this->model->getTicketData($date, $shiftSettings);
+            $serialRanges   = $this->model->getSerialRanges($date, $shiftSettings);
 
             foreach (['morning', 'evening'] as $shift) {
                 $invoiceData[$shift]['visitors']['tickets'] = (float) $ticketData[$shift]['count'];
@@ -279,14 +277,12 @@ class ReportsController extends BaseController
      */
     private function buildDailyInfoSection(string $date, string $shiftFilter): array
     {
-        $shiftSettings = $this->model->getShiftSettings();
-        $mStart = $shiftSettings['morning_start'];
-        $mEnd   = $shiftSettings['morning_end'];
+        $shiftSettings = $this->model->getShiftSettings($date);
 
         $headerSettings = $this->model->getHeaderSettings();
-        $invoiceData    = $this->model->getInvoiceData($date, $mStart, $mEnd);
-        $ticketData     = $this->model->getTicketData($date);
-        $serialRanges   = $this->model->getSerialRanges($date, $mStart, $mEnd);
+        $invoiceData    = $this->model->getInvoiceData($date, $shiftSettings);
+        $ticketData     = $this->model->getTicketData($date, $shiftSettings);
+        $serialRanges   = $this->model->getSerialRanges($date, $shiftSettings);
 
         foreach (['morning', 'evening'] as $shift) {
             $invoiceData[$shift]['visitors']['tickets'] = (float) $ticketData[$shift]['count'];
@@ -322,11 +318,11 @@ class ReportsController extends BaseController
 
     /**
      * يصنّف فترة سند بناءً على وقت الدفع وحدود اليوم في جدول shifts.
-     * Fallback إلى ساعة 12 ظهراً إن لم تتوفر حدود.
+     * يدعم الدقائق بدقة، وليس الساعة فقط.
      */
     private function classifyInvoiceShift(string $timeStr, string $date): string
     {
-        $hour = null;
+        $normalizedTime = null;
 
         $normalized = strtoupper(trim($timeStr));
         $dt = DateTimeImmutable::createFromFormat('h:i A', $normalized)
@@ -334,34 +330,49 @@ class ReportsController extends BaseController
             ?: DateTimeImmutable::createFromFormat('H:i', $normalized)
             ?: DateTimeImmutable::createFromFormat('H:i:s', $normalized);
         if ($dt instanceof DateTimeImmutable) {
-            $hour = (int) $dt->format('G');
+            $normalizedTime = $dt->format('H:i');
         } elseif (preg_match('/^(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(AM|PM)?$/i', $normalized, $m)) {
             $hour = (int) $m[1];
+            $minute = isset($m[2]) ? (int) $m[2] : 0;
             $ampm = strtoupper((string) ($m[3] ?? ''));
             if ($ampm === 'AM') {
                 $hour = ($hour === 12) ? 0 : $hour;
             } elseif ($ampm === 'PM') {
                 $hour = ($hour === 12) ? 12 : ($hour + 12);
             }
+            $normalizedTime = sprintf('%02d:%02d', $hour, $minute);
         }
 
-        if ($hour === null) {
+        if ($normalizedTime === null) {
             return 'morning';
         }
 
         try {
             $boundaries = $this->shiftService->getShiftBoundariesForDate($date);
+            if (empty($boundaries)) {
+                $this->shiftService->ensureDayDefined($date);
+                $boundaries = $this->shiftService->getShiftBoundariesForDate($date);
+            }
+
             foreach ($boundaries as $b) {
-                $startHour = (int) substr((string) $b['start_time'], 0, 2);
-                $endHour   = (int) substr((string) $b['end_time'], 0, 2);
-                if ($hour >= $startHour && $hour < ($endHour === 23 ? 24 : $endHour)) {
-                    return (string) $b['shift_type'];
+                $shiftType = (string) ($b['shift_type'] ?? '');
+                $start = substr((string) ($b['start_time'] ?? ''), 0, 5);
+                $end = substr((string) ($b['end_time'] ?? ''), 0, 5);
+                if ($shiftType === 'morning' && ($end === '23:59' || $end === '23:59:59')) {
+                    return 'morning';
+                }
+                if ($shiftType === 'evening' && $start === '00:00') {
+                    return 'evening';
+                }
+                if ($start !== '' && $end !== '' && strcmp($normalizedTime, $start) >= 0 && strcmp($normalizedTime, $end) < 0) {
+                    return $shiftType === 'morning' ? 'morning' : 'evening';
                 }
             }
         } catch (\Throwable $e) {
             // ignore
         }
-        return $hour < 12 ? 'morning' : 'evening';
+
+        return strcmp($normalizedTime, '12:00') < 0 ? 'morning' : 'evening';
     }
 
     /**

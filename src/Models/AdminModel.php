@@ -1561,6 +1561,7 @@ class AdminModel
             }
 
             $this->reassignVisitsForShiftDate($shiftDate, $splitTime, $dayMode, $activeShiftIds);
+            $this->syncExaminationTicketsForShiftDate($shiftDate);
 
             $obsoleteRows = array_filter(
                 $currentRows,
@@ -1720,6 +1721,30 @@ class AdminModel
         $stmt->bindValue(':split_time', $splitTime . ':00', PDO::PARAM_STR);
         $stmt->bindValue(':morning_shift_id', (int) $activeShiftIds['morning'], PDO::PARAM_INT);
         $stmt->bindValue(':evening_shift_id', (int) $activeShiftIds['evening'], PDO::PARAM_INT);
+        $stmt->bindValue(':shift_date', $shiftDate, PDO::PARAM_STR);
+        $stmt->execute();
+    }
+
+    private function syncExaminationTicketsForShiftDate(string $shiftDate): void
+    {
+        $settings = new SettingsService($this->conn);
+        $morningPrice = $settings->getMorningPrice();
+        $eveningPrice = $settings->getEveningPrice();
+
+        $stmt = $this->conn->prepare(
+            "UPDATE examination_tickets t
+                SET ticket_type = s.shift_type,
+                    amount = CASE
+                        WHEN s.shift_type = 'morning' THEN :morning_price
+                        ELSE :evening_price
+                    END
+               FROM visits v
+               JOIN shifts s ON s.shift_id = v.shift_id
+              WHERE t.visit_id = v.visit_id
+                AND CAST(v.visit_date AS DATE) = CAST(:shift_date AS DATE)"
+        );
+        $stmt->bindValue(':morning_price', $morningPrice);
+        $stmt->bindValue(':evening_price', $eveningPrice);
         $stmt->bindValue(':shift_date', $shiftDate, PDO::PARAM_STR);
         $stmt->execute();
     }
@@ -1941,7 +1966,7 @@ class AdminModel
             ],
             'tickets' => [
                 'label' => 'التذاكر والتسعير',
-                'description' => 'أسعار التذاكر، ساعات الصباح، وحصص التذكرة.',
+                'description' => 'أسعار التذاكر وحصصها، مع اعتماد نوع التذكرة على الفترة المالية فقط.',
                 'icon' => 'bi-ticket-perforated',
                 'accent' => 'success',
                 'order' => 2,
@@ -1993,8 +2018,6 @@ class AdminModel
             'allow_admin_payment_override' => ['label' => 'السماح بتجاوز المدير', 'group' => 'shifts', 'control' => 'toggle', 'hint' => 'مع تسجيل إلزامي في سجل التدقيق.', 'allow_empty' => false],
             'ticket_price_morning' => ['label' => 'سعر التذكرة الصباحية', 'group' => 'tickets', 'control' => 'number', 'unit' => 'ريال', 'min' => 0, 'step' => 1, 'allow_empty' => false],
             'ticket_price_evening' => ['label' => 'سعر التذكرة المسائية', 'group' => 'tickets', 'control' => 'number', 'unit' => 'ريال', 'min' => 0, 'step' => 1, 'allow_empty' => false],
-            'ticket_morning_start_hour' => ['label' => 'ساعة بداية التذكرة الصباحية', 'group' => 'tickets', 'control' => 'number', 'min' => 0, 'max' => 23, 'step' => 1, 'allow_empty' => false],
-            'ticket_morning_end_hour' => ['label' => 'ساعة نهاية التذكرة الصباحية', 'group' => 'tickets', 'control' => 'number', 'min' => 0, 'max' => 23, 'step' => 1, 'allow_empty' => false],
             'ticket_ministry_share_morning' => ['label' => 'حصة الوزارة من التذكرة الصباحية', 'group' => 'tickets', 'control' => 'number', 'unit' => 'ريال', 'min' => 0, 'step' => 1, 'allow_empty' => false],
             'ticket_ministry_share_evening' => ['label' => 'حصة الوزارة من التذكرة المسائية', 'group' => 'tickets', 'control' => 'number', 'unit' => 'ريال', 'min' => 0, 'step' => 1, 'allow_empty' => false],
             'finance_hub_default_page_size' => ['label' => 'عدد السجلات الافتراضي', 'group' => 'finance', 'control' => 'number', 'min' => 10, 'max' => 200, 'step' => 5, 'allow_empty' => false],
@@ -2117,6 +2140,8 @@ class AdminModel
             'shift_evening_start',
             'shift_evening_end',
             'shift_overnight_belongs_to',
+            'ticket_morning_start_hour',
+            'ticket_morning_end_hour',
         ];
 
         if (in_array($key, $legacyKeys, true)) {
