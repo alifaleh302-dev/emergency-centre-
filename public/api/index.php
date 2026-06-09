@@ -261,19 +261,35 @@ $autoCloseTriggerPaths = [
     'doctor/send_orders',
     'doctor/new_patient',
     'doctor/existing_patient_visit',
+    'doctor/waiting_list',
+    'doctor/final_diagnosis',
+    'doctor/visit_close_data',
+    'doctor/medical_archive',
 ];
 if (in_array($path, $autoCloseTriggerPaths, true)) {
     try {
         $_lazyDb = new Database();
-        $_lazyModel = new AccountingModel($_lazyDb->getConnection(), $_lazyDb->getDriver());
+        $_lazyConn = $_lazyDb->getConnection();
+        $_lazyDriver = $_lazyDb->getDriver();
+
+        // (1) إقفال تلقائي للفترات (shifts) المنتهية وسداد فواتيرها المعلّقة
+        $_lazyModel = new AccountingModel($_lazyConn, $_lazyDriver);
         $_lazyResult = $_lazyModel->runAutoClosurePass();
         if (!empty($_lazyResult['closed'])) {
             error_log('runAutoClosurePass: closed ' . count($_lazyResult['closed']) . ' shift(s)');
         }
+
+        // (2) إقفال تلقائي للزيارات (visits) التي لم يُغلقها الطبيب قبل
+        // انتهاء فترتها/يومها — بنفس مبدأ الإقفال التلقائي للفواتير.
+        $_lazyDocModel = new DoctorModel($_lazyConn, $_lazyDriver);
+        $_lazyVisitsResult = $_lazyDocModel->runVisitsAutoClosurePass();
+        if (!empty($_lazyVisitsResult['closed'])) {
+            error_log('runVisitsAutoClosurePass: closed ' . count($_lazyVisitsResult['closed']) . ' visit(s)');
+        }
     } catch (Throwable $_lazyEx) {
-        error_log('runAutoClosurePass (lazy hook) failed: ' . $_lazyEx->getMessage());
+        error_log('auto-closure lazy hook failed: ' . $_lazyEx->getMessage());
     }
-    unset($_lazyDb, $_lazyModel, $_lazyResult, $_lazyEx);
+    unset($_lazyDb, $_lazyConn, $_lazyDriver, $_lazyModel, $_lazyResult, $_lazyDocModel, $_lazyVisitsResult, $_lazyEx);
 }
 
 $route = $routes[$path];

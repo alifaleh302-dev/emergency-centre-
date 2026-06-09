@@ -285,9 +285,196 @@ class DoctorModel
         ]);
     }
 
+    // =================================================================
+    // 🤖 الإقفال التلقائي للزيارات في نهاية اليوم/الفترة
+    // =================================================================
+    //
+    // المنطق:
+    //   - أي زيارة status='Active' لم يُغلقها الطبيب يُغلقها النظام تلقائياً
+    //     عندما تنتهي الفترة (shift) التي تنتمي إليها — تماماً كما يحدث
+    //     لتسديد الفواتير المعلّقة في نهاية الفترة.
+    //   - الزيارة تُحدَّث إلى:
+    //       diagnosis      = 'null'
+    //       final_notes    = 'null'
+    //       closed_by      = 0   (المستخدم النظامي __system__)
+    //       closed_by_name = '__system__'
+    //       status         = 'Completed'
+    //       auto_closed    = TRUE
+    //   - يُسجَّل لكل زيارة سطر في audit_logs بالإجراء AUTO_CLOSE.
+    //   - يُستدعى من lazy hook في public/api/index.php.
+    //
+    // الاعتبارات:
+    //   • الزيارة المرتبطة بفترة (shift_id) → نُغلقها إذا كانت فترتها
+    //     مغلقة (status='closed') أو انتهى وقتها (end_time <= NOW محلياً).
+    //   • الزيارة بدون shift_id (زيارات قديمة قبل ربط الفترات) → نُغلقها
+    //     إذا مضى يومها (created_at::date < CURRENT_DATE).
+    //   • نتجاهل أي قيمة فاضية/null/whitespace-only للتشخيص أو الملاحظات
+    //     ونستبدلها بالنص الحرفي 'null' حسب المتطلب.
+
+    /**
+     * يجلب قائمة الزيارات النشطة التي يجب إقفالها تلقائياً (انتهى وقت
+     * فترتها أو انتهى يومها). للقراءة فقط — لا تعديل.
+     *
+     * @return array قائمة صفوف فيها: visit_id, patient_id, doctor_id,
+     *               shift_id, created_at, diagnosis, final_notes
+     */
+    public function findExpiredActiveVisits(): array
+    {
+        // ملاحظة: نستخدم CURRENT_TIMESTAMP و CURRENT_DATE للمنطقة الزمنية
+        // الافتراضية للخادم (Asia/Aden). end_time في shifts من نوع TIME.
+        $sql = "
+            SELECT v.visit_id,
+                   v.patient_id,
+                   v.doctor_id,
+                   v.shift_id,
+                   v.created_at,
+                   v.diagnosis,
+                   v.final_notes,
+                   v.type_case,
+                   s.shift_date,
+                   s.shift_type,
+                   s.status     AS shift_status,
+                   s.end_time   AS shift_end_time
+            FROM Visits v
+            LEFT JOIN shifts s ON v.shift_id = s.shift_id
+            WHERE v.status = 'Active'
+              AND (
+                    -- (أ) الزيارة مربوطة بفترة مغلقة
+                    s.status = 'closed'
+                 OR -- (ب) الزيارة مربوطة بفترة من يوم سابق
+                    (s.shift_id IS NOT NULL AND s.shift_date < CURRENT_DATE)
+                 OR -- (ج) الزيارة مربوطة بفترة اليوم لكن انتهى وقتها
+                    (
+                       s.shift_id IS NOT NULL
+                       AND s.shift_date = CURRENT_DATE
+                       AND s.end_time <= CURRENT_TIME
+                    )
+                 OR -- (د) زيارة بدون فترة مرتبطة لكنها من يوم سابق
+                    (s.shift_id IS NULL AND v.created_at::date < CURRENT_DATE)
+              )
+            ORDER BY v.created_at ASC
+        ";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute();
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * يُغلق زيارة واحدة تلقائياً (التشخيص = 'null'، الملاحظات = 'null'،
+     * المستخدم النظامي __system__). يُسجِّل أيضاً سطر AUTO_CLOSE في
+     * audit_logs.
+     *
+     * @return bool نجاح التحديث
+     */
+    public function autoCloseVisit(int $visitId, ?array $oldRow = null): bool
+    {
+        $sql = "UPDATE Visits SET
+                    diagnosis      = 'null',
+                    final_notes    = 'null',
+                    closed_by      = 0,
+                    closed_by_name = '__system__',
+                    closed_at      = CURRENT_TIMESTAMP,
+                    auto_closed    = TRUE,
+                    status         = 'Completed'
+                WHERE visit_id = :visit_id
+                  AND status = 'Active'";
+        $stmt = $this->conn->prepare($sql);
+        $ok = $stmt->execute([':visit_id' => $visitId]);
+        if (!$ok || $stmt->rowCount() === 0) {
+            return false;
+        }
+
+        // تسجيل audit log (AUTO_CLOSE) — لا نُفشل العملية الأصلية إن فشل
+        try {
+            $audit = new AuditService($this->conn);
+            $audit->log(
+                0,
+                '__system__',
+                'AUTO_CLOSE',
+                'visits',
+                $visitId,
+                $oldRow !== null ? [
+                    'status'      => $oldRow['status']      ?? null,
+                    'diagnosis'   => $oldRow['diagnosis']   ?? null,
+                    'final_notes' => $oldRow['final_notes'] ?? null,
+                    'shift_id'    => $oldRow['shift_id']    ?? null,
+                ] : null,
+                [
+                    'status'         => 'Completed',
+                    'diagnosis'      => 'null',
+                    'final_notes'    => 'null',
+                    'closed_by'      => 0,
+                    'closed_by_name' => '__system__',
+                    'auto_closed'    => true,
+                    'reason'         => 'shift_or_day_expired',
+                ]
+            );
+        } catch (Throwable $e) {
+            error_log('autoCloseVisit::audit failed for visit_id=' . $visitId . ': ' . $e->getMessage());
+        }
+
+        return true;
+    }
+
+    /**
+     * يُنفّذ تمرير الإقفال التلقائي لكل الزيارات المنتهية. يُستدعى من
+     * lazy hook في public/api/index.php على غرار runAutoClosurePass
+     * الخاص بالورديات.
+     *
+     * @return array{enabled:bool, closed:array<int,array{visit_id:int,success:bool,reason?:string}>}
+     */
+    public function runVisitsAutoClosurePass(): array
+    {
+        // نستخدم نفس مفتاح إعدادات الإقفال التلقائي للفترات
+        // (shift_auto_close_enabled) لتفعيل/إيقاف هذا السلوك. هذا يجعل
+        // إيقاف الإقفال التلقائي للفترات يوقف أيضاً إقفال الزيارات،
+        // ويبسّط الإدارة (مفتاح واحد لجميع آليات الإقفال التلقائي).
+        try {
+            $settings = new SettingsService($this->conn);
+            $enabled = $settings->get('shift_auto_close_enabled', 'true');
+            $enabledBool = in_array(strtolower(trim((string) $enabled)), ['1','true','yes','on','t'], true);
+            if (!$enabledBool) {
+                return ['enabled' => false, 'closed' => []];
+            }
+        } catch (Throwable $e) {
+            // إن تعذّر قراءة الإعداد نستمر افتراضياً (تفعيل)
+            error_log('runVisitsAutoClosurePass: settings read failed: ' . $e->getMessage());
+        }
+
+        $expired = $this->findExpiredActiveVisits();
+        $closed  = [];
+        foreach ($expired as $row) {
+            $visitId = (int) $row['visit_id'];
+            try {
+                $ok = $this->autoCloseVisit($visitId, $row);
+                $closed[] = [
+                    'visit_id' => $visitId,
+                    'success'  => $ok,
+                    'shift_id' => isset($row['shift_id']) ? (int) $row['shift_id'] : null,
+                ];
+            } catch (Throwable $e) {
+                error_log('runVisitsAutoClosurePass failed for visit_id=' . $visitId . ': ' . $e->getMessage());
+                $closed[] = [
+                    'visit_id' => $visitId,
+                    'success'  => false,
+                    'error'    => $e->getMessage(),
+                ];
+            }
+        }
+
+        return [
+            'enabled' => true,
+            'closed'  => $closed,
+        ];
+    }
+
     /**
      * يغلق الزيارة بكتابة التشخيص النهائي + الملاحظات + اسم العيادة
      * + بيانات الطبيب الذي قام بالإغلاق (محفوظة تاريخياً).
+     *
+     * 🛡️ صلابة المدخلات: إذا أُرسل التشخيص أو الملاحظات فارغًا أو null
+     *   أو whitespace-only أو 'null'/'NULL'، يُستبدل بالنص الحرفي 'null'
+     *   حتى لا يبقى الحقل فاضياً في قاعدة البيانات.
      */
     public function closeVisit(
         int $visitId,
@@ -297,6 +484,11 @@ class DoctorModel
         int $closedById,
         string $closedByName
     ): bool {
+        // 🛡️ تطبيع: أي قيمة فارغة / whitespace-only / 'null' / 'NULL' أو ما شابه
+        // تُحوّل إلى النص الحرفي 'null' (بنفس سلوك الإقفال التلقائي).
+        $diagnosis  = self::normalizeClosureText($diagnosis);
+        $finalNotes = self::normalizeClosureText($finalNotes);
+
         $sql = "UPDATE Visits SET
                     diagnosis      = :diagnosis,
                     final_notes    = :final_notes,
@@ -304,6 +496,7 @@ class DoctorModel
                     closed_by      = :closed_by,
                     closed_by_name = :closed_by_name,
                     closed_at      = CURRENT_TIMESTAMP,
+                    auto_closed    = FALSE,
                     status         = 'Completed'
                 WHERE visit_id = :visit_id";
         $stmt = $this->conn->prepare($sql);
@@ -315,6 +508,27 @@ class DoctorModel
             ':closed_by_name' => $closedByName,
             ':visit_id'       => $visitId,
         ]);
+    }
+
+    /**
+     * دالة مساعدة: تجعل أي نص فارغ/whitespace/null/'null'/'NULL'/ما شابه
+     * يتحوّل إلى النص الحرفي 'null'. موحّدة بين الإغلاق اليدوي
+     * والتلقائي.
+     */
+    public static function normalizeClosureText(?string $value): string
+    {
+        if ($value === null) {
+            return 'null';
+        }
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return 'null';
+        }
+        $lower = strtolower($trimmed);
+        if (in_array($lower, ['null', '(null)', 'nul', 'none', 'undefined', 'n/a', 'na', '-', '--'], true)) {
+            return 'null';
+        }
+        return $trimmed;
     }
 
     /**
