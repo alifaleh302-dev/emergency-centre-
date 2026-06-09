@@ -1347,6 +1347,9 @@ const Admin = {
 
         // أزرار إضافية حسب الجدول
         const extraActions = this.renderExtraActions(tableMeta.table, row);
+        const deleteAction = this.shouldShowDeleteAction(tableMeta.table, row)
+            ? `<button class="btn-action btn-delete" title="حذف" onclick="Admin.deleteRecord('${tableMeta.table}', ${Number(row[pk])})"><i class="bi bi-trash"></i></button>`
+            : '';
 
         return `
             <tr>
@@ -1354,7 +1357,7 @@ const Admin = {
                 <td>
                     <div class="d-flex gap-1 flex-wrap">
                         <button class="btn-action btn-view" title="تعديل" onclick="Admin.openForm('${tableMeta.table}', ${Number(row[pk])})"><i class="bi bi-pencil-square"></i></button>
-                        <button class="btn-action btn-delete" title="حذف" onclick="Admin.deleteRecord('${tableMeta.table}', ${Number(row[pk])})"><i class="bi bi-trash"></i></button>
+                        ${deleteAction}
                         ${extraActions}
                     </div>
                 </td>
@@ -1374,13 +1377,15 @@ const Admin = {
         }
         if (tableName === 'invoices') {
             const isCancelled = row.cancelled_at != null && row.cancelled_at !== '';
-            if (!isCancelled) {
+            const isDeleted = this.isSoftDeletedRow(tableName, row);
+            if (!isCancelled && !isDeleted) {
                 html += `<button class="btn-action" style="background:#fee2e2;color:#991b1b;" title="إلغاء الفاتورة" onclick="Admin.promptCancelInvoice(${row.invoice_id})"><i class="bi bi-x-octagon"></i></button>`;
             }
         }
         if (tableName === 'visits') {
             const isCancelled = row.cancelled_at != null && row.cancelled_at !== '';
-            if (!isCancelled) {
+            const isDeleted = this.isSoftDeletedRow(tableName, row);
+            if (!isCancelled && !isDeleted) {
                 html += `<button class="btn-action" style="background:#fee2e2;color:#991b1b;" title="إلغاء الزيارة" onclick="Admin.promptCancelVisit(${row.visit_id})"><i class="bi bi-x-octagon"></i></button>`;
             }
         }
@@ -1657,15 +1662,22 @@ const Admin = {
             departments: 'القسم',
             users: 'المستخدم',
             invoices: 'الفاتورة',
+            examination_tickets: 'تذكرة المعاينة',
         };
         const softDeleteTables = ['patients', 'visits', 'services_master', 'service_categories', 'departments'];
         const isSoftDelete = softDeleteTables.includes(tableName);
         const label = tableLabels[tableName] || 'هذا السجل';
+        const deleteNotes = {
+            visits: 'سيتم أيضاً حذف تذكرة المعاينة المرتبطة - إن وجدت - مع إعادة ترقيم التذاكر التالية تلقائياً.',
+            invoices: 'سيتم حذف السند مع إعادة ترقيم السندات التالية ضمن نفس مجموعة التسلسل تلقائياً.',
+            examination_tickets: 'سيتم حذف التذكرة مع إنقاص تسلسل التذاكر التالية وتحديث العداد تلقائياً.',
+        };
+        const extraNote = deleteNotes[tableName] ? `\n\n${deleteNotes[tableName]}` : '';
         const baseMsg = isSoftDelete
             ? `هل أنت متأكد من حذف ${label}؟
 
-سيتم الحذف الذكي (Soft Delete) — سيبقى السجل في قاعدة البيانات للأغراض التاريخية لكنه لن يظهر في أي واجهة غير إدارية.`
-            : `هل أنت متأكد من حذف ${label}؟`;
+سيتم الحذف الذكي (Soft Delete) — سيبقى السجل في قاعدة البيانات للأغراض التاريخية لكنه لن يظهر في أي واجهة غير إدارية.${extraNote}`
+            : `هل أنت متأكد من حذف ${label}؟${extraNote}`;
         if (!confirm(baseMsg)) return;
 
         let r = await Core.apiCall('admin/delete', 'POST', { table: tableName, id });
@@ -2184,16 +2196,42 @@ const Admin = {
         return map[status] || 'bg-secondary-subtle text-secondary';
     },
 
+    isTruthyFlag: function(value) {
+        return value === true || value === 't' || value === 'true' || value === 1 || value === '1';
+    },
+
+    isSoftDeletedRow: function(tableName, row) {
+        if (tableName === 'visits') {
+            return String(row.status || '').toLowerCase() === 'deleted';
+        }
+        if (['patients', 'services_master', 'service_categories', 'departments', 'invoices'].includes(tableName)) {
+            return this.isTruthyFlag(row.is_deleted);
+        }
+        return false;
+    },
+
+    shouldShowDeleteAction: function(tableName, row) {
+        if (tableName === 'visits') {
+            const status = String(row.status || '').toLowerCase();
+            return status !== 'deleted' && status !== 'cancelled';
+        }
+        if (['patients', 'services_master', 'service_categories', 'departments', 'invoices'].includes(tableName)) {
+            return !this.isSoftDeletedRow(tableName, row);
+        }
+        return true;
+    },
+
     visitStatusBadge: function(status) {
         const s = String(status||'').toLowerCase();
         if (s === 'active') return 'bg-warning-subtle text-warning';
         if (s === 'completed') return 'bg-success-subtle text-success';
         if (s === 'cancelled') return 'bg-danger-subtle text-danger';
+        if (s === 'deleted') return 'bg-secondary-subtle text-secondary';
         return 'bg-secondary-subtle text-secondary';
     },
 
     translateVisitStatus: function(status) {
-        const map = { 'Active':'نشطة', 'Completed':'مكتملة', 'Cancelled':'ملغاة' };
+        const map = { 'Active':'نشطة', 'Completed':'مكتملة', 'Cancelled':'ملغاة', 'Deleted':'محذوفة' };
         return map[status] || status || '—';
     },
 

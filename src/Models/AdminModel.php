@@ -533,6 +533,14 @@ class AdminModel
                 return $this->softDeletePatient((int) $id, $userId, $reason);
             case 'visits':
                 return $this->softDeleteVisit((int) $id, $userId, $reason);
+            case 'examination_tickets':
+                $deletedTicket = $this->deleteTicketWithSerialAdjustment((int) $id, $userId);
+                return [
+                    'soft_delete' => false,
+                    'cascaded'    => [],
+                    'message'     => 'تم حذف تذكرة المعاينة بنجاح وإعادة ترقيم التذاكر اللاحقة تلقائياً.',
+                    'deleted_ticket' => $deletedTicket,
+                ];
             case 'services_master':
                 return $this->softDeleteService((int) $id, $userId, $reason);
             case 'service_categories':
@@ -581,12 +589,41 @@ class AdminModel
 
     private function softDeleteVisit(int $visitId, ?int $userId, ?string $reason): array
     {
+        if ($this->conn->inTransaction()) {
+            return $this->performSoftDeleteVisit($visitId, $userId, $reason);
+        }
+
+        $this->conn->beginTransaction();
+        try {
+            $result = $this->performSoftDeleteVisit($visitId, $userId, $reason);
+            $this->conn->commit();
+            return $result;
+        } catch (Throwable $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    private function performSoftDeleteVisit(int $visitId, ?int $userId, ?string $reason): array
+    {
         $stmt = $this->conn->prepare("UPDATE visits SET status = 'Deleted', updated_at = NOW() WHERE visit_id = :id AND status NOT IN ('Deleted', 'Cancelled')");
         $stmt->execute([':id' => $visitId]);
+
+        $deletedTicket = null;
+        if ($stmt->rowCount() > 0) {
+            $deletedTicket = $this->deleteTicketByVisitId($visitId, $userId);
+        }
+
+        $ticketDeleted = $deletedTicket !== null;
         return [
             'soft_delete' => true,
-            'cascaded'    => [],
-            'message'     => 'تم حذف الزيارة وإخفاؤها من الواجهات التشغيلية.',
+            'cascaded'    => [
+                'examination_tickets' => $ticketDeleted ? 1 : 0,
+            ],
+            'message'     => 'تم حذف الزيارة وإخفاؤها من الواجهات التشغيلية.' . ($ticketDeleted ? ' وتم حذف تذكرة المعاينة المرتبطة وإعادة ترقيم التذاكر التالية تلقائياً.' : ''),
+            'deleted_ticket' => $deletedTicket,
         ];
     }
 
@@ -996,6 +1033,126 @@ class AdminModel
             );
             $decStmt->execute([':id' => (string) $counterDocTypeId]);
         }
+    }
+
+    private function deleteTicketByVisitId(int $visitId, ?int $userId = null): ?array
+    {
+        $stmt = $this->conn->prepare('SELECT ticket_id FROM examination_tickets WHERE visit_id = :visit_id LIMIT 1');
+        $stmt->execute([':visit_id' => $visitId]);
+        $ticketId = $stmt->fetchColumn();
+
+        if ($ticketId === false || $ticketId === null) {
+            return null;
+        }
+
+        return $this->deleteTicketWithSerialAdjustment((int) $ticketId, $userId);
+    }
+
+    public function deleteTicketWithSerialAdjustment(int $ticketId, ?int $userId = null): array
+    {
+        if ($this->conn->inTransaction()) {
+            return $this->performTicketDeleteWithAdjustment($ticketId, $userId);
+        }
+
+        $this->conn->beginTransaction();
+        try {
+            $result = $this->performTicketDeleteWithAdjustment($ticketId, $userId);
+            $this->conn->commit();
+            return $result;
+        } catch (Throwable $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    private function performTicketDeleteWithAdjustment(int $ticketId, ?int $userId = null): array
+    {
+        $infoStmt = $this->conn->prepare(
+            'SELECT ticket_id, visit_id, serial_number, ticket_type, shift_closure_id
+             FROM examination_tickets
+             WHERE ticket_id = :id
+             FOR UPDATE'
+        );
+        $infoStmt->execute([':id' => (string) $ticketId]);
+        $ticket = $infoStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$ticket) {
+            throw new InvalidArgumentException('التذكرة المطلوب حذفها غير موجودة.');
+        }
+
+        $serialNumber = (int) ($ticket['serial_number'] ?? 0);
+
+        $counterStmt = $this->conn->prepare(
+            "SELECT doc_type_id, current_serial FROM document_types WHERE doc_name = 'T' FOR UPDATE"
+        );
+        $counterStmt->execute();
+        $counterRow = $counterStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$counterRow) {
+            throw new RuntimeException('لم يتم العثور على نوع المستند T (تذاكر) في جدول document_types.');
+        }
+
+        $deleteStmt = $this->conn->prepare('DELETE FROM examination_tickets WHERE ticket_id = :id');
+        $deleteStmt->execute([':id' => (string) $ticketId]);
+
+        if ($serialNumber > 0) {
+            $rowsStmt = $this->conn->prepare(
+                'SELECT ticket_id, serial_number
+                 FROM examination_tickets
+                 WHERE serial_number > :serial
+                 ORDER BY serial_number ASC
+                 FOR UPDATE'
+            );
+            $rowsStmt->execute([':serial' => $serialNumber]);
+            $rowsToShift = $rowsStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            if (!empty($rowsToShift)) {
+                $updateStmt = $this->conn->prepare(
+                    'UPDATE examination_tickets
+                     SET serial_number = :new_serial,
+                         updated_at = NOW()
+                     WHERE ticket_id = :id'
+                );
+
+                foreach ($rowsToShift as $row) {
+                    $oldSerial = (int) $row['serial_number'];
+                    $newSerial = $oldSerial - 1;
+                    if ($newSerial <= 0) {
+                        continue;
+                    }
+
+                    $updateStmt->execute([
+                        ':new_serial' => $newSerial,
+                        ':id'         => (string) $row['ticket_id'],
+                    ]);
+                }
+            }
+        }
+
+        $maxStmt = $this->conn->prepare('SELECT COALESCE(MAX(serial_number), 0) FROM examination_tickets');
+        $maxStmt->execute();
+        $actualMax = (int) $maxStmt->fetchColumn();
+
+        $syncCounterStmt = $this->conn->prepare(
+            'UPDATE document_types
+             SET current_serial = :current_serial,
+                 updated_at = NOW()
+             WHERE doc_type_id = :id'
+        );
+        $syncCounterStmt->execute([
+            ':current_serial' => $actualMax,
+            ':id'             => (string) $counterRow['doc_type_id'],
+        ]);
+
+        return [
+            'ticket_id'        => (int) $ticket['ticket_id'],
+            'visit_id'         => (int) $ticket['visit_id'],
+            'serial_number'    => $serialNumber,
+            'ticket_type'      => (string) ($ticket['ticket_type'] ?? ''),
+            'shift_closure_id' => $ticket['shift_closure_id'] !== null ? (int) $ticket['shift_closure_id'] : null,
+            'deleted_by'       => $userId,
+        ];
     }
 
     /**
