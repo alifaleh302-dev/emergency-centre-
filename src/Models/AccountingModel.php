@@ -186,7 +186,9 @@ class AccountingModel
                 FROM Invoices i
                 JOIN Visits v ON i.visit_id = v.visit_id
                 JOIN Patients p ON v.patient_id = p.patient_id
-                WHERE i.doc_type_id IS NULL AND i.accountant_id IS NULL
+                WHERE i.doc_type_id IS NULL
+                  AND i.accountant_id IS NULL
+                  AND {$this->activeInvoiceCondition('i')}
                 ORDER BY i.created_at ASC";
         $stmt = $this->conn->query($sql);
         return $stmt->fetchAll();
@@ -194,7 +196,16 @@ class AccountingModel
 
     public function getPendingInvoiceById(int $invoiceId): ?array
     {
-        $stmt = $this->conn->prepare('SELECT invoice_id, total FROM Invoices WHERE invoice_id = :invoice_id AND doc_type_id IS NULL AND accountant_id IS NULL LIMIT 1');
+        $stmt = $this->conn->prepare(
+            'SELECT invoice_id, total
+             FROM Invoices
+             WHERE invoice_id = :invoice_id
+               AND doc_type_id IS NULL
+               AND accountant_id IS NULL
+               AND cancelled_at IS NULL
+               AND is_deleted = FALSE
+             LIMIT 1'
+        );
         $stmt->execute([':invoice_id' => $invoiceId]);
         $invoice = $stmt->fetch();
 
@@ -266,12 +277,23 @@ class AccountingModel
                 throw new InvalidArgumentException('نوع السند المطلوب غير موجود في قاعدة البيانات.');
             }
 
-            // جلب الفاتورة المعلقة (للتأكد من إجماليها وvisit_id)
-            $pendStmt = $this->conn->prepare('SELECT invoice_id, visit_id, total FROM Invoices WHERE invoice_id = :id LIMIT 1');
+            // جلب الفاتورة المعلقة الفعّالة فقط (للتأكد من إجماليها وvisit_id)
+            // هذا يمنع محاولة تسديد فاتورة محذوفة منطقياً أو ملغاة، والتي كانت
+            // تؤدي سابقاً إلى خطأ قاعدة بيانات عند تعبئة serial_number/accountant_id.
+            $pendStmt = $this->conn->prepare(
+                'SELECT invoice_id, visit_id, total
+                 FROM Invoices
+                 WHERE invoice_id = :id
+                   AND doc_type_id IS NULL
+                   AND accountant_id IS NULL
+                   AND cancelled_at IS NULL
+                   AND is_deleted = FALSE
+                 LIMIT 1'
+            );
             $pendStmt->execute([':id' => $invoiceId]);
             $pending = $pendStmt->fetch();
             if (!$pending) {
-                throw new InvalidArgumentException('الفاتورة المطلوبة غير موجودة.');
+                throw new InvalidArgumentException('الفاتورة المطلوبة غير موجودة أو لم تعد قابلة للتحصيل.');
             }
             $visitId = (int) $pending['visit_id'];
             $invoiceTotal = round((float) $pending['total'], 2);
@@ -1334,7 +1356,16 @@ class AccountingModel
         try {
             foreach (array_keys($pendingIds) as $invoiceId) {
                 $invoiceId = (int) $invoiceId;
-                $pendStmt = $this->conn->prepare('SELECT total FROM Invoices WHERE invoice_id = :id AND doc_type_id IS NULL AND accountant_id IS NULL LIMIT 1');
+                $pendStmt = $this->conn->prepare(
+                    'SELECT total
+                     FROM Invoices
+                     WHERE invoice_id = :id
+                       AND doc_type_id IS NULL
+                       AND accountant_id IS NULL
+                       AND cancelled_at IS NULL
+                       AND is_deleted = FALSE
+                     LIMIT 1'
+                );
                 $pendStmt->execute([':id' => $invoiceId]);
                 $totalRow = $pendStmt->fetch();
                 if (!$totalRow) {
