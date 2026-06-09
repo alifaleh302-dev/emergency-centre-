@@ -34,7 +34,7 @@ class ExaminationTicketModel
      */
     public function autoIssue(int $visitId, ?string $notes = null): array
     {
-        $resolved = $this->settings->resolveTicketTypeAndAmount();
+        $resolved = $this->resolveTicketTypeAndAmountForVisit($visitId);
         $ticketType = $resolved['type'];
         $amount     = $resolved['amount'];
         $notesValue = $notes !== null ? trim($notes) : '';
@@ -107,6 +107,34 @@ class ExaminationTicketModel
             }
             throw $e;
         }
+    }
+
+    /**
+     * يربط التذكرة بنفس الفترة المحفوظة على الزيارة إن وُجدت.
+     * هذا يمنع أي اختلاف بين visit.shift_id وبين ticket_type في حالات ما بعد منتصف الليل.
+     *
+     * @return array{type:string, amount:float}
+     */
+    private function resolveTicketTypeAndAmountForVisit(int $visitId): array
+    {
+        $stmt = $this->conn->prepare(
+            "SELECT s.shift_type
+             FROM visits v
+             LEFT JOIN shifts s ON s.shift_id = v.shift_id
+             WHERE v.visit_id = :vid
+             LIMIT 1"
+        );
+        $stmt->execute([':vid' => $visitId]);
+        $shiftType = (string) ($stmt->fetchColumn() ?: '');
+
+        if ($shiftType === 'morning') {
+            return ['type' => 'morning', 'amount' => $this->settings->getMorningPrice()];
+        }
+        if ($shiftType === 'evening') {
+            return ['type' => 'evening', 'amount' => $this->settings->getEveningPrice()];
+        }
+
+        return $this->settings->resolveTicketTypeAndAmount();
     }
 
     public function getByVisitId(int $visitId): ?array

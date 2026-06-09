@@ -211,8 +211,10 @@ class ReportsController extends BaseController
                 'net_amount'      => (float) $row['net_amount'],
                 'cashier'         => (string) $row['cashier'],
                 'time'            => (string) $row['time'],
-                // 🆕 الفترة المنطقية للسند (تُستخدم في فلتر shift_type على الواجهة)
-                'shift_type'      => $this->classifyInvoiceShift((string) ($row['time'] ?? ''), $date),
+                // نعتمد الفترة المحفوظة على الزيارة أولاً، ثم نلجأ لتحليل الوقت كحل احتياطي.
+                'shift_type'      => in_array((string) ($row['visit_shift_type'] ?? ''), ['morning', 'evening'], true)
+                    ? (string) $row['visit_shift_type']
+                    : $this->classifyInvoiceShift((string) ($row['time'] ?? ''), $date),
             ];
         }
 
@@ -324,18 +326,34 @@ class ReportsController extends BaseController
      */
     private function classifyInvoiceShift(string $timeStr, string $date): string
     {
-        if (!preg_match('/^(\d{1,2})/', $timeStr, $m)) {
+        $hour = null;
+
+        $normalized = strtoupper(trim($timeStr));
+        $dt = DateTimeImmutable::createFromFormat('h:i A', $normalized)
+            ?: DateTimeImmutable::createFromFormat('h:i:s A', $normalized)
+            ?: DateTimeImmutable::createFromFormat('H:i', $normalized)
+            ?: DateTimeImmutable::createFromFormat('H:i:s', $normalized);
+        if ($dt instanceof DateTimeImmutable) {
+            $hour = (int) $dt->format('G');
+        } elseif (preg_match('/^(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(AM|PM)?$/i', $normalized, $m)) {
+            $hour = (int) $m[1];
+            $ampm = strtoupper((string) ($m[3] ?? ''));
+            if ($ampm === 'AM') {
+                $hour = ($hour === 12) ? 0 : $hour;
+            } elseif ($ampm === 'PM') {
+                $hour = ($hour === 12) ? 12 : ($hour + 12);
+            }
+        }
+
+        if ($hour === null) {
             return 'morning';
         }
-        $hour = (int) $m[1];
 
-        // محاولة الاستفادة من حدود اليوم المحفوظة
         try {
             $boundaries = $this->shiftService->getShiftBoundariesForDate($date);
             foreach ($boundaries as $b) {
                 $startHour = (int) substr((string) $b['start_time'], 0, 2);
                 $endHour   = (int) substr((string) $b['end_time'], 0, 2);
-                // ندعم end=23:59 أيضاً بدلاً من 24
                 if ($hour >= $startHour && $hour < ($endHour === 23 ? 24 : $endHour)) {
                     return (string) $b['shift_type'];
                 }

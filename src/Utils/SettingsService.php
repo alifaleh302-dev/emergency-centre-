@@ -111,14 +111,32 @@ class SettingsService
     }
 
     /**
-     * يحدد نوع التذكرة (morning/evening) والمبلغ الافتراضي
-     * بناءً على وقت الإنشاء وإعدادات النظام.
+     * يحدد نوع التذكرة (morning/evening) والمبلغ الافتراضي.
+     *
+     * إصلاح جذري (2026-06): مصدر الحقيقة لم يعد ساعات system_settings القديمة،
+     * بل جدول shifts عبر ShiftService. هذا يمنع ظهور تذاكر/سندات ما بعد منتصف الليل
+     * تحت الفترة المسائية عندما يكون اليوم مُعرّفاً كفترة صباحية 00:00→12:00.
      *
      * @return array{type:string, amount:float}
      */
     public function resolveTicketTypeAndAmount(?DateTimeInterface $when = null): array
     {
-        $hour = (int) ($when ? $when->format('G') : date('G'));
+        $when = $when ?? new DateTimeImmutable();
+
+        try {
+            $shift = $this->shiftService()->resolveOrCreateShift($when);
+            $shiftType = (string) ($shift['shift_type'] ?? '');
+            if ($shiftType === 'morning') {
+                return ['type' => 'morning', 'amount' => $this->getMorningPrice()];
+            }
+            if ($shiftType === 'evening') {
+                return ['type' => 'evening', 'amount' => $this->getEveningPrice()];
+            }
+        } catch (Throwable $e) {
+            // fallback أدناه حفاظاً على التوافق إذا تعذّر الوصول إلى shifts.
+        }
+
+        $hour = (int) $when->format('G');
         $start = $this->getMorningStartHour();
         $end   = $this->getMorningEndHour();
 

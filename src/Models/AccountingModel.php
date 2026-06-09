@@ -155,8 +155,12 @@ class AccountingModel
     private function prevShiftHasAnyTickets(string $shiftType, string $shiftDate): bool
     {
         $stmt = $this->conn->prepare(
-            "SELECT 1 FROM examination_tickets
-             WHERE ticket_type = :st AND DATE(created_at) = :sd
+            "SELECT 1
+             FROM examination_tickets t
+             LEFT JOIN visits v_shift ON v_shift.visit_id = t.visit_id
+             LEFT JOIN shifts s_shift ON s_shift.shift_id = v_shift.shift_id
+             WHERE COALESCE(s_shift.shift_type, t.ticket_type) = :st
+               AND COALESCE(s_shift.shift_date, DATE(t.created_at)) = :sd
              LIMIT 1"
         );
         $stmt->execute([':st' => $shiftType, ':sd' => $shiftDate]);
@@ -754,9 +758,11 @@ class AccountingModel
                        p.full_name AS patient_name,
                        u.full_name AS cashier,
                        {$this->formatTime($timestamp)} AS time,
+                       s.shift_type AS visit_shift_type,
                        CASE WHEN dt.doc_name = 'A' THEN 0 ELSE 1 END AS group_order
                 FROM Invoices i
                 JOIN Visits v          ON i.visit_id = v.visit_id
+                LEFT JOIN shifts s     ON s.shift_id = v.shift_id
                 JOIN Patients p        ON v.patient_id = p.patient_id
                 JOIN Document_Types dt ON i.doc_type_id = dt.doc_type_id
                 JOIN Users u           ON i.accountant_id = u.user_id
@@ -797,24 +803,24 @@ class AccountingModel
         $params = [':shift_type' => $shiftType];
         $dateFilter = '';
 
-        // المنطقة الزمنية لجلسة قاعدة البيانات مضبوطة مسبقاً على APP_TIMEZONE،
-        // فيكفي استخدام DATE(created_at) دون تحويل صريح إلى UTC.
         if ($date !== null && $date !== '') {
-            $dateFilter = 'AND DATE(created_at) = :shift_date';
+            $dateFilter = 'AND COALESCE(s_shift.shift_date, DATE(t.created_at)) = :shift_date';
             $params[':shift_date'] = $date;
         } else {
             $dateFilter = ($this->driver === 'pgsql'
-                ? 'AND DATE(created_at) = CURRENT_DATE'
-                : 'AND DATE(created_at) = CURDATE()');
+                ? "AND COALESCE(s_shift.shift_date, DATE(t.created_at)) = CURRENT_DATE"
+                : 'AND COALESCE(s_shift.shift_date, DATE(t.created_at)) = CURDATE()');
         }
 
-        $sql = "SELECT MIN(serial_number) AS start_no,
-                       MAX(serial_number) AS end_no,
+        $sql = "SELECT MIN(t.serial_number) AS start_no,
+                       MAX(t.serial_number) AS end_no,
                        COUNT(*) AS tickets_count,
-                       COALESCE(SUM(amount), 0) AS total_amount
-                FROM examination_tickets
-                WHERE ticket_type = :shift_type
-                  AND shift_closure_id IS NULL
+                       COALESCE(SUM(t.amount), 0) AS total_amount
+                FROM examination_tickets t
+                LEFT JOIN visits v_shift ON v_shift.visit_id = t.visit_id
+                LEFT JOIN shifts s_shift ON s_shift.shift_id = v_shift.shift_id
+                WHERE COALESCE(s_shift.shift_type, t.ticket_type) = :shift_type
+                  AND t.shift_closure_id IS NULL
                   {$dateFilter}";
         $stmt = $this->conn->prepare($sql);
         $stmt->execute($params);
@@ -832,17 +838,22 @@ class AccountingModel
      */
     public function hasOpenShiftBefore(string $shiftType): bool
     {
-        // يعتمد على ضبط جلسة DB على APP_TIMEZONE (Database::getConnection).
         $sql = $this->driver === 'pgsql'
-            ? "SELECT 1 FROM examination_tickets
-                  WHERE ticket_type = :shift_type
-                    AND shift_closure_id IS NULL
-                    AND DATE(created_at) = CURRENT_DATE - INTERVAL '1 day'
+            ? "SELECT 1
+                  FROM examination_tickets t
+                  LEFT JOIN visits v_shift ON v_shift.visit_id = t.visit_id
+                  LEFT JOIN shifts s_shift ON s_shift.shift_id = v_shift.shift_id
+                  WHERE COALESCE(s_shift.shift_type, t.ticket_type) = :shift_type
+                    AND t.shift_closure_id IS NULL
+                    AND COALESCE(s_shift.shift_date, DATE(t.created_at)) = CURRENT_DATE - INTERVAL '1 day'
                   LIMIT 1"
-            : "SELECT 1 FROM examination_tickets
-                  WHERE ticket_type = :shift_type
-                    AND shift_closure_id IS NULL
-                    AND DATE(created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+            : "SELECT 1
+                  FROM examination_tickets t
+                  LEFT JOIN visits v_shift ON v_shift.visit_id = t.visit_id
+                  LEFT JOIN shifts s_shift ON s_shift.shift_id = v_shift.shift_id
+                  WHERE COALESCE(s_shift.shift_type, t.ticket_type) = :shift_type
+                    AND t.shift_closure_id IS NULL
+                    AND COALESCE(s_shift.shift_date, DATE(t.created_at)) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
                   LIMIT 1";
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([':shift_type' => $shiftType]);
@@ -913,15 +924,16 @@ class AccountingModel
             }
 
             // جلب التذاكر مع قفل الصف (لمنع إصدار تذاكر متوازية خلال الإقفال).
-            // المنطقة الزمنية لجلسة DB مضبوطة على APP_TIMEZONE، فلا حاجة لتحويل صريح.
-            $dateExpr = 'DATE(created_at)';
+            // نعتمد أولاً على visit.shift_id / shifts كمصدر الحقيقة، ثم fallback إلى ticket_type legacy.
             $lockStmt = $this->conn->prepare(
-                "SELECT ticket_id, serial_number, amount
-                 FROM examination_tickets
-                 WHERE ticket_type = :st
-                   AND shift_closure_id IS NULL
-                   AND {$dateExpr} = :sd
-                 ORDER BY serial_number ASC
+                "SELECT t.ticket_id, t.serial_number, t.amount
+                 FROM examination_tickets t
+                 LEFT JOIN visits v_shift ON v_shift.visit_id = t.visit_id
+                 LEFT JOIN shifts s_shift ON s_shift.shift_id = v_shift.shift_id
+                 WHERE COALESCE(s_shift.shift_type, t.ticket_type) = :st
+                   AND t.shift_closure_id IS NULL
+                   AND COALESCE(s_shift.shift_date, DATE(t.created_at)) = :sd
+                 ORDER BY t.serial_number ASC
                  FOR UPDATE"
             );
             $lockStmt->execute([':st' => $shiftType, ':sd' => $shiftDate]);
@@ -1082,13 +1094,14 @@ class AccountingModel
             return;
         }
 
-        // يعتمد على المنطقة الزمنية المضبوطة لجلسة DB.
-        $dateExpr = 'DATE(created_at)';
         $cntStmt = $this->conn->prepare(
-            "SELECT COUNT(*) FROM examination_tickets
-             WHERE ticket_type = :st
-               AND shift_closure_id IS NULL
-               AND {$dateExpr} = :sd"
+            "SELECT COUNT(*)
+             FROM examination_tickets t
+             LEFT JOIN visits v_shift ON v_shift.visit_id = t.visit_id
+             LEFT JOIN shifts s_shift ON s_shift.shift_id = v_shift.shift_id
+             WHERE COALESCE(s_shift.shift_type, t.ticket_type) = :st
+               AND t.shift_closure_id IS NULL
+               AND COALESCE(s_shift.shift_date, DATE(t.created_at)) = :sd"
         );
         $cntStmt->execute([':st' => $prev['shift_type'], ':sd' => $prev['shift_date']]);
         if ((int) $cntStmt->fetchColumn() === 0) {
