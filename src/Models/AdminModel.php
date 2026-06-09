@@ -1681,10 +1681,9 @@ class AdminModel
             $stmt = $this->conn->prepare(
                 'UPDATE visits SET shift_id = :shift_id WHERE CAST(visit_date AS DATE) = :shift_date'
             );
-            $stmt->execute([
-                ':shift_id' => $activeShiftIds['morning'],
-                ':shift_date' => $shiftDate,
-            ]);
+            $stmt->bindValue(':shift_id', (int) $activeShiftIds['morning'], PDO::PARAM_INT);
+            $stmt->bindValue(':shift_date', $shiftDate, PDO::PARAM_STR);
+            $stmt->execute();
             return;
         }
 
@@ -1695,10 +1694,9 @@ class AdminModel
             $stmt = $this->conn->prepare(
                 'UPDATE visits SET shift_id = :shift_id WHERE CAST(visit_date AS DATE) = :shift_date'
             );
-            $stmt->execute([
-                ':shift_id' => $activeShiftIds['evening'],
-                ':shift_date' => $shiftDate,
-            ]);
+            $stmt->bindValue(':shift_id', (int) $activeShiftIds['evening'], PDO::PARAM_INT);
+            $stmt->bindValue(':shift_date', $shiftDate, PDO::PARAM_STR);
+            $stmt->execute();
             return;
         }
 
@@ -1706,20 +1704,24 @@ class AdminModel
             return;
         }
 
+        // ملاحظة: PostgreSQL لا تستنتج نوع المعاملات داخل تعبير CASE تلقائياً،
+        // لذا نضيف CAST صريح إلى integer ونمرر القيم باستخدام PDO::PARAM_INT
+        // لضمان عدم حدوث خطأ Datatype mismatch بين عمود shift_id (integer)
+        // وقيم المعاملات التي يرسلها PDO افتراضياً كنصوص.
         $stmt = $this->conn->prepare(
             "UPDATE visits
                 SET shift_id = CASE
-                    WHEN CAST(visit_date AS TIME) < :split_time THEN :morning_shift_id
-                    ELSE :evening_shift_id
+                    WHEN CAST(visit_date AS TIME) < CAST(:split_time AS TIME)
+                        THEN CAST(:morning_shift_id AS INTEGER)
+                    ELSE CAST(:evening_shift_id AS INTEGER)
                 END
-              WHERE CAST(visit_date AS DATE) = :shift_date"
+              WHERE CAST(visit_date AS DATE) = CAST(:shift_date AS DATE)"
         );
-        $stmt->execute([
-            ':split_time' => $splitTime . ':00',
-            ':morning_shift_id' => $activeShiftIds['morning'],
-            ':evening_shift_id' => $activeShiftIds['evening'],
-            ':shift_date' => $shiftDate,
-        ]);
+        $stmt->bindValue(':split_time', $splitTime . ':00', PDO::PARAM_STR);
+        $stmt->bindValue(':morning_shift_id', (int) $activeShiftIds['morning'], PDO::PARAM_INT);
+        $stmt->bindValue(':evening_shift_id', (int) $activeShiftIds['evening'], PDO::PARAM_INT);
+        $stmt->bindValue(':shift_date', $shiftDate, PDO::PARAM_STR);
+        $stmt->execute();
     }
 
     public function getSystemSettingsCatalog(): array
