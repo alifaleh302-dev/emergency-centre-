@@ -6,6 +6,16 @@ class AuthController extends BaseController
 {
     private PDO $conn;
 
+    private function normalizeRoleName(string $roleName): string
+    {
+        $normalized = trim($roleName);
+
+        return match ($normalized) {
+            'امين الصندوق', 'أمين الصندوق', 'أمين صندوق' => 'أمين صندوق',
+            default => $normalized,
+        };
+    }
+
     public function __construct()
     {
         $database = new Database();
@@ -24,6 +34,7 @@ class AuthController extends BaseController
                       FROM Users u
                       JOIN Roles r ON u.role_id = r.role_id
                       WHERE u.username = :username
+                        AND COALESCE(u.is_active, TRUE) = TRUE
                       LIMIT 1";
 
             $stmt = $this->conn->prepare($query);
@@ -54,6 +65,8 @@ class AuthController extends BaseController
                 ]);
             }
 
+            $canonicalRole = $this->normalizeRoleName((string) $user['role_name']);
+
             $tokenPayload = [
                 'iss' => 'EmergencyCenter',
                 'exp' => time() + (60 * 60 * 8),
@@ -61,7 +74,7 @@ class AuthController extends BaseController
                     // المعرّف أصبح INT (SERIAL) بعد الترحيل 003 - ولكن نحفظه كـ string في JWT/Session
                     'user_id' => (string) $user['user_id'],
                     'name' => (string) $user['full_name'],
-                    'job' => (string) $user['role_name'],
+                    'job' => $canonicalRole,
                 ],
             ];
 
@@ -70,7 +83,7 @@ class AuthController extends BaseController
             session_regenerate_id(true);
             $_SESSION['user_id'] = (string) $user['user_id'];
             $_SESSION['name'] = (string) $user['full_name'];
-            $_SESSION['job'] = (string) $user['role_name'];
+            $_SESSION['job'] = $canonicalRole;
             $_SESSION['session_fingerprint'] = hash('sha256', (string) ($_SERVER['HTTP_USER_AGENT'] ?? 'unknown-agent'));
             $_SESSION['jwt_fingerprint'] = hash('sha256', $jwt);
             $_SESSION['last_activity_at'] = time();

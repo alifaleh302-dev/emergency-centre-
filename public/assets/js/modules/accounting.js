@@ -370,7 +370,7 @@ const Accountant = {
             Core.showAlert('تم تحديث القائمة، والفاتورة المطلوبة لم تعد متاحة أو لم تعد معلّقة.', 'info');
             return;
         }
-        this.showPaymentModal(target);
+        this.openPaymentModal(target.Invoice_id);
     },
   
 
