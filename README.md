@@ -1,196 +1,254 @@
-# نظام مركز الطوارئ
+<div dir="rtl" align="right">
 
-مشروع PHP بنمط MVC لإدارة دورة عمل مركز الطوارئ، مع واجهات للطبيب والمحاسبة وطبقة API موحدة.
+# 🏥 نظام إدارة مركز الطوارئ الطبي
 
----
+> منصة تشغيلية متكاملة لإدارة دورة العمل داخل مراكز الطوارئ الطبية — من استقبال المريض حتى الإقفال المالي اليومي.
 
-## 🆕 نظام الفترات المالية الجديد (Shifts Refactor)
-
-تم تنفيذ إعادة هيكلة نظام الفترات المالية عبر المراحل 1–7، وفي هذه المرحلة تم إكمال **التوثيق والتحقق التقني** المطلوبين في المرحلة 8.
-
-### ملخص البنية الجديدة
-- **تعريف الفترات اليومية** صار يُدار عبر جدول `shifts`.
-- **سجل الإقفال** بقي منفصلاً داخل `shifts_closures`.
-- **الزيارة أصبحت مرتبطة بالفترة** عبر `visits.shift_id`.
-- **الخدمة المركزية للفترات** موجودة في `src/Utils/ShiftService.php`.
-- **الإقفال التلقائي Lazy Hook** يعمل من خلال `public/api/index.php`.
-- **مصدر البيانات الموحّد** لشاشتي اليومية والمعلومية اليومية هو `GET /api/reports/daily_view`.
-- **إدارة حدود الفترات** تتم من لوحة المدير عبر:
-  - `GET /api/admin/shifts/day`
-  - `POST /api/admin/shifts/save_boundaries`
-- **سجل التدقيق** يدعم الآن الإجراء `AUTO_CLOSE`.
-
-### تحقق المرحلة 8
-- فحص Syntax لملفات PHP وJavaScript الأساسية بنجاح.
-- فحص Smoke على البيئة المنشورة للمسارات:
-  - `auth/login`
-  - `auth/me`
-  - `reports/daily_view`
-  - `admin/shifts/day`
-- فحص قراءة فقط على قاعدة البيانات للتأكد من وجود:
-  - `shifts`
-  - `shifts_closures`
-  - `visits.shift_id`
-  - قيد `AUTO_CLOSE` في `audit_logs.action`
-
-### مراجع التوثيق
-- الخطة الأصلية: `docs/SHIFTS_REFACTOR_PLAN.md`
-- سجل الإغلاق النهائي للمشروع: `docs/changelogs/CHANGES_SHIFTS_REFACTOR.md`
-- المرحلة 6: `docs/changelogs/PHASE_6_DAILY_VIEW_UNIFIED.md`
-- المرحلة 7: `docs/changelogs/PHASE_7_AUDIT_LOG_AUTO_CLOSE.md`
+<p align="center">
+  <img alt="PHP" src="https://img.shields.io/badge/PHP-8.1%2B-777BB4?style=for-the-badge&logo=php&logoColor=white">
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-14%2B-336791?style=for-the-badge&logo=postgresql&logoColor=white">
+  <img alt="MySQL" src="https://img.shields.io/badge/MySQL-8%2B-4479A1?style=for-the-badge&logo=mysql&logoColor=white">
+  <img alt="Apache" src="https://img.shields.io/badge/Apache-2.4-D22128?style=for-the-badge&logo=apache&logoColor=white">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white">
+  <img alt="Architecture" src="https://img.shields.io/badge/Architecture-MVC-2ECC71?style=for-the-badge">
+  <img alt="License" src="https://img.shields.io/badge/License-Private-lightgrey?style=for-the-badge">
+</p>
 
 ---
 
-## 🏗️ بنية المشروع
+## 📖 نبذة عن المشروع
 
-تمت إعادة تنظيم المشروع وفقًا لأفضل الممارسات (Industry Standard) لفصل الواجهة العامّة عن كود الخادم وتحصين الأمان:
+**نظام إدارة مركز الطوارئ** هو تطبيق ويب مؤسسي مصمَّم لتشغيل مراكز الطوارئ الطبية بكفاءة، مع فصل واضح بين الأدوار التشغيلية والمالية والإدارية. يعالج النظام دورة العمل الكاملة داخل المركز:
+
+**تسجيل المريض ← فتح الزيارة ← التشخيص والطلبات الطبية ← الفوترة ← التحصيل ← إقفال الفترة ← التقارير**
+
+بُني المشروع بلغة **PHP** وفق نمط **MVC**، مع واجهة أمامية خفيفة الوزن قائمة على **HTML + Bootstrap 5 + JavaScript** بدون أي إطار عمل ثقيل، وطبقة **API موحّدة** تخدم كل الشاشات بحسب صلاحيات المستخدم، مدعومة بـ **JWT** لتأمين الجلسات، و**PostgreSQL** كقاعدة بيانات أساسية مع دعم كامل لـ **MySQL**.
+
+---
+
+## 🎯 لماذا هذا النظام؟
+
+| الميزة | القيمة التشغيلية |
+|---|---|
+| 🩺 **تكامل طبي–مالي** | ربط مباشر بين الزيارة الطبية والفاتورة والتحصيل |
+| 🕒 **إدارة فترات ذكية** | فترات صباحية/مسائية مع إقفال يدوي وتلقائي |
+| 🔐 **صلاحيات دقيقة** | فصل واضح بين الطبيب، أمين الصندوق، المدير، والمركز المالي |
+| 📊 **تقارير فورية** | يوميّة، خزينة، إيرادات، أداء أطباء، حصة الوزارة |
+| 🛡️ **حوكمة كاملة** | سجل تدقيق (Audit Log) لكل الحركات الحساسة |
+| ⚡ **إشعارات لحظية** | تكامل اختياري مع Pusher لتحديثات فورية |
+| 🐳 **جاهز للنشر** | Docker + دعم كامل لـ `DATABASE_URL` لمنصات مثل Render |
+
+---
+
+## 👥 الأدوار التشغيلية
+
+<div dir="rtl">
+
+يقدّم النظام تجربة مخصّصة لكل دور، مع تحميل ديناميكي لوحدة الواجهة المناسبة عند تسجيل الدخول:
+
+| الدور | المهام الأساسية |
+|---|---|
+| 👨‍⚕️ **الطبيب العام** | البحث عن المرضى، فتح زيارة جديدة، إرسال الطلبات الطبية، التشخيص النهائي، الأرشيف الطبي |
+| 💰 **أمين الصندوق** | متابعة الفواتير المعلّقة، السداد، اليومية، الخزينة، أرقام السندات، إقفال الفترات |
+| 🛠️ **مدير النظام** | لوحة إدارة شاملة، إعدادات النظام، إدارة الجداول المرجعية، التقارير، سجل التدقيق، إعادة الفتح الإدارية |
+| 📈 **المركز المالي** | واجهة موحّدة (مشتركة بين المحاسب والمدير) لمراجعة الحركات المالية، المؤشرات، الصادرات، وسندات الطباعة |
+
+</div>
+
+---
+
+## ✨ أهم الوظائف
+
+### 🏥 إدارة المرضى والزيارات
+- إنشاء ملفات المرضى الجدد والبحث بين الحاليين.
+- فتح زيارة جديدة لمريض جديد أو مريض موجود.
+- منع تضارب الزيارات النشطة لنفس المريض.
+- قائمة انتظار مرتبطة بكل طبيب.
+
+### 🩺 سير العمل الطبي
+- تسجيل التشخيص الأولي والنهائي.
+- إرسال طلبات الخدمات الطبية والفحوصات المختبرية.
+- إنشاء وثائق مختبر مرتبطة بالخدمات المرسلة.
+- استعراض الأرشيف الطبي وملفات المرضى.
+
+### 💵 الفوترة والتحصيل
+- إنشاء فواتير مرتبطة بالزيارة والخدمات تلقائيًا.
+- تفصيل الفواتير حسب القسم (Invoice per Department).
+- سداد الفواتير مع التحقق الرياضي من المبلغ والإعفاءات (باستخدام Epsilon).
+- إدارة أرقام السندات وتسلسلها المالي.
+- عرض الخزينة والتفاصيل اليومية بشكل تفاعلي.
+
+### 🕒 إدارة الفترات المالية (Shifts System)
+- دعم الفترات **الصباحية** و**المسائية** لكل يوم.
+- تخصيص حدود اليوم المالي عبر قرص ساعة تفاعلي.
+- إقفال الفترة يدويًا مع التحقق من عدم وجود فواتير معلّقة.
+- إعادة فتح الفترة ضمن نافذة زمنية آمنة.
+- **إقفال تلقائي (Auto-close)** عبر Lazy Hook للفترات والزيارات المنتهية.
+- ثلاثة أوضاع لليوم: `both` (فترتان)، `morning_only`، `evening_only`.
+
+### 📊 التقارير والمتابعة
+- تقرير اليومية الموحّد للتشغيل والتحصيل.
+- تقارير الإيرادات (سنوي / شهري / يومي).
+- تقارير أداء الأطباء.
+- تقارير الحركات المالية وتوزيع الخدمات.
+- تقرير حصة الوزارة (Ministry Share).
+- طباعة السندات المالية.
+
+### 🎛️ الإدارة والحوكمة
+- تسجيل دخول آمن بصلاحيات مبنيّة على الدور (RBAC).
+- CRUD عام مرن لكل الجداول المرجعية عبر لوحة الإدارة.
+- إعدادات النظام العامة وإعدادات ترويسة الطباعة.
+- **سجل تدقيق شامل** لكل الحركات الإدارية والمالية.
+- بث إشعارات إدارية للموظفين.
+
+---
+
+## 🏗️ المعمارية التقنية
+
+<div dir="rtl">
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Web Browser (RTL UI)                       │
+│         HTML + Bootstrap 5 + Vanilla JavaScript              │
+└──────────────────────────┬───────────────────────────────────┘
+                           │  HTTPS + JWT
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│              Apache 2.4  (DocumentRoot = public/)            │
+│                             │                                │
+│                             ▼                                │
+│                 public/api/index.php  (API Router)           │
+│  ┌────────────┬─────────────┬────────────┬────────────────┐ │
+│  │   Auth     │   Doctor    │ Accounting │  Admin/Finance │ │
+│  └─────┬──────┴──────┬──────┴─────┬──────┴────────┬───────┘ │
+│        │             │            │               │         │
+│        ▼             ▼            ▼               ▼         │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │           Controllers → Models → PDO Layer           │   │
+│  │      Utils: JWT · AuthMiddleware · ShiftService      │   │
+│  │             AuditService · PusherService             │   │
+│  └────────────────────────┬─────────────────────────────┘   │
+└───────────────────────────┼──────────────────────────────────┘
+                            ▼
+              ┌──────────────────────────┐
+              │  PostgreSQL 14+  /  MySQL 8+  │
+              └──────────────────────────┘
+                            │
+                            ▼
+              ┌──────────────────────────┐
+              │  Pusher (Realtime, اختياري)  │
+              └──────────────────────────┘
+```
+
+</div>
+
+### المكوّنات الأساسية
+
+| الوحدة | المسؤولية |
+|---|---|
+| `AuthController` | تسجيل الدخول، إصدار JWT، تجهيز الجلسة، معالجة إعادة التجزئة |
+| `DoctorController` | المرضى، الزيارات، الطلبات، التشخيص، الأرشيف الطبي |
+| `AccountingController` | الفواتير، السداد، اليومية، الخزينة، إقفال/إعادة فتح الفترات |
+| `AdminController` | الإعدادات، لوحة التحكم، CRUD مرجعي، التقارير، التدقيق |
+| `FinanceController` | المركز المالي الموحّد، الحركات، الصادرات، سندات الطباعة |
+| `ReportsController` | اليومية والمعلومية اليومية (مصدر بيانات موحّد) |
+| `ShiftService` | منطق الفترات، حدود اليوم، الإقفال التلقائي |
+| `AuditService` | تسجيل الحركات الحساسة في `audit_logs` |
+| `PusherService` | إعدادات ومصادقة القنوات اللحظية |
+| `JWT` | إصدار وتحقق التوكن يدويًا (بدون تبعيات خارجية) |
+| `AuthMiddleware` | تحقق الصلاحيات على مستوى كل Endpoint |
+
+---
+
+## 📁 هيكل المشروع
 
 ```
 emergency-centre/
-├── public/                       ← DocumentRoot (الوحيد المكشوف للويب)
-│   ├── index.html                ← الواجهة الرئيسية
-│   ├── login.html
-│   ├── .htaccess                 ← رؤوس أمنية + ضغط + كاش
+├── public/                          ← DocumentRoot (المكشوف للويب فقط)
+│   ├── index.html                   ← لوحة التحكم الرئيسية
+│   ├── login.html                   ← صفحة تسجيل الدخول
+│   ├── .htaccess                    ← رؤوس أمنية + Rewrite
 │   ├── api/
-│   │   ├── index.php             ← مدخل الـ API الوحيد
-│   │   └── .htaccess             ← Apache rewrite
+│   │   ├── index.php                ← نقطة الدخول الوحيدة للـ API
+│   │   └── .htaccess
 │   └── assets/
-│       ├── css/                  ← (محجوز للإضافات المستقبلية)
 │       └── js/
-│           ├── core/main.js      ← النواة المركزية (Core)
-│           └── modules/          ← وحدات حسب الدور
-│               ├── doctor.js
+│           ├── core/main.js         ← النواة المشتركة (Core)
+│           └── modules/
 │               ├── admin.js
 │               ├── accounting.js
-│               ├── finance.js
-│               └── daily_info.js
+│               ├── daily_info.js
+│               ├── daily_journal.js
+│               ├── doctor.js
+│               └── finance.js
 │
-├── src/                          ← كود PHP (غير مكشوف عبر الويب)
+├── src/                             ← منطق التطبيق (غير مكشوف للويب)
 │   ├── Config/
-│   │   ├── bootstrap.php         ← تحميل .env + autoload + session
-│   │   └── Database.php
-│   ├── Controllers/              ← طبقة التحكم
-│   ├── Models/                   ← طبقة البيانات
-│   └── Utils/                    ← خدمات مساعدة (JWT/Auth/Pusher...)
+│   │   ├── bootstrap.php            ← تحميل .env + Autoloader + Session
+│   │   └── Database.php             ← طبقة الاتصال (PostgreSQL/MySQL)
+│   ├── Controllers/                 ← 7 Controllers
+│   ├── Models/                      ← 7 Models
+│   └── Utils/                       ← JWT · AuthMiddleware · ShiftService ...
 │
 ├── database/
-│   └── migrations/               ← ترحيلات SQL (محميّة من الويب)
+│   ├── migrations/                  ← 25 ملف SQL بترتيب زمني
+│   └── tests/                       ← سيناريوهات اختبار Shifts
 │
 ├── docs/
-│   └── changelogs/               ← سجلات التغييرات CHANGES_*.md
+│   ├── SHIFTS_REFACTOR_PLAN.md
+│   └── changelogs/                  ← سجلات التغيير التفصيلية
 │
 ├── .env.example
 ├── .gitignore
 ├── .dockerignore
 ├── composer.json
-├── Dockerfile                    ← DocumentRoot = /var/www/html/public
+├── Dockerfile                       ← DocumentRoot = /var/www/html/public
 └── README.md
 ```
 
-### لماذا هذه البنية؟
-
-| المجلد | الغرض |
-|--------|--------|
-| `public/` | **الملفات الوحيدة المكشوفة للويب.** أي محاولة للوصول إلى `/controllers/...` أو `/migrations/...` لن تعود بأي شيء. |
-| `src/` | **كود PHP الحمّاس.** Controllers / Models / Utils غير قابلة للتنزيل عبر HTTP. |
-| `database/migrations/` | **SQL محمي.** سابقًا كان ممكنًا تنزيل أي فايل .sql مباشرة. |
-| `docs/changelogs/` | تجميع سجلات التغيير في مكان واحد بدل تلويث الجذر. |
-| `assets/js/modules/` | وحدات JS منظّمة حسب الدور (doctor / admin / accounting...) بدلاً من رمي كل شيء في الجذر. |
-
-### التغييرات التي رافقت إعادة الهيكلة
-- `Dockerfile`: تحديث Apache `DocumentRoot` إلى `public/` + تفعيل `mod_headers`.
-- `composer.json`: تحديث classmap للمسارات الجديدة.
-- `src/Config/bootstrap.php`: `BASE_PATH` صار يشير لجذر المشروع، وأضيف `SRC_PATH` للـ autoloader.
-- `Roles.script_url` في قاعدة البيانات: تحديث القيم إلى `assets/js/modules/*.js`.
-- إضافة `.gitignore` و `.dockerignore` و `public/.htaccess` برؤوس أمنية.
-
+**لماذا هذا التقسيم؟**
+- `public/` هو المسار الوحيد المكشوف عبر HTTP — أي محاولة للوصول إلى `src/` أو `database/` تُرفض تلقائيًا.
+- `src/` يفصل منطق الأعمال عن الواجهة العامة.
+- `database/migrations/` يحفظ التاريخ التطويري لقاعدة البيانات بشكل قابل للتتبع.
 
 ---
 
-## 🆕 آخر تحديث: تحويل المفاتيح من UUID إلى INT auto-increment (Migration 003)
+## ⚙️ المتطلبات
 
-تم تحويل جميع المفاتيح الأساسية والأجنبية في قاعدة البيانات من نوع `UUID` إلى `SERIAL` (INTEGER auto-increment) لتبسيط واجهة لوحة الإدارة ورفع أداء الاستعلامات.
+| المتطلب | الإصدار |
+|---|---|
+| PHP | **8.1+** |
+| PostgreSQL | **14+** (مفضّل) |
+| MySQL | **8+** (بديل مدعوم) |
+| Apache | **2.4+** مع `mod_rewrite` و `mod_headers` |
+| Docker | اختياري لكن مُوصى به |
 
-### ✅ ما تم إنجازه:
-- **Migration `migrations/003_uuid_to_int_migration.sql`**: يحذف الجداول القديمة وينشئها بمفاتيح `SERIAL` (INTEGER auto-increment) + يعيد بذر البيانات الأساسية (الأدوار، أنواع الحالات، أنواع المستندات، تصنيفات الخدمات) + المستخدمين الأربعة بنفس بياناتهم وكلمات سرّهم.
-- **`role_id` يتطابق مع `role_code`** (1=طبيب 2=أمين 3=استقبال 4=مختبر 5=مدير)، مما يصحح خلل `WHERE u.role_id = 1` في `getDashboardCharts` و`reportDoctorPerformance`.
-- **`BaseController::sanitizeIdentifier`** بات يقبل INT فقط (تنظيف منطق UUID المتروك).
-- **`AdminModel::isAutoGeneratedDefault`** بات يكتفي بـ `nextval(`/identity (تنظيف).
-- **`AdminController::isAdminRole`** تم تبسيطه (لم يعد بحاجة لفرع UUID).
+**امتدادات PHP المطلوبة:** `pdo`, `pdo_pgsql`, `pdo_mysql`
 
-### 🔄 لتطبيقه على بيئة جديدة:
+---
+
+## 🚀 دليل التشغيل السريع
+
+### 1️⃣ استنساخ المشروع
+
 ```bash
-psql $DATABASE_URL -f migrations/003_uuid_to_int_migration.sql
+git clone https://github.com/alifaleh302-dev/emergency-centre-.git
+cd emergency-centre-
 ```
 
----
-
-## 🔄 التحديثات السابقة (PostgreSQL / Render Audit)
-
-### ✅ إصلاحات قاعدة البيانات – التحوّل الكامل إلى PostgreSQL
-- تحديث `config/database.php`: تغيير الـ driver الافتراضي من `mysql` إلى `pgsql` وإصلاح متغيرات البيئة لتدعم `DB_NAME` / `DB_USER`.
-- تحديث `models/DoctorModel.php` و`models/AccountingModel.php`: تغيير القيمة الافتراضية لـ `$driver` إلى `pgsql`.
-- إضافة دالة `insertAndGetId()` في `DoctorModel` لدعم `RETURNING` في PostgreSQL بدلاً من `lastInsertId()`.
-- دعم `STRING_AGG(... ORDER BY ...)` في استعلامات `DoctorModel` بدلاً من `GROUP_CONCAT`.
-
-### ✅ إصلاح عمود التوقيت في الفواتير (Invoices)
-- إضافة عمود `paid_at` لتتبع وقت السداد الفعلي.
-- استخدام `COALESCE(paid_at, created_at)` عبر دالة `paymentTimestamp()` الجديدة في `AccountingModel` في جميع استعلامات الخزينة والإيرادات.
-
-### ✅ تحديثات الـ API Router
-- تحديث `api/index.php`: دعم التحقق من أسلوب HTTP (method) لكل مسار مع إرجاع خطأ `405 Method Not Allowed` عند الانتهاك.
-- تحويل نهج تعريف المسارات من `closure` مباشرة إلى مصفوفة `['methods', 'handler']`.
-
-### ✅ تحديثات الواجهة الأمامية (Frontend)
-- `main_core.js`: إضافة `getApiBase()` و`buildApiUrl()` لدعم `window.APP_CONFIG.apiBase`، مما يُمكّن نشر المشروع في مسار غير الجذر.
-- `accounting_module.js`: تصحيح تسلسل الإعفاء الكلي ليستخدم مفتاح `'C'` بدلاً من `'B'`، وحذف دالة `processPayment` المكررة.
-- `doctor_module.js` + `accounting_module.js`: تغيير `auth/me` من `POST` إلى `GET`.
-
-### ✅ تحسينات أمنية
-- `controllers/DoctorController.php`: إضافة تحقق من ملكية الزيارة (`visitBelongsToDoctor`) قبل إرسال الطلبات أو تحديث التشخيص.
-- `controllers/AccountingController.php`: استبدال مقارنات القيم الرقمية بـ `epsilon` لتجنب أخطاء الفاصلة العائمة.
-
-### ✅ تحسينات البيئة (`.env` / `bootstrap`)
-- تحديث `.env.example` لاستخدام أسماء المتغيرات الجديدة.
-- إضافة محمِّل `.env` تلقائي في `config/bootstrap.php` بدون مكتبات خارجية.
-- دعم `APP_CORS_ORIGIN` في `api/index.php`.
-
----
-
-## ماذا تم إصلاحه في النسخ السابقة؟
-- إعادة تنظيم التحميل التلقائي والـ bootstrap لتثبيت المسارات ومنع مشاكل `require_once`.
-- تحسين طبقة الـ API Router داخل `api/index.php` وتقليل التكرار.
-- تأمين المصادقة عبر JWT بشكل أفضل مع دعم ترحيل كلمات المرور القديمة إلى BCRYPT عند تسجيل الدخول.
-- تشديد التحقق من المدخلات في الـ Controllers ومنع تمرير قيم مالية غير صحيحة أثناء السداد.
-- إصلاح منطق السندات بحيث يدعم الأنواع `A / B / C` بشكل صحيح.
-- تفعيل Apache Rewrite بشكل فعلي داخل Docker عبر `AllowOverride All`.
-
----
-
-## متطلبات التشغيل
-- PHP 8.1 أو أحدث
-- Apache أو Docker
-- **PostgreSQL 14+** (الافتراضي الآن) أو MySQL 8+ (مدعوم عبر `DB_CONNECTION=mysql`)
-- امتدادات PHP:
-  - `pdo`
-  - `pdo_pgsql`
-  - `pdo_mysql` (اختياري عند استخدام MySQL)
-
----
-
-## إعداد البيئة
-انسخ ملف المثال:
+### 2️⃣ إعداد متغيرات البيئة
 
 ```bash
 cp .env.example .env
 ```
 
-ثم اضبط القيم المناسبة:
+عدّل القيم الأساسية:
 
 ```env
-APP_ENV=local
+APP_ENV=production
 APP_DEBUG=false
-APP_TIMEZONE=UTC
+APP_TIMEZONE=Asia/Aden
 APP_CORS_ORIGIN=*
 
 DB_CONNECTION=pgsql
@@ -198,23 +256,37 @@ DB_HOST=127.0.0.1
 DB_PORT=5432
 DB_NAME=emergency_centre
 DB_USER=postgres
-DB_PASSWORD=postgres
+DB_PASSWORD=your_secure_password
 
-# Preferred on Render:
-# DATABASE_URL=postgresql://user:password@host:5432/database
+# البديل الموصى به لبيئات النشر السحابي
 DATABASE_URL=
 
-JWT_SECRET=change-this-secret-before-production
+JWT_SECRET=غيّر-هذا-المفتاح-قبل-الإنتاج-بمفتاح-قوي
+
+# إعدادات Pusher (اختيارية)
+REALTIME_DRIVER=
+PUSHER_APP_ID=
+PUSHER_APP_KEY=
+PUSHER_APP_SECRET=
+PUSHER_APP_CLUSTER=mt1
 ```
 
-> للنشر على **Render** يُنصح باستخدام `DATABASE_URL` مباشرة.
+### 3️⃣ تهيئة قاعدة البيانات
 
----
+نفّذ ملفات الترحيل بالتسلسل:
 
-## التشغيل عبر Docker (PostgreSQL)
+```bash
+for file in database/migrations/*.sql; do
+  echo "▶ Running $file"
+  psql "$DATABASE_URL" -f "$file"
+done
+```
+
+### 4️⃣ التشغيل عبر Docker (موصى به)
 
 ```bash
 docker build -t emergency-centre .
+
 docker run --rm -p 8080:80 \
   -e DB_CONNECTION=pgsql \
   -e DB_HOST=host.docker.internal \
@@ -222,198 +294,191 @@ docker run --rm -p 8080:80 \
   -e DB_NAME=emergency_centre \
   -e DB_USER=postgres \
   -e DB_PASSWORD=your_password \
-  -e JWT_SECRET=change-this-secret-before-production \
+  -e JWT_SECRET=your-production-secret \
+  -e APP_TIMEZONE=Asia/Aden \
   emergency-centre
 ```
 
-ثم افتح:
-- الواجهة: `http://localhost:8080/login.html`
-- الـ API: `http://localhost:8080/api/...`
+بعد التشغيل:
 
----
-
-## التشغيل المحلي عبر Apache / XAMPP / Laragon
-1. انسخ المشروع داخل مجلد الويب.
-2. فعّل `mod_rewrite` في Apache.
-3. تأكد أن `AllowOverride All` مفعلة للمجلد.
-4. اضبط متغيرات البيئة الخاصة بقاعدة البيانات.
-5. افتح `login.html` من المتصفح.
-
----
-
-## ملاحظات قاعدة البيانات
-
-المشروع أصبح يعمل افتراضياً مع **PostgreSQL**، مع الاحتفاظ بالتوافق مع **MySQL** عبر `DB_CONNECTION=mysql`.
-
-### عمود `paid_at` (مطلوب)
-يجب إضافة العمود إلى جدول `Invoices` في قاعدة بيانات PostgreSQL:
-
-```sql
-ALTER TABLE Invoices ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
-```
-
-### جدول `Medical_Results` (مطلوب)
-يُستخدم لتتبع حالة نتائج الفحوصات والخدمات المرسلة:
-
-```sql
-CREATE TABLE IF NOT EXISTS Medical_Results (
-    result_id   SERIAL PRIMARY KEY,
-    visit_id    INTEGER REFERENCES Visits(visit_id),
-    service_id  INTEGER REFERENCES Services_Master(service_id),
-    result_text TEXT,
-    created_at  TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### الجداول المتوقعة
-- `Users`
-- `Roles`
-- `Patients`
-- `Visits`
-- `Invoices`
-- `Invoice_Details`
-- `Document_Types`
-- `Services_Master`
-- `Emergency_Case_Types`
-- `Service_Categories`
-- `Medical_Results`
-
----
-
-## نقاط الأمان
-- التحقق من ملكية الزيارة قبل أي تعديل طبي (تحقق من `doctor_id`).
-- التحقق من المدخلات في معظم نقاط الـ API.
-- منع تمرير مبالغ دفع/إعفاء غير متطابقة مع إجمالي الفاتورة (باستخدام epsilon).
-- تحسين التحقق من JWT واستخدام مقارنة توقيعات آمنة.
-- دعم جلسات PHP بإعدادات أكثر أماناً (`HttpOnly`, `SameSite`, `Strict Mode`).
-- التحقق من HTTP Method لكل مسار API مع إرجاع `405` عند الانتهاك.
-
----
-
-## ملاحظات مهمة قبل النشر
-- غيّر قيمة `JWT_SECRET` في بيئة الإنتاج.
-- لا تضع بيانات قاعدة البيانات أو الأسرار داخل الملفات البرمجية.
-- تأكد من تفعيل HTTPS في الإنتاج.
-- نفّذ migration لإضافة `paid_at` قبل تشغيل نسخة الإنتاج.
-
----
-
-## مسارات API الرئيسية
-
-### المصادقة
-| الطريقة | المسار |
-|---------|--------|
-| `POST` | `/api/auth/login` |
-| `GET`  | `/api/auth/me` |
-
-### الطبيب
-| الطريقة | المسار |
-|---------|--------|
-| `POST` | `/api/doctor/search_patient` |
-| `POST` | `/api/doctor/new_patient` |
-| `POST` | `/api/doctor/existing_patient_visit` |
-| `GET`  | `/api/doctor/waiting_list` |
-| `POST` | `/api/doctor/send_orders` |
-| `POST` | `/api/doctor/final_diagnosis` |
-| `GET`  | `/api/doctor/sent_orders` |
-| `GET`  | `/api/doctor/services_list` |
-| `GET`  | `/api/doctor/medical_archive` |
-
-### المحاسبة
-| الطريقة | المسار |
-|---------|--------|
-| `GET`  | `/api/accounting/pending` |
-| `GET`  | `/api/accounting/next_serials` |
-| `POST` | `/api/accounting/pay_invoice` |
-| `GET`  | `/api/accounting/daily_treasury` |
-| `POST` | `/api/accounting/revenues_drilldown` |
-| `POST` | `/api/accounting/close_shift` |
-| `POST` | `/api/accounting/reopen_shift` |
-
-## 🕒 نظام الفترات المالية (Shifts System)
-
-أُعيدت هيكلة نظام إدارة الفترات المالية بالكامل عبر **8 مراحل** موثّقة في [`docs/SHIFTS_REFACTOR_PLAN.md`](docs/SHIFTS_REFACTOR_PLAN.md). للملخّص التنفيذي الشامل راجع: [`docs/changelogs/CHANGES_SHIFTS_REFACTOR.md`](docs/changelogs/CHANGES_SHIFTS_REFACTOR.md).
-
-### المعمارية الأساسية
-
-- **جدول `shifts`** (master): مصدر الحقيقة الوحيد لتعريف فترات كل يوم (`shift_date`, `shift_type`, `start_time`, `end_time`, `day_mode`, `status`).
-- **`visits.shift_id`** (FK → `shifts.shift_id`): كل زيارة مرتبطة بفترتها مباشرةً، فلا تعتمد التقارير التاريخية على `EXTRACT(HOUR FROM created_at)` بعد الآن.
-- **`src/Utils/ShiftService.php`**: خدمة مركزية تُغلّف كل منطق الفترات (إنشاء، حلّ، إقفال، فحص انتهاء الصلاحية).
-- **مستخدم النظام** (`user_id=0`, username=`__system__`): يُستخدم كـ `closed_by` للإقفال التلقائي.
-
-### وضع اليوم (`day_mode`)
-
-يدعم النظام ثلاثة أوضاع لكل يوم على حدة:
-
-| الوضع | المعنى |
+| العنوان | الرابط |
 |---|---|
-| `both` (افتراضي) | فترتان: صباحية + مسائية، يفصل بينهما `split_time` (افتراضياً 12:00) |
-| `morning_only` | يوم كامل صباحي (00:00 → 24:00) — لا توجد فترة مسائية |
-| `evening_only` | يوم كامل مسائي (00:00 → 24:00) — لا توجد فترة صباحية |
+| صفحة الدخول | `http://localhost:8080/login.html` |
+| لوحة التحكم | `http://localhost:8080/index.html` |
+| نقطة الـ API | `http://localhost:8080/api/...` |
 
-يُضبط الوضع لكل يوم عبر **قرص الساعة التفاعلي** في شاشة الإدمن، الذي يستدعي:
+### 5️⃣ التشغيل عبر Apache محليًا
 
-```
-POST /api/admin/shifts/save_boundaries
-Body: { shift_date, split_time, day_mode }
-```
+- اجعل `DocumentRoot` يشير إلى مجلد `public/`.
+- فعّل `mod_rewrite` و `mod_headers`.
+- تأكد من `AllowOverride All` للمجلد.
+- اضبط متغيرات البيئة أو ملف `.env`.
 
-### الإقفال التلقائي (Auto-close)
+---
 
-- خدمة `AccountingModel::runAutoClosurePass()` تكتشف الفترات المفتوحة التي انقضى وقت نهايتها وتُغلقها آلياً.
-- يتم تشغيلها عبر **Lazy Hook** في `public/api/index.php` عند الوصول لمسارات `accounting/*` و `doctor/send_orders` (لا حاجة لـ cron).
-- كل عملية إقفال تلقائي تُسجَّل في `audit_logs` بإجراء `AUTO_CLOSE` ومستخدم نظام `user_id=0`.
+## 🔌 مرجع الـ API
 
-### قواعد إعادة الفتح
+جميع المسارات تحت البادئة `/api/` وتتطلب توكن JWT (باستثناء `auth/login`).
 
-- إعادة فتح فترة **مسموحة** إذا لم تكن الفترة التالية قد بدأت بعد (`NOW() < next_shift_start_time`).
-- بعد بدء الفترة التالية تُرفض إعادة الفتح بـ `RuntimeException` لحماية تكامل البيانات.
-
-### قواعد الإقفال اليدوي
-
-- يُرفض إقفال فترة تحتوي فواتير معلّقة (`paid_at IS NULL AND cancelled_at IS NULL`).
-- يُرفض إقفال فترة فارغة (لا فواتير).
-- يُرفض إعادة إقفال فترة مُقفلة سابقاً.
-
-### مسارات الـ API الخاصة بالفترات
-
-| الطريقة | المسار | الوصف |
+### 🔐 المصادقة
+| Method | Endpoint | الوصف |
 |---|---|---|
-| `POST` | `/api/accounting/close_shift` | إقفال يدوي للفترة الحالية مع فحص الفواتير المعلّقة |
-| `POST` | `/api/accounting/reopen_shift` | إعادة فتح الفترة الأخيرة (مع قيد زمني) |
-| `POST` | `/api/admin/reopen_shift` | إعادة فتح إدارية بصلاحيات أوسع |
-| `POST` | `/api/admin/shifts/save_boundaries` | حفظ حدود فترات يوم محدد (قرص الساعة) |
-| `GET`  | `/api/reports/daily_view` | تقرير اليومية الموحّد (`?date=YYYY-MM-DD&shift_type=morning\|evening\|all`) |
-| `GET`  | `/api/accounting/previous_shift_check` | فحص قبلي قبل عرض شاشة الإقفال |
+| `POST` | `/api/auth/login` | تسجيل الدخول وإصدار JWT |
+| `GET`  | `/api/auth/me` | بيانات المستخدم الحالي |
 
-### اختبار السيناريوهات
+### 👨‍⚕️ الطبيب
+| Method | Endpoint | الوصف |
+|---|---|---|
+| `POST` | `/api/doctor/search_patient` | البحث عن مريض |
+| `POST` | `/api/doctor/new_patient` | إنشاء مريض جديد وفتح زيارة |
+| `POST` | `/api/doctor/existing_patient_visit` | فتح زيارة لمريض موجود |
+| `GET`  | `/api/doctor/waiting_list` | قائمة انتظار الطبيب |
+| `POST` | `/api/doctor/send_orders` | إرسال طلبات الخدمات |
+| `POST` | `/api/doctor/final_diagnosis` | تسجيل التشخيص النهائي |
+| `POST` | `/api/doctor/visit_close_data` | بيانات إغلاق الزيارة |
+| `GET`  | `/api/doctor/sent_orders` | الطلبات المرسلة |
+| `GET`  | `/api/doctor/services_list` | قائمة الخدمات المتاحة |
+| `GET`  | `/api/doctor/case_types` | أنواع الحالات الطارئة |
+| `GET`  | `/api/doctor/medical_archive` | الأرشيف الطبي |
 
-سكربت شامل يُغطّي 10 سيناريوهات حرجة (إقفال يدوي/تلقائي، إعادة الفتح، يوم كامل صباحي/مسائي، قيود قاعدة البيانات). آمن للتشغيل على الإنتاج (يستخدم `SAVEPOINT/ROLLBACK`):
+### 💰 المحاسبة
+| Method | Endpoint | الوصف |
+|---|---|---|
+| `GET`  | `/api/accounting/pending` | الفواتير المعلّقة |
+| `GET`  | `/api/accounting/next_serials` | أرقام السندات التالية |
+| `POST` | `/api/accounting/pay_invoice` | سداد فاتورة |
+| `GET`  | `/api/accounting/daily_treasury` | الخزينة اليومية |
+| `POST` | `/api/accounting/revenues_drilldown` | تفاصيل الإيرادات |
+| `GET`  | `/api/accounting/daily_journal` | اليومية |
+| `GET`  | `/api/accounting/invoice_services` | تفاصيل خدمات الفاتورة |
+| `POST` | `/api/accounting/close_shift` | إقفال الفترة |
+| `POST` | `/api/accounting/reopen_shift` | إعادة فتح الفترة |
+| `GET`  | `/api/accounting/previous_shift_check` | فحص الفترة السابقة |
 
-```bash
-psql "$DATABASE_URL" -f database/tests/PHASE_8_SHIFTS_SCENARIOS.sql
-```
+### 🛠️ الإدارة
+| Method | Endpoint | الوصف |
+|---|---|---|
+| `GET`  | `/api/admin/dashboard` | لوحة الإحصائيات |
+| `GET`  | `/api/admin/dashboard_charts` | مخططات اللوحة |
+| `GET`  | `/api/admin/schema` | مخطط قاعدة البيانات |
+| `GET`  | `/api/admin/settings` | إعدادات النظام |
+| `POST` | `/api/admin/settings/save` | حفظ الإعدادات |
+| `GET`  | `/api/admin/shifts/day` | حدود فترات اليوم |
+| `POST` | `/api/admin/shifts/save_boundaries` | حفظ حدود الفترات |
+| `POST` | `/api/admin/list` | سرد سجلات جدول |
+| `POST` | `/api/admin/record` | جلب سجل واحد |
+| `POST` | `/api/admin/save` | حفظ/تحديث سجل |
+| `POST` | `/api/admin/delete` | حذف سجل |
+| `POST` | `/api/admin/export` | تصدير البيانات |
+| `POST` | `/api/admin/change_password` | تغيير كلمة مرور مستخدم |
+| `POST` | `/api/admin/toggle_user` | تفعيل/تعطيل مستخدم |
+| `POST` | `/api/admin/cancel_invoice` | إلغاء فاتورة |
+| `POST` | `/api/admin/cancel_visit` | إلغاء زيارة |
+| `POST` | `/api/admin/reopen_shift` | إعادة فتح فترة (إدارية) |
+| `POST` | `/api/admin/broadcast` | بث إشعار |
+| `POST` | `/api/admin/audit_log` | استعراض سجل التدقيق |
+| `POST` | `/api/admin/reports/revenue` | تقرير الإيرادات |
+| `POST` | `/api/admin/reports/doctors` | تقرير أداء الأطباء |
+| `POST` | `/api/admin/pay_invoice_override` | سداد إداري تجاوزي |
 
-النتيجة المتوقعة: **10/10 PASS ✓**.
+### 📈 المركز المالي
+| Method | Endpoint | الوصف |
+|---|---|---|
+| `POST` | `/api/finance/overview` | مؤشرات وملخّص |
+| `POST` | `/api/finance/transactions` | قائمة الحركات |
+| `POST` | `/api/finance/transaction_detail` | تفاصيل حركة |
+| `POST` | `/api/finance/export` | تصدير الحركات |
+| `GET`  | `/api/finance/filter_options` | خيارات الفلترة |
+| `POST` | `/api/finance/ministry_report` | تقرير حصة الوزارة |
+| `POST` | `/api/finance/print_voucher` | سند طباعة |
 
-### الـ Migrations المرتبطة
+### 📊 التقارير والخدمات المساندة
+| Method | Endpoint | الوصف |
+|---|---|---|
+| `GET`  | `/api/reports/daily_info` | معلومية يومية |
+| `GET`  | `/api/reports/daily_view` | العرض اليومي الموحّد |
+| `GET`  | `/api/notifications/unread` | الإشعارات غير المقروءة |
+| `POST` | `/api/notifications/read` | تعليم الإشعارات كمقروءة |
+| `GET`  | `/api/settings/header` | إعدادات ترويسة الطباعة |
+| `GET`  | `/api/realtime/config` | إعدادات Realtime للعميل |
+| `POST` | `/api/realtime/pusher/auth` | مصادقة قنوات Pusher الخاصة |
 
-| Migration | الوصف |
+---
+
+## 🗄️ نموذج البيانات
+
+يشمل النظام الكيانات التشغيلية والمالية الرئيسية التالية (يتم إنشاؤها عبر ملفات الترحيل):
+
+| المجال | الجداول |
 |---|---|
-| `012_shifts_closures.sql` | جدول الإقفالات الأصلي (Phase 1) |
-| `014_shift_boundaries_and_payment_order.sql` | إعدادات الحدود وترتيب الدفع |
-| `015_reopen_shift_and_audit_action.sql` | إعادة الفتح + إجراء `REOPEN` |
-| `016_shifts_master_table_and_visit_link.sql` | **جدول `shifts` الجديد + ربط الزيارات** |
-| `017_audit_log_auto_close_action.sql` | إضافة إجراء `AUTO_CLOSE` |
+| **المستخدمون والصلاحيات** | `users`, `roles` |
+| **المرضى والزيارات** | `patients`, `visits`, `emergency_case_types`, `appointments` |
+| **الخدمات والأقسام** | `services_master`, `service_categories`, `departments` |
+| **الفوترة والمالية** | `invoices`, `invoice_details`, `document_types`, `examination_tickets` |
+| **الفترات المالية** | `shifts`, `shifts_closures` |
+| **المختبر والنتائج** | `laboratory_documents`, `medical_results` |
+| **الحوكمة والتشغيل** | `audit_logs`, `notifications`, `system_settings` |
 
-## Real-time updates عبر Pusher
+جميع المفاتيح الأساسية والأجنبية من نوع **INTEGER (SERIAL)** لتحقيق أداء أعلى وتبسيط الإدارة.
 
-يمكن تفعيل التحديثات اللحظية بين واجهة الطبيب وواجهة المحاسب عبر ضبط متغيرات البيئة التالية ثم إعادة النشر:
+---
 
-- `REALTIME_DRIVER=pusher`
-- `PUSHER_APP_ID`
-- `PUSHER_APP_KEY`
-- `PUSHER_APP_SECRET`
-- `PUSHER_APP_CLUSTER`
+## 🛡️ الأمان والحوكمة
 
-بعد تفعيل المفاتيح، أي طلب جديد يرسله الطبيب سيتم بثه فوراً لقناة المحاسب الخاصة مع إظهار Toast وتحديث جدول الفواتير المستحقة بدون تحديث الصفحة. وإذا لم تكن المفاتيح مضبوطة فسيستمر النظام في استخدام آلية الـ polling الحالية كبديل احتياطي.
+يلتزم النظام بمجموعة من الضوابط الأمنية على مستوى التطبيق:
+
+- ✅ **مصادقة قوية**: JWT + جلسات PHP مع بصمة User-Agent.
+- ✅ **صلاحيات مبنيّة على الدور** عبر `AuthMiddleware` لكل Endpoint.
+- ✅ **إعدادات جلسة مشدّدة**: `HttpOnly`, `SameSite=Lax`, `Strict Mode`, وتفعيل `Secure` تلقائيًا على HTTPS.
+- ✅ **تحقق شامل من المدخلات** في طبقة `BaseController` (Sanitization لجميع الحقول).
+- ✅ **حماية العمليات المالية**: مقارنة المبالغ بـ Epsilon لتجنب أخطاء الفاصلة العائمة.
+- ✅ **التحقق من ملكية الزيارات** قبل أي تعديل طبي.
+- ✅ **التحقق من HTTP Method** لكل مسار مع إرجاع `405` عند الانتهاك.
+- ✅ **رؤوس أمنية** في `.htaccess` (X-Frame-Options, X-Content-Type-Options, ...).
+- ✅ **عزل الكود الحساس**: `src/` و `database/` غير قابلة للوصول عبر الويب.
+- ✅ **سجل تدقيق (Audit Log)** لكل حركات الإقفال، الإلغاء، الحذف، وإعادة الفتح.
+- ✅ **إعادة تجزئة كلمات المرور** تلقائيًا عند تسجيل الدخول (Rehash to BCRYPT).
+
+---
+
+## ✅ قائمة تحقق ما قبل النشر
+
+- [ ] تغيير `JWT_SECRET` إلى قيمة عشوائية قوية.
+- [ ] تعطيل `APP_DEBUG` (`APP_DEBUG=false`).
+- [ ] تشغيل النظام خلف **HTTPS** حصريًا.
+- [ ] تنفيذ جميع ملفات الترحيل في `database/migrations/`.
+- [ ] ضبط `APP_CORS_ORIGIN` على النطاق الفعلي بدلاً من `*`.
+- [ ] عدم تضمين ملف `.env` في المستودع.
+- [ ] التأكد من أن `DocumentRoot` يشير إلى `public/`.
+- [ ] تفعيل النسخ الاحتياطية الدورية لقاعدة البيانات.
+- [ ] مراجعة إعدادات Pusher إن كانت الإشعارات اللحظية مفعّلة.
+
+---
+
+## 📚 التوثيق الإضافي
+
+مجلد `docs/` يحتوي على وثائق فنية تفصيلية تخص خطط إعادة الهيكلة وسجلات التغيير، وهي مخصّصة أساسًا للمطوّرين ومسؤولي الصيانة، وتشمل:
+
+- `docs/SHIFTS_REFACTOR_PLAN.md` — خطة إعادة هيكلة نظام الفترات.
+- `docs/changelogs/` — سجلات التغييرات لكل مرحلة تطويرية.
+
+---
+
+## 🤝 المساهمة
+
+هذا المشروع خاص وتشغيلي بطبيعته. أي مساهمات، ملاحظات، أو تقارير بأخطاء يجب أن تُقدَّم عبر **Issues** داخل المستودع.
+
+---
+
+## 📞 التواصل
+
+للاستفسارات التقنية أو التشغيلية، يُرجى فتح Issue داخل المستودع أو التواصل مع فريق التطوير.
+
+---
+
+<p align="center">
+  <strong>🏥 نظام إدارة مركز الطوارئ الطبي</strong><br>
+  <sub>مبني بعناية ليخدم الميدان الطبي في أشد لحظاته حساسية</sub>
+</p>
+
+</div>
